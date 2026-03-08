@@ -19,6 +19,10 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
   const [model, setModel] = useState(task?.model || 'qianfan-code-latest')
   const [workspacePath, setWorkspacePath] = useState(task?.workspacePath || '')
   const [frequency, setFrequency] = useState<ScheduledFrequency>(task?.frequency || 'manual')
+  const [scheduleTime, setScheduleTime] = useState(task?.scheduleTime || '09:00')
+  const [scheduleDayOfWeek, setScheduleDayOfWeek] = useState(task?.scheduleDayOfWeek ?? 1)
+  const [scheduleDayOfMonth, setScheduleDayOfMonth] = useState(task?.scheduleDayOfMonth ?? 1)
+  const [scheduleDateTime, setScheduleDateTime] = useState(task?.scheduleDateTime || '')
   const [error, setError] = useState('')
 
   const handleSelectFolder = async () => {
@@ -30,14 +34,28 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
     if (!name.trim()) { setError('Task name is required'); return }
     if (!description.trim()) { setError('Description is required'); return }
     if (!taskPrompt.trim()) { setError('Task prompt is required'); return }
+    if (frequency === 'once' && !scheduleDateTime) { setError('Please select a date and time'); return }
 
-    const data = {
+    const data: any = {
       name: name.trim(),
       description: description.trim(),
       taskPrompt: taskPrompt.trim(),
       model,
       workspacePath: workspacePath || null,
       frequency,
+    }
+
+    // Add scheduling fields based on frequency
+    if (frequency === 'once') {
+      data.scheduleDateTime = scheduleDateTime
+    } else if (frequency !== 'manual') {
+      data.scheduleTime = scheduleTime
+      if (frequency === 'weekly') {
+        data.scheduleDayOfWeek = scheduleDayOfWeek
+      }
+      if (frequency === 'monthly') {
+        data.scheduleDayOfMonth = scheduleDayOfMonth
+      }
     }
 
     if (isEditing && task) {
@@ -51,11 +69,15 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
 
   const frequencies: { id: ScheduledFrequency; label: string }[] = [
     { id: 'manual', label: 'Manual' },
+    { id: 'once', label: 'Once' },
     { id: 'hourly', label: 'Hourly' },
     { id: 'daily', label: 'Daily' },
     { id: 'weekly', label: 'Weekly' },
+    { id: 'monthly', label: 'Monthly' },
     { id: 'weekdays', label: 'Weekdays' },
   ]
+
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in">
@@ -133,7 +155,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
               <div className="relative">
                 <select
                   value={frequency}
-                  onChange={(e) => setFrequency(e.target.value as ScheduledFrequency)}
+                  onChange={(e) => { setFrequency(e.target.value as ScheduledFrequency); setError('') }}
                   className="input appearance-none pr-8 text-xs"
                 >
                   {frequencies.map(f => (
@@ -144,6 +166,108 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
               </div>
             </div>
           </div>
+
+          {/* Scheduling options based on frequency */}
+          {frequency === 'once' && (
+            <div>
+              <label className="label">Date & Time</label>
+              <input
+                type="datetime-local"
+                value={scheduleDateTime}
+                onChange={(e) => { setScheduleDateTime(e.target.value); setError('') }}
+                className="input text-xs"
+                min={new Date().toISOString().slice(0, 16)}
+              />
+            </div>
+          )}
+
+          {frequency === 'hourly' && (
+            <div>
+              <label className="label">At Minute</label>
+              <div className="relative">
+                <select
+                  value={scheduleTime.split(':')[1] || '00'}
+                  onChange={(e) => setScheduleTime(`00:${e.target.value}`)}
+                  className="input appearance-none pr-8 text-xs"
+                >
+                  {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map(m => (
+                    <option key={m} value={String(m).padStart(2, '0')}>:{String(m).padStart(2, '0')}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
+              </div>
+            </div>
+          )}
+
+          {(frequency === 'daily' || frequency === 'weekdays') && (
+            <div>
+              <label className="label">Time</label>
+              <input
+                type="time"
+                value={scheduleTime}
+                onChange={(e) => setScheduleTime(e.target.value)}
+                className="input text-xs"
+              />
+            </div>
+          )}
+
+          {frequency === 'weekly' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Day of Week</label>
+                <div className="relative">
+                  <select
+                    value={scheduleDayOfWeek}
+                    onChange={(e) => setScheduleDayOfWeek(parseInt(e.target.value))}
+                    className="input appearance-none pr-8 text-xs"
+                  >
+                    {days.map((day, idx) => (
+                      <option key={idx} value={idx}>{day}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
+                </div>
+              </div>
+              <div>
+                <label className="label">Time</label>
+                <input
+                  type="time"
+                  value={scheduleTime}
+                  onChange={(e) => setScheduleTime(e.target.value)}
+                  className="input text-xs"
+                />
+              </div>
+            </div>
+          )}
+
+          {frequency === 'monthly' && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">Day of Month</label>
+                <div className="relative">
+                  <select
+                    value={scheduleDayOfMonth}
+                    onChange={(e) => setScheduleDayOfMonth(parseInt(e.target.value))}
+                    className="input appearance-none pr-8 text-xs"
+                  >
+                    {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                  <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
+                </div>
+              </div>
+              <div>
+                <label className="label">Time</label>
+                <input
+                  type="time"
+                  value={scheduleTime}
+                  onChange={(e) => setScheduleTime(e.target.value)}
+                  className="input text-xs"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Workspace */}
           <div>

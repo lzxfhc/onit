@@ -1,13 +1,13 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import {
   Send, Square, FolderOpen, Paperclip, ChevronDown,
   X, FileText, Shield, ShieldCheck, ShieldOff,
-  Loader2, CheckCircle2
+  Loader2, CheckCircle2, Sparkles
 } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { AVAILABLE_MODELS } from '../../types'
-import type { PermissionMode, Session } from '../../types'
+import type { PermissionMode, Session, Skill } from '../../types'
 
 interface Props {
   onSend: (content: string) => void
@@ -20,14 +20,25 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
   const [input, setInput] = useState('')
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [showPermissionPicker, setShowPermissionPicker] = useState(false)
+  const [showSkillMention, setShowSkillMention] = useState(false)
+  const [mentionFilter, setMentionFilter] = useState('')
+  const [mentionIndex, setMentionIndex] = useState(0)
+  const isComposingRef = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const modelPickerRef = useRef<HTMLDivElement>(null)
   const permPickerRef = useRef<HTMLDivElement>(null)
+  const mentionRef = useRef<HTMLDivElement>(null)
   const {
     setWorkspace, setPermissionMode, setModel,
     addAttachedFile, removeAttachedFile,
   } = useSessionStore()
-  const { settings } = useSettingsStore()
+  const { settings, skills } = useSettingsStore()
+
+  const enabledSkills = skills.filter(s => s.enabled)
+
+  const filteredMentionSkills = enabledSkills.filter(s =>
+    !mentionFilter || s.name.includes(mentionFilter) || s.displayName.toLowerCase().includes(mentionFilter.toLowerCase())
+  )
 
   // Auto resize textarea
   useEffect(() => {
@@ -47,12 +58,88 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
       if (permPickerRef.current && !permPickerRef.current.contains(e.target as Node)) {
         setShowPermissionPicker(false)
       }
+      if (mentionRef.current && !mentionRef.current.contains(e.target as Node)) {
+        setShowSkillMention(false)
+      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // Listen for auto-input events (from SkillsPanel "Create with Onit")
+  useEffect(() => {
+    const handler = (e: CustomEvent) => {
+      if (e.detail?.text) {
+        setInput(e.detail.text)
+        setTimeout(() => textareaRef.current?.focus(), 100)
+      }
+    }
+    window.addEventListener('onit:auto-input', handler as EventListener)
+    return () => window.removeEventListener('onit:auto-input', handler as EventListener)
+  }, [])
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = e.target.value
+    setInput(value)
+
+    // @mention only triggers when @ is at the very start of input (position 0)
+    if (value.startsWith('@')) {
+      // Extract the text after @ up to the first space (or end of string)
+      const afterAt = value.substring(1)
+      const spaceIdx = afterAt.indexOf(' ')
+      // If there's a space, @ selection is already completed — don't show popup
+      if (spaceIdx >= 0) {
+        setShowSkillMention(false)
+        return
+      }
+      // Show mention popup with filter
+      setMentionFilter(afterAt)
+      setShowSkillMention(true)
+      setMentionIndex(0)
+      return
+    }
+
+    setShowSkillMention(false)
+  }
+
+  const insertMention = useCallback((skill: Skill) => {
+    // Replace entire @... prefix with @skill-name
+    const afterAt = input.substring(1)
+    const spaceIdx = afterAt.indexOf(' ')
+    const rest = spaceIdx >= 0 ? afterAt.substring(spaceIdx) : ''
+    const newValue = `@${skill.name} ${rest.trimStart()}`
+    setInput(newValue)
+    setShowSkillMention(false)
+    textareaRef.current?.focus()
+  }, [input])
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Ignore key events during IME composition (e.g. Chinese/Japanese input)
+    if (isComposingRef.current) return
+
+    // Handle mention navigation
+    if (showSkillMention && filteredMentionSkills.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setMentionIndex(prev => Math.min(prev + 1, filteredMentionSkills.length - 1))
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setMentionIndex(prev => Math.max(prev - 1, 0))
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        insertMention(filteredMentionSkills[mentionIndex])
+        return
+      }
+      if (e.key === 'Escape') {
+        setShowSkillMention(false)
+        return
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -61,7 +148,6 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
 
   const handleSend = () => {
     if (isRunning) {
-      // Interrupt: stop current, then send new message
       onStop()
       setTimeout(() => {
         if (input.trim()) {
@@ -125,12 +211,45 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
         {/* Input area */}
         <div className="flex items-end gap-2">
           <div className="flex-1 relative bg-canvas border border-border-subtle rounded-lg focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/10 transition-all">
+            {/* Skill mention dropdown — appears above textarea near cursor */}
+            {showSkillMention && filteredMentionSkills.length > 0 && (
+              <div
+                ref={mentionRef}
+                className="absolute bottom-full left-0 mb-1 bg-surface border border-border-subtle rounded-lg shadow-card-hover py-1 min-w-[240px] max-w-[320px] z-50 animate-fade-in"
+              >
+                <div className="px-3 py-1.5 border-b border-border-light">
+                  <span className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">Skills</span>
+                </div>
+                <div className="max-h-[200px] overflow-y-auto py-0.5">
+                  {filteredMentionSkills.map((skill, idx) => (
+                    <button
+                      key={skill.id}
+                      onClick={() => insertMention(skill)}
+                      className={`w-full text-left px-3 py-2 transition-colors ${
+                        idx === mentionIndex
+                          ? 'bg-accent-50'
+                          : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-3 h-3 text-accent shrink-0" />
+                        <span className="text-xs font-medium text-charcoal truncate">{skill.displayName}</span>
+                      </div>
+                      <p className="text-[10px] text-text-tertiary mt-0.5 ml-5 truncate">{skill.description}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <textarea
               ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={handleInputChange}
               onKeyDown={handleKeyDown}
-              placeholder={isRunning ? 'Type to interrupt and send new instruction...' : 'Ask me anything...'}
+              onCompositionStart={() => { isComposingRef.current = true }}
+              onCompositionEnd={() => { isComposingRef.current = false }}
+              placeholder={isRunning ? 'Type to interrupt and send new instruction...' : 'Ask me anything... (@ at start to invoke skills)'}
               className="w-full resize-none bg-transparent px-4 py-3 text-sm text-charcoal placeholder:text-text-tertiary focus:outline-none"
               rows={1}
               style={{ minHeight: '44px', maxHeight: '200px' }}

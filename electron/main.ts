@@ -3,17 +3,30 @@ import path from 'path'
 import fs from 'fs'
 import { AgentManager } from './agent/index'
 import { SchedulerManager } from './agent/scheduler'
+import { SkillManager } from './agent/skills'
 
 let mainWindow: BrowserWindow | null = null
 let agentManager: AgentManager
 let schedulerManager: SchedulerManager
+let skillManager: SkillManager
 
 const DATA_DIR = path.join(app.getPath('userData'), 'onit-data')
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions')
 const SCHEDULED_DIR = path.join(DATA_DIR, 'scheduled')
+const USER_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'user')
+const IMPORTED_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'imported')
+
+function getPrebuiltSkillsDir(): string {
+  // In packaged app: resources/skills/
+  // In dev: __dirname is dist-electron/, skills source is at electron/skills/
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'skills')
+  }
+  return path.join(__dirname, '..', 'electron', 'skills')
+}
 
 function ensureDirectories() {
-  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR]) {
+  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
     }
@@ -76,9 +89,18 @@ function setupIPC() {
     return result.filePaths
   })
 
-  // Agent: start
+  // Agent: start — inject enabled skills
   ipcMain.handle('agent:start', async (_event, data: { sessionId: string; message: string; session: any }) => {
-    return agentManager.startAgent(data.sessionId, data.message, data.session)
+    const enabledSkills = skillManager.getEnabledSkills().map(s => ({
+      name: s.name,
+      displayName: s.displayName,
+      description: s.description,
+      content: s.content,
+    }))
+    return agentManager.startAgent(data.sessionId, data.message, {
+      ...data.session,
+      enabledSkills,
+    })
   })
 
   // Agent: stop
@@ -137,7 +159,49 @@ function setupIPC() {
   })
 
   ipcMain.handle('scheduler:run-now', async (_event, data: { id: string }) => {
-    return schedulerManager.runTaskNow(data.id)
+    return schedulerManager.runTaskNow(data.id, (channel, eventData) => {
+      mainWindow?.webContents.send(channel, eventData)
+    })
+  })
+
+  // Scheduler: set API config
+  ipcMain.handle('scheduler:set-api-config', async (_event, config: { billingMode: string; apiKey: string; customBaseUrl?: string }) => {
+    schedulerManager.setApiConfig(config)
+    return true
+  })
+
+  // Skills: list
+  ipcMain.handle('skills:list', async () => {
+    return skillManager.listSkills()
+  })
+
+  // Skills: toggle
+  ipcMain.handle('skills:toggle', async (_event, data: { id: string; enabled: boolean }) => {
+    return skillManager.toggleSkill(data.id, data.enabled)
+  })
+
+  // Skills: delete
+  ipcMain.handle('skills:delete', async (_event, data: { id: string }) => {
+    return skillManager.deleteSkill(data.id)
+  })
+
+  // Skills: create
+  ipcMain.handle('skills:create', async (_event, data: { name: string; description: string; content: string }) => {
+    return skillManager.createSkill(data.name, data.description, data.content)
+  })
+
+  // Skills: import (opens native file dialog)
+  ipcMain.handle('skills:import', async () => {
+    if (!mainWindow) return null
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      title: 'Import Skill',
+      filters: [
+        { name: 'Skill Files', extensions: ['md', 'skill'] },
+      ],
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return skillManager.importSkill(result.filePaths[0])
   })
 
   // File system: list directory
@@ -175,6 +239,7 @@ app.whenReady().then(() => {
     mainWindow?.webContents.send(channel, data)
   })
   schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager)
+  skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
 
   createWindow()
   setupIPC()

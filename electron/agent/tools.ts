@@ -1,6 +1,9 @@
 import fs from 'fs'
 import path from 'path'
 import { exec } from 'child_process'
+import https from 'https'
+import http from 'http'
+import { URL } from 'url'
 import { AgentToolDef, ToolExecutionResult, RiskLevel } from './types'
 
 export const AGENT_TOOLS: AgentToolDef[] = [
@@ -149,6 +152,36 @@ export const AGENT_TOOLS: AgentToolDef[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the web for information. Returns search results with titles, snippets, and URLs. Use this to find current information, documentation, news, or any web content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'The search query' },
+          max_results: { type: 'number', description: 'Maximum number of results to return (default 5, max 10)' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Fetch the content of a web page and return it as readable text. Use this to read documentation, articles, blog posts, or any web content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The URL to fetch' },
+          max_length: { type: 'number', description: 'Maximum characters to return (default 20000)' },
+        },
+        required: ['url'],
+      },
+    },
+  },
 ]
 
 export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
@@ -158,6 +191,8 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
     case 'search_files':
     case 'search_content':
     case 'create_task_list':
+    case 'web_search':
+    case 'web_fetch':
       return 'safe'
     case 'write_file':
     case 'edit_file':
@@ -357,6 +392,72 @@ export async function executeTool(
         })
       }
 
+      case 'web_search': {
+        return new Promise((resolve) => {
+          const query = args.query || ''
+          const maxResults = Math.min(args.max_results || 5, 10)
+
+          const searchUrl = `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=${maxResults}`
+
+          fetchUrl(searchUrl, 3, (err, body) => {
+            if (err) {
+              resolve({ success: false, output: `Search request failed: ${err}`, riskLevel })
+              return
+            }
+            try {
+              const results = parseBingResults(body || '', maxResults)
+              if (results.length === 0) {
+                resolve({ success: true, output: `No results found for: "${query}"`, riskLevel })
+              } else {
+                const formatted = results.map((r, i) =>
+                  `${i + 1}. ${r.title}\n   ${r.snippet}\n   URL: ${r.url}`
+                ).join('\n\n')
+                resolve({ success: true, output: `Search results for "${query}":\n\n${formatted}`, riskLevel })
+              }
+            } catch {
+              resolve({ success: false, output: `Failed to parse search results for: "${query}"`, riskLevel })
+            }
+          })
+        })
+      }
+
+      case 'web_fetch': {
+        return new Promise((resolve) => {
+          const targetUrl = args.url || ''
+          const maxLength = args.max_length || 20000
+
+          fetchUrl(targetUrl, 5, (err, body) => {
+            if (err) {
+              resolve({ success: false, output: `Failed to fetch URL: ${err}`, riskLevel })
+              return
+            }
+            // Strip HTML tags and extract text
+            let text = (body || '')
+              .replace(/<script[\s\S]*?<\/script>/gi, '')
+              .replace(/<style[\s\S]*?<\/style>/gi, '')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/&nbsp;/g, ' ')
+              .replace(/&amp;/g, '&')
+              .replace(/&lt;/g, '<')
+              .replace(/&gt;/g, '>')
+              .replace(/&quot;/g, '"')
+              .replace(/&#39;/g, "'")
+              .replace(/\s+/g, ' ')
+              .trim()
+
+            if (text.length > maxLength) {
+              text = text.substring(0, maxLength) + '\n\n[Content truncated]'
+            }
+
+            if (!text) {
+              resolve({ success: false, output: `No readable content found at: ${targetUrl}`, riskLevel })
+            } else {
+              resolve({ success: true, output: `Content from ${targetUrl}:\n\n${text}`, riskLevel })
+            }
+          })
+        })
+      }
+
       case 'create_task_list': {
         return { success: true, output: JSON.stringify(args.tasks), riskLevel: 'safe' }
       }
@@ -367,4 +468,153 @@ export async function executeTool(
   } catch (error: any) {
     return { success: false, output: `Tool execution error: ${error.message}`, riskLevel }
   }
+}
+
+interface SearchResult {
+  title: string
+  snippet: string
+  url: string
+}
+
+function parseBingResults(html: string, maxResults: number): SearchResult[] {
+  const results: SearchResult[] = []
+
+  // Bing wraps each result in <li class="b_algo">
+  const resultPattern = /<li class="b_algo">([\s\S]*?)<\/li>/gi
+  let match: RegExpExecArray | null
+
+  while ((match = resultPattern.exec(html)) !== null && results.length < maxResults) {
+    const block = match[1]
+
+    // Extract URL and title from <h2><a href="...">title</a></h2>
+    const linkMatch = block.match(/<h2[^>]*>\s*<a[^>]*href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/i)
+    if (!linkMatch) continue
+
+    const url = linkMatch[1]
+    const title = linkMatch[2].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').trim()
+
+    // Extract snippet from <p> or <div class="b_caption"><p>
+    let snippet = ''
+    const snippetMatch = block.match(/<p[^>]*>([\s\S]*?)<\/p>/i)
+    if (snippetMatch) {
+      snippet = snippetMatch[1].replace(/<[^>]+>/g, '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/\s+/g, ' ').trim()
+    }
+
+    if (title && url) {
+      results.push({ title, snippet: snippet.substring(0, 300), url })
+    }
+  }
+
+  // Fallback: if b_algo parsing failed, try a broader pattern
+  if (results.length === 0) {
+    const fallbackPattern = /<h2[^>]*>\s*<a[^>]*href="(https?:\/\/(?!go\.microsoft|www\.bing)[^"]+)"[^>]*>([\s\S]*?)<\/a>\s*<\/h2>/gi
+    while ((match = fallbackPattern.exec(html)) !== null && results.length < maxResults) {
+      const url = match[1]
+      const title = match[2].replace(/<[^>]+>/g, '').trim()
+      if (title.length < 3) continue
+      results.push({ title, snippet: '', url })
+    }
+  }
+
+  return results
+}
+
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
+  'Accept-Encoding': 'identity',
+  'Cache-Control': 'no-cache',
+  'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+  'Sec-Ch-Ua-Mobile': '?0',
+  'Sec-Ch-Ua-Platform': '"macOS"',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none',
+  'Sec-Fetch-User': '?1',
+  'Upgrade-Insecure-Requests': '1',
+}
+
+function fetchUrl(
+  targetUrl: string,
+  maxRedirects: number,
+  callback: (err: string | null, body: string | null) => void
+): void {
+  if (maxRedirects < 0) {
+    callback('Too many redirects', null)
+    return
+  }
+
+  let parsedUrl: URL
+  try {
+    parsedUrl = new URL(targetUrl)
+  } catch {
+    callback(`Invalid URL: ${targetUrl}`, null)
+    return
+  }
+
+  const httpModule = parsedUrl.protocol === 'https:' ? https : http
+  const options = {
+    hostname: parsedUrl.hostname,
+    port: parsedUrl.port || (parsedUrl.protocol === 'https:' ? 443 : 80),
+    path: parsedUrl.pathname + parsedUrl.search,
+    method: 'GET',
+    headers: {
+      ...BROWSER_HEADERS,
+      'Host': parsedUrl.hostname,
+      'Referer': `${parsedUrl.protocol}//${parsedUrl.hostname}/`,
+    },
+  }
+
+  const req = httpModule.get(options, (res) => {
+    // Handle redirects
+    if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+      let redirectUrl = res.headers.location
+      if (redirectUrl.startsWith('/')) {
+        redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}${redirectUrl}`
+      } else if (!redirectUrl.startsWith('http')) {
+        redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}/${redirectUrl}`
+      }
+      res.resume()
+      fetchUrl(redirectUrl, maxRedirects - 1, callback)
+      return
+    }
+
+    if (res.statusCode && res.statusCode >= 400) {
+      res.resume()
+      callback(`HTTP ${res.statusCode}`, null)
+      return
+    }
+
+    const chunks: Buffer[] = []
+    let totalSize = 0
+    const maxSize = 5 * 1024 * 1024
+
+    res.on('data', (chunk: Buffer) => {
+      totalSize += chunk.length
+      if (totalSize > maxSize) {
+        req.destroy()
+        return
+      }
+      chunks.push(chunk)
+    })
+
+    res.on('end', () => {
+      const body = Buffer.concat(chunks).toString('utf-8')
+      callback(null, body)
+    })
+
+    res.on('error', (err) => {
+      callback(err.message, null)
+    })
+  })
+
+  req.on('error', (err) => {
+    callback(err.message, null)
+  })
+
+  req.setTimeout(15000, () => {
+    req.destroy()
+    callback('Request timed out after 15 seconds', null)
+  })
 }

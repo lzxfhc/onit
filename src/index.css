@@ -205,3 +205,25 @@
   min-height: 40px;
   max-height: 200px;
 }
+
+/* Iteration collapse animation */
+.iteration-collapse {
+  overflow: hidden;
+  transition: max-height 0.2s ease-out, opacity 0.15s ease-out;
+}
+
+.iteration-collapse.collapsed {
+  max-height: 0;
+  opacity: 0;
+}
+
+.iteration-collapse.expanded {
+  max-height: 2000px;
+  opacity: 1;
+}
+
+/* GPU-accelerate spin animation to prevent jank */
+.animate-spin {
+  will-change: transform;
+  transform: translateZ(0);
+}

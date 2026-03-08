@@ -20,6 +20,13 @@ export interface ToolCall {
   error?: string
 }
 
+export interface ContentBlock {
+  type: 'text' | 'tool-call' | 'iteration-end'
+  content?: string
+  toolCallId?: string
+  iterationIndex?: number
+}
+
 export interface Message {
   id: string
   role: MessageRole
@@ -28,6 +35,8 @@ export interface Message {
   toolCalls?: ToolCall[]
   thinking?: string
   isStreaming?: boolean
+  contentBlocks?: ContentBlock[]
+  iterationIndex?: number
 }
 
 export type SessionStatus = 'idle' | 'running' | 'completed' | 'error' | 'waiting-input'
@@ -63,7 +72,7 @@ export interface Session {
   hasUnviewedResult: boolean
 }
 
-export type ScheduledFrequency = 'manual' | 'hourly' | 'daily' | 'weekly' | 'weekdays'
+export type ScheduledFrequency = 'manual' | 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'weekdays'
 
 export interface ScheduledTask {
   id: string
@@ -77,6 +86,10 @@ export interface ScheduledTask {
   lastRun: number | null
   nextRun: number | null
   createdAt: number
+  scheduleTime?: string
+  scheduleDayOfWeek?: number
+  scheduleDayOfMonth?: number
+  scheduleDateTime?: string
 }
 
 export interface PermissionRequest {
@@ -121,7 +134,7 @@ export interface IpcChannels {
   'sessions:delete': { id: string }
 }
 
-export type StreamChunkType = 'thinking' | 'content' | 'tool-call-start' | 'tool-call-result' | 'error' | 'done'
+export type StreamChunkType = 'thinking' | 'content' | 'tool-call-start' | 'tool-call-result' | 'error' | 'done' | 'iteration-end'
 
 export interface StreamChunk {
   type: StreamChunkType
@@ -138,6 +151,20 @@ export const AVAILABLE_MODELS = [
   { id: 'deepseek-v3', name: 'DeepSeek V3', codingPlan: false },
   { id: 'deepseek-r1', name: 'DeepSeek R1', codingPlan: false },
 ] as const
+
+// Skill types
+export interface Skill {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  version?: string
+  content: string
+  source: 'prebuilt' | 'user-created' | 'imported'
+  enabled: boolean
+  filePath: string
+  createdAt: number
+}
 
 export const DEFAULT_SETTINGS: AppSettings = {
   apiConfig: {

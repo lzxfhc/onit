@@ -11,7 +11,8 @@ export default function ChatView() {
   const {
     sessions, activeSessionId, addMessage, updateLastMessage,
     appendToLastMessage, setSessionStatus, updateTasks,
-    updateWorkspaceFiles, updateToolCall, saveSession, getActiveSession,
+    updateWorkspaceFiles, updateToolCall, appendContentBlock,
+    addIterationEndMarker, saveSession, getActiveSession,
   } = useSessionStore()
   const { settings, addPermissionRequest } = useSettingsStore()
   const cleanupRef = useRef<(() => void)[]>([])
@@ -20,16 +21,17 @@ export default function ChatView() {
 
   // Set up IPC listeners
   useEffect(() => {
-    // Clean up previous listeners
     cleanupRef.current.forEach(fn => fn())
     cleanupRef.current = []
 
     const unsubStream = window.electronAPI.onAgentStream((data: any) => {
       const { sessionId, chunk } = data
       if (chunk.type === 'content' && chunk.content) {
+        // Write to contentBlocks for chronological rendering (primary)
+        useSessionStore.getState().appendContentBlock(sessionId, { type: 'text', content: chunk.content })
+        // Also update message.content for search/history/legacy compatibility
         appendToLastMessage(sessionId, chunk.content)
       } else if (chunk.type === 'thinking' && chunk.content) {
-        // Use getState() to avoid stale closure
         const currentSessions = useSessionStore.getState().sessions
         const session = currentSessions.find(s => s.id === sessionId)
         if (session) {
@@ -42,8 +44,11 @@ export default function ChatView() {
         }
       } else if (chunk.type === 'tool-call-start' && chunk.toolCall) {
         updateToolCall(sessionId, chunk.toolCall)
+        useSessionStore.getState().appendContentBlock(sessionId, { type: 'tool-call', toolCallId: chunk.toolCall.id })
       } else if (chunk.type === 'tool-call-result' && chunk.toolCall) {
         updateToolCall(sessionId, chunk.toolCall)
+      } else if (chunk.type === 'iteration-end') {
+        useSessionStore.getState().addIterationEndMarker(sessionId, chunk.iterationIndex)
       }
     })
 
@@ -87,7 +92,6 @@ export default function ChatView() {
   const handleSendMessage = async (content: string) => {
     if (!activeSession || !content.trim()) return
 
-    // Add user message
     const userMsg: Message = {
       id: uuidv4(),
       role: 'user',
@@ -96,7 +100,6 @@ export default function ChatView() {
     }
     addMessage(activeSession.id, userMsg)
 
-    // Add assistant placeholder
     const assistantMsg: Message = {
       id: uuidv4(),
       role: 'assistant',
@@ -104,6 +107,7 @@ export default function ChatView() {
       timestamp: Date.now(),
       isStreaming: true,
       toolCalls: [],
+      contentBlocks: [],
     }
     addMessage(activeSession.id, assistantMsg)
     setSessionStatus(activeSession.id, 'running')

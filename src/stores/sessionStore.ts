@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { v4 as uuidv4 } from 'uuid'
-import type { Session, Message, SessionStatus, PermissionMode, TaskItem, WorkspaceFile, ToolCall } from '../types'
+import type { Session, Message, SessionStatus, PermissionMode, TaskItem, WorkspaceFile, ToolCall, ContentBlock } from '../types'
 
 declare global {
   interface Window {
@@ -31,6 +31,8 @@ interface SessionState {
   updateTasks: (sessionId: string, tasks: TaskItem[]) => void
   updateWorkspaceFiles: (sessionId: string, files: WorkspaceFile[]) => void
   updateToolCall: (sessionId: string, toolCall: ToolCall) => void
+  appendContentBlock: (sessionId: string, block: ContentBlock) => void
+  addIterationEndMarker: (sessionId: string, iterationIndex: number) => void
   markSessionViewed: (sessionId: string) => void
   saveSession: (sessionId: string) => Promise<void>
 
@@ -67,7 +69,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     try {
       const sessions = await window.electronAPI.loadSessions()
       if (sessions.length > 0) {
-        set({ sessions, activeSessionId: sessions[0].id, isLoading: false })
+        // Clear stale background/unviewed flags on load —
+        // sessions that aren't actually running shouldn't show as active tasks
+        const cleaned = sessions.map((s: Session) => {
+          if (s.status !== 'running' && (s.isBackgroundRunning || s.hasUnviewedResult || s.backgroundCompleted)) {
+            return { ...s, isBackgroundRunning: false, hasUnviewedResult: false, backgroundCompleted: false }
+          }
+          return s
+        })
+        set({ sessions: cleaned, activeSessionId: cleaned[0].id, isLoading: false })
       } else {
         const newSession = createDefaultSession()
         set({ sessions: [newSession], activeSessionId: newSession.id, isLoading: false })
@@ -99,8 +109,19 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         const newSession = createDefaultSession()
         return { sessions: [newSession], activeSessionId: newSession.id }
       }
-      return { sessions: filtered, activeSessionId: activeId }
+      // Clear unviewed flags on the session we're auto-switching to
+      const cleanedSessions = filtered.map(s =>
+        s.id === activeId && (s.hasUnviewedResult || s.backgroundCompleted)
+          ? { ...s, hasUnviewedResult: false, backgroundCompleted: false }
+          : s
+      )
+      return { sessions: cleanedSessions, activeSessionId: activeId }
     })
+    // Persist the cleaned session if we auto-switched
+    const newActiveId = get().activeSessionId
+    if (newActiveId) {
+      get().saveSession(newActiveId)
+    }
   },
 
   setActiveSession: (id: string) => {
@@ -115,6 +136,18 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           s.id === currentActive ? { ...s, isBackgroundRunning: true } : s
         ),
       }))
+    }
+
+    // Clear unviewed flags on the session we're switching TO
+    const targetSession = state.sessions.find(s => s.id === id)
+    if (targetSession && (targetSession.hasUnviewedResult || targetSession.backgroundCompleted)) {
+      set(state => ({
+        sessions: state.sessions.map(s =>
+          s.id === id ? { ...s, hasUnviewedResult: false, backgroundCompleted: false } : s
+        ),
+      }))
+      // Persist so flags don't come back on restart
+      get().saveSession(id)
     }
 
     set({ activeSessionId: id })
@@ -244,6 +277,48 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   markSessionViewed: (sessionId) => {
     get().updateSession(sessionId, { hasUnviewedResult: false, backgroundCompleted: false })
+    // Persist to disk so stale flags don't reappear on restart
+    get().saveSession(sessionId)
+  },
+
+  appendContentBlock: (sessionId, block) => {
+    set(state => ({
+      sessions: state.sessions.map(s => {
+        if (s.id !== sessionId || s.messages.length === 0) return s
+        const messages = [...s.messages]
+        const last = messages[messages.length - 1]
+        if (last.role !== 'assistant') return s
+
+        const blocks = last.contentBlocks ? [...last.contentBlocks] : []
+        // If both the last block and new block are text, merge them
+        if (block.type === 'text' && blocks.length > 0 && blocks[blocks.length - 1].type === 'text') {
+          blocks[blocks.length - 1] = {
+            ...blocks[blocks.length - 1],
+            content: (blocks[blocks.length - 1].content || '') + (block.content || ''),
+          }
+        } else {
+          blocks.push(block)
+        }
+        messages[messages.length - 1] = { ...last, contentBlocks: blocks }
+        return { ...s, messages }
+      }),
+    }))
+  },
+
+  addIterationEndMarker: (sessionId, iterationIndex) => {
+    set(state => ({
+      sessions: state.sessions.map(s => {
+        if (s.id !== sessionId || s.messages.length === 0) return s
+        const messages = [...s.messages]
+        const last = messages[messages.length - 1]
+        if (last.role !== 'assistant') return s
+        // Append an iteration-end content block as boundary marker
+        const blocks = last.contentBlocks ? [...last.contentBlocks] : []
+        blocks.push({ type: 'iteration-end', iterationIndex })
+        messages[messages.length - 1] = { ...last, contentBlocks: blocks, iterationIndex }
+        return { ...s, messages }
+      }),
+    }))
   },
 
   saveSession: async (sessionId) => {

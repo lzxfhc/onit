@@ -7,7 +7,7 @@ import ChatView from './components/Chat'
 import PermissionDialog from './components/Dialogs/PermissionDialog'
 
 export default function App() {
-  const { isLoggedIn, loadSettings, loadScheduledTasks, permissionRequests } = useSettingsStore()
+  const { isLoggedIn, loadSettings, loadScheduledTasks, loadSkills, permissionRequests } = useSettingsStore()
   const { loadSessions } = useSessionStore()
 
   useEffect(() => {
@@ -18,6 +18,7 @@ export default function App() {
     if (isLoggedIn) {
       loadSessions()
       loadScheduledTasks()
+      loadSkills()
     }
   }, [isLoggedIn])
 

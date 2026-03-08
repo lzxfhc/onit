@@ -2,10 +2,18 @@ import https from 'https'
 import http from 'http'
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
 import { URL } from 'url'
 import { v4 as uuidv4 } from 'uuid'
 import { executeTool, AGENT_TOOLS, getToolRiskLevel } from './tools'
 import { AgentMessage } from './types'
+
+interface SkillData {
+  name: string
+  displayName: string
+  description: string
+  content: string
+}
 
 interface AgentSession {
   sessionId: string
@@ -22,6 +30,7 @@ interface AgentSession {
   }
   alwaysAllowedTools: Set<string>
   pendingPermissions: Map<string, { resolve: (approved: boolean) => void }>
+  enabledSkills?: SkillData[]
 }
 
 export class AgentManager {
@@ -36,20 +45,32 @@ export class AgentManager {
     let agentSession = this.sessions.get(sessionId)
 
     if (agentSession?.isRunning) {
-      // Interrupt current run - stop it, then start new one
       this.stopAgent(sessionId)
       await new Promise(resolve => setTimeout(resolve, 100))
     }
 
     const apiConfig = sessionData.apiConfig || {}
+    const enabledSkills: SkillData[] = sessionData.enabledSkills || []
+
+    // Parse @skill-name mentions from user message and inject skill content
+    const mentionedSkillContents = this.extractMentionedSkills(userMessage, enabledSkills)
 
     // Build the system prompt
-    const systemPrompt = this.buildSystemPrompt(sessionData.workspacePath, sessionData.permissionMode)
+    const systemPrompt = this.buildSystemPrompt(
+      sessionData.workspacePath,
+      sessionData.permissionMode,
+      enabledSkills,
+    )
 
     // Restore conversation history from session
     const messages: AgentMessage[] = [
       { role: 'system', content: systemPrompt }
     ]
+
+    // Inject mentioned skill contents as system messages
+    for (const skillContent of mentionedSkillContents) {
+      messages.push({ role: 'system', content: skillContent })
+    }
 
     // Add existing messages from session (convert from renderer format)
     if (sessionData.messages) {
@@ -80,6 +101,7 @@ export class AgentManager {
       },
       alwaysAllowedTools: agentSession?.alwaysAllowedTools || new Set(),
       pendingPermissions: new Map(),
+      enabledSkills,
     }
 
     this.sessions.set(sessionId, agentSession)
@@ -101,7 +123,6 @@ export class AgentManager {
       session.isRunning = false
       session.abortController?.abort()
       session.abortController = null
-      // Resolve any pending permissions with denied
       for (const [, pending] of session.pendingPermissions) {
         pending.resolve(false)
       }
@@ -121,7 +142,6 @@ export class AgentManager {
       const pending = session.pendingPermissions.get(requestId)
       if (pending) {
         if (alwaysAllow && approved) {
-          // Extract tool name from requestId format
           const parts = requestId.split(':')
           if (parts.length > 1) {
             session.alwaysAllowedTools.add(parts[1])
@@ -134,12 +154,57 @@ export class AgentManager {
     }
   }
 
-  private buildSystemPrompt(workspacePath: string | null, permissionMode: string): string {
+  private extractMentionedSkills(message: string, enabledSkills: SkillData[]): string[] {
+    const contents: string[] = []
+    const mentionPattern = /@([\w-]+)/g
+    let match: RegExpExecArray | null
+
+    while ((match = mentionPattern.exec(message)) !== null) {
+      const skillName = match[1]
+      const skill = enabledSkills.find(s => s.name === skillName)
+      if (skill && skill.content) {
+        // Inject full skill content, capped at 5000 chars
+        const injected = skill.content.length > 5000
+          ? skill.content.substring(0, 5000) + '\n\n[Skill content truncated]'
+          : skill.content
+        contents.push(`[Skill: ${skill.displayName}]\n\n${injected}`)
+      }
+    }
+
+    return contents
+  }
+
+  private buildSystemPrompt(
+    workspacePath: string | null,
+    permissionMode: string,
+    enabledSkills: SkillData[],
+  ): string {
     const workspace = workspacePath
       ? `You are working in the directory: ${workspacePath}. All file operations should be relative to or within this workspace unless the user specifies otherwise.`
       : `No workspace directory is set. You can work with files anywhere the user specifies.`
 
-    return `You are Onit Agent, a highly capable AI assistant running on the user's Mac desktop. You help users accomplish tasks by using the available tools.
+    // Environment awareness
+    const now = new Date()
+    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+    const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
+    const dateStr = `${days[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}, ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
+    const osName = os.platform() === 'darwin' ? 'macOS' : os.platform() === 'win32' ? 'Windows' : 'Linux'
+    const homeDir = os.homedir()
+
+    // Skills section
+    let skillsSection = ''
+    if (enabledSkills.length > 0) {
+      const skillsList = enabledSkills
+        .map(s => `- **${s.displayName}** (\`@${s.name}\`): ${s.description}`)
+        .join('\n')
+      skillsSection = `\n\n## Available Skills\nThe user can invoke these skills by mentioning them with @. When a skill is mentioned, follow its instructions.\n${skillsList}`
+    }
+
+    return `You are Onit Agent, a highly capable AI assistant running on the user's desktop. You help users accomplish tasks by using the available tools.
+
+Current date and time: ${dateStr}
+Operating system: ${osName}
+Home directory: ${homeDir}
 
 ${workspace}
 
@@ -148,7 +213,7 @@ Core principles:
 - Be transparent about what you're doing and why
 - For complex tasks, break them down into clear steps using create_task_list
 - Always explain your reasoning before taking actions
-- If something is unclear, ask for clarification
+- Try to solve problems autonomously — only ask the user for help when you encounter truly insurmountable obstacles
 - Be efficient and precise in tool usage
 
 Current permission mode: ${permissionMode}
@@ -156,7 +221,7 @@ ${permissionMode === 'plan' ? 'In Plan mode: explain every step before executing
 ${permissionMode === 'accept-edit' ? 'In AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}
 ${permissionMode === 'full-access' ? 'In Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
 
-When providing final results, format them clearly with markdown. For code, use appropriate syntax highlighting.`
+When providing final results, format them clearly with markdown. For code, use appropriate syntax highlighting.${skillsSection}`
   }
 
   private getApiUrl(apiConfig: { billingMode: string; customBaseUrl?: string }): string {
@@ -213,7 +278,6 @@ When providing final results, format them clearly with markdown. For code, use a
 
       const httpModule = parsedUrl.protocol === 'https:' ? https : http
       const req = httpModule.request(options, (res) => {
-        // Handle non-200 status codes
         if (res.statusCode && res.statusCode >= 400) {
           let errorBody = ''
           res.on('data', (chunk: Buffer) => { errorBody += chunk.toString() })
@@ -250,18 +314,15 @@ When providing final results, format them clearly with markdown. For code, use a
 
               if (!delta) continue
 
-              // Handle content
               if (delta.content) {
                 fullContent += delta.content
                 onChunk({ type: 'content', content: delta.content })
               }
 
-              // Handle thinking/reasoning
               if (delta.reasoning_content) {
                 onChunk({ type: 'thinking', content: delta.reasoning_content })
               }
 
-              // Handle tool calls
               if (delta.tool_calls) {
                 for (const tc of delta.tool_calls) {
                   const idx = tc.index || 0
@@ -284,7 +345,6 @@ When providing final results, format them clearly with markdown. For code, use a
         })
 
         res.on('end', () => {
-          // Process remaining buffer
           if (buffer.trim()) {
             const trimmed = buffer.trim()
             if (trimmed.startsWith('data:')) {
@@ -309,7 +369,6 @@ When providing final results, format them clearly with markdown. For code, use a
 
       req.on('error', reject)
 
-      // Handle abort
       if (agentSession.abortController) {
         agentSession.abortController.signal.addEventListener('abort', () => {
           req.destroy()
@@ -331,10 +390,8 @@ When providing final results, format them clearly with markdown. For code, use a
   ): Promise<boolean> {
     const mode = agentSession.permissionMode
 
-    // Full access: auto-approve everything except dangerous operations
     if (mode === 'full-access') {
       if (riskLevel === 'dangerous') {
-        // Just notify, still execute
         this.sendToRenderer('agent:stream', {
           sessionId: agentSession.sessionId,
           chunk: { type: 'content', content: `\n> **Risk Notice:** Executing ${toolName} - ${description}\n\n` },
@@ -343,15 +400,12 @@ When providing final results, format them clearly with markdown. For code, use a
       return true
     }
 
-    // Safe operations: always auto-approve
     if (riskLevel === 'safe') return true
 
-    // AcceptEdit mode: check always-allowed list
     if (mode === 'accept-edit' && agentSession.alwaysAllowedTools.has(toolName)) {
       return true
     }
 
-    // Need to ask user
     const requestId = `${uuidv4()}:${toolName}`
 
     return new Promise((resolve) => {
@@ -367,7 +421,6 @@ When providing final results, format them clearly with markdown. For code, use a
         showAlwaysAllow: mode === 'accept-edit',
       })
 
-      // Timeout after 5 minutes
       setTimeout(() => {
         if (agentSession.pendingPermissions.has(requestId)) {
           agentSession.pendingPermissions.delete(requestId)
@@ -386,12 +439,20 @@ When providing final results, format them clearly with markdown. For code, use a
   }
 
   private async runAgentLoop(agentSession: AgentSession): Promise<void> {
-    const MAX_ITERATIONS = 30
+    const MAX_ITERATIONS = 200
     let iteration = 0
 
     try {
       while (agentSession.isRunning && iteration < MAX_ITERATIONS) {
         iteration++
+
+        // After 50 iterations, add a hint to encourage progress summary
+        if (iteration === 51) {
+          agentSession.messages.push({
+            role: 'system',
+            content: 'You have been running for a while. Please summarize your progress so far and outline what remains to be done. If you are stuck in a loop, try a different approach.',
+          })
+        }
 
         // Call LLM
         const { content, toolCalls } = await this.callLLM(agentSession, (chunk) => {
@@ -405,7 +466,6 @@ When providing final results, format them clearly with markdown. For code, use a
 
         // If there's content and no tool calls, we're done
         if (toolCalls.length === 0) {
-          // Add assistant message to history
           agentSession.messages.push({ role: 'assistant', content: content || '' })
           break
         }
@@ -440,7 +500,7 @@ When providing final results, format them clearly with markdown. For code, use a
             chunk: { type: 'tool-call-start', toolCall: { id: tc.id, name: toolName, arguments: toolArgs, status: 'running' } },
           })
 
-          // Check permissions BEFORE executing for non-safe operations
+          // Check permissions BEFORE executing
           let args: any = {}
           try { args = JSON.parse(toolArgs) } catch {}
           const riskLevel = getToolRiskLevel(toolName, args)
@@ -469,7 +529,7 @@ When providing final results, format them clearly with markdown. For code, use a
             }
           }
 
-          // Execute the tool (after permission is granted)
+          // Execute the tool
           const result = await executeTool(toolName, toolArgs, agentSession.workspacePath)
 
           // Handle task list updates
@@ -488,10 +548,10 @@ When providing final results, format them clearly with markdown. For code, use a
             this.updateWorkspaceFiles(agentSession)
           }
 
-          // Add tool result to conversation
+          // Add tool result to conversation (cap size to prevent memory bloat)
           agentSession.messages.push({
             role: 'tool',
-            content: result.output.substring(0, 10000),
+            content: result.output.substring(0, 3000),
             tool_call_id: tc.id,
             name: toolName,
           })
@@ -511,6 +571,27 @@ When providing final results, format them clearly with markdown. For code, use a
               },
             },
           })
+        }
+
+        // Send iteration-end signal for UI collapse
+        this.sendToRenderer('agent:stream', {
+          sessionId: agentSession.sessionId,
+          chunk: { type: 'iteration-end', iterationIndex: iteration },
+        })
+
+        // Prune old conversation history to prevent memory bloat
+        // Keep system messages + last 80 messages; truncate old tool results
+        if (agentSession.messages.length > 100) {
+          const systemMsgs = agentSession.messages.filter(m => m.role === 'system')
+          const nonSystemMsgs = agentSession.messages.filter(m => m.role !== 'system')
+          const keep = nonSystemMsgs.slice(-80)
+          // Truncate tool results in kept messages older than 40 messages
+          for (let i = 0; i < keep.length - 40; i++) {
+            if (keep[i].role === 'tool' && keep[i].content && keep[i].content!.length > 500) {
+              keep[i] = { ...keep[i], content: keep[i].content!.substring(0, 500) + '\n[truncated]' }
+            }
+          }
+          agentSession.messages = [...systemMsgs, ...keep]
         }
       }
     } catch (error: any) {

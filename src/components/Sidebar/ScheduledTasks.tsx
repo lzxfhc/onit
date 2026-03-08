@@ -8,16 +8,37 @@ export default function ScheduledTasks() {
   const { scheduledTasks, removeScheduledTask, toggleScheduledTask, runScheduledTaskNow } = useSettingsStore()
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [editingTask, setEditingTask] = useState<ScheduledTask | null>(null)
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
 
-  const formatFrequency = (freq: string) => {
-    const map: Record<string, string> = {
-      manual: 'Manual',
-      hourly: 'Every hour',
-      daily: 'Every day',
-      weekly: 'Every week',
-      weekdays: 'Weekdays',
+  const formatFrequency = (task: ScheduledTask) => {
+    const time = task.scheduleTime || '09:00'
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+    switch (task.frequency) {
+      case 'manual':
+        return 'Manual'
+      case 'once': {
+        if (task.scheduleDateTime) {
+          const d = new Date(task.scheduleDateTime)
+          return `Once at ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
+        }
+        return 'Once'
+      }
+      case 'hourly': {
+        const minute = time.split(':')[1] || '00'
+        return `Hourly at :${minute}`
+      }
+      case 'daily':
+        return `Daily at ${time}`
+      case 'weekly':
+        return `Weekly on ${days[task.scheduleDayOfWeek ?? 1]} at ${time}`
+      case 'monthly':
+        return `Monthly on day ${task.scheduleDayOfMonth ?? 1} at ${time}`
+      case 'weekdays':
+        return `Weekdays at ${time}`
+      default:
+        return task.frequency
     }
-    return map[freq] || freq
   }
 
   const formatTime = (ts: number | null) => {
@@ -25,6 +46,17 @@ export default function ScheduledTasks() {
     return new Date(ts).toLocaleString('en-US', {
       month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
     })
+  }
+
+  const handleDelete = (id: string) => {
+    if (confirmDeleteId === id) {
+      removeScheduledTask(id)
+      setConfirmDeleteId(null)
+    } else {
+      setConfirmDeleteId(id)
+      // Auto-clear confirmation after 3 seconds
+      setTimeout(() => setConfirmDeleteId(prev => prev === id ? null : prev), 3000)
+    }
   }
 
   return (
@@ -80,7 +112,7 @@ export default function ScheduledTasks() {
                 </button>
               </div>
               <div className="flex items-center gap-3 text-[10px] text-text-tertiary">
-                <span>{formatFrequency(task.frequency)}</span>
+                <span>{formatFrequency(task)}</span>
                 {task.lastRun && <span>Last: {formatTime(task.lastRun)}</span>}
               </div>
               <div className="flex items-center gap-1 mt-2">
@@ -100,10 +132,13 @@ export default function ScheduledTasks() {
                   Edit
                 </button>
                 <button
-                  onClick={() => removeScheduledTask(task.id)}
-                  className="btn-ghost btn-sm text-[10px] text-danger"
+                  onClick={() => handleDelete(task.id)}
+                  className={`btn-ghost btn-sm text-[10px] ${
+                    confirmDeleteId === task.id ? 'text-white bg-danger hover:bg-red-600' : 'text-danger'
+                  }`}
                 >
                   <Trash2 className="w-3 h-3" />
+                  {confirmDeleteId === task.id ? 'Confirm' : ''}
                 </button>
               </div>
             </div>
