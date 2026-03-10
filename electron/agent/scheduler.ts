@@ -16,17 +16,27 @@ interface ScheduledTaskData {
   lastRun: number | null
   nextRun: number | null
   createdAt: number
+  // v1.1.0: Enhanced scheduling fields
+  scheduleTime?: string          // "HH:mm" for daily/weekly/weekdays
+  scheduleDayOfWeek?: number     // 0-6 (Sun-Sat) for weekly
+  scheduleDayOfMonth?: number    // 1-31 for monthly
+  scheduleDateTime?: string      // ISO datetime for once
 }
 
 export class SchedulerManager {
   private dataDir: string
   private agentManager: AgentManager
   private jobs: Map<string, schedule.Job> = new Map()
+  private apiConfig: { billingMode: string; apiKey: string; customBaseUrl?: string } | null = null
 
   constructor(dataDir: string, agentManager: AgentManager) {
     this.dataDir = dataDir
     this.agentManager = agentManager
     this.loadAndScheduleAll()
+  }
+
+  setApiConfig(config: { billingMode: string; apiKey: string; customBaseUrl?: string }): void {
+    this.apiConfig = config
   }
 
   private getFilePath(id: string): string {
@@ -65,6 +75,10 @@ export class SchedulerManager {
       lastRun: null,
       nextRun: null,
       createdAt: Date.now(),
+      scheduleTime: taskData.scheduleTime,
+      scheduleDayOfWeek: taskData.scheduleDayOfWeek,
+      scheduleDayOfMonth: taskData.scheduleDayOfMonth,
+      scheduleDateTime: taskData.scheduleDateTime,
     }
 
     this.saveTask(task)
@@ -75,7 +89,6 @@ export class SchedulerManager {
   }
 
   updateTask(taskData: ScheduledTaskData): ScheduledTaskData {
-    // Cancel existing job
     this.cancelJob(taskData.id)
 
     this.saveTask(taskData)
@@ -110,24 +123,38 @@ export class SchedulerManager {
     return task
   }
 
-  async runTaskNow(id: string): Promise<boolean> {
+  async runTaskNow(id: string, sendToRenderer?: (channel: string, data: any) => void): Promise<boolean> {
     const task = this.loadTask(id)
     if (!task) return false
+
+    if (!this.apiConfig || !this.apiConfig.apiKey) {
+      return false
+    }
 
     task.lastRun = Date.now()
     this.saveTask(task)
 
     const sessionId = `scheduled-${task.id}-${Date.now()}`
+    const runId = `${sessionId}-run`
 
-    await this.agentManager.startAgent(sessionId, task.taskPrompt, {
+    // Notify renderer about the new scheduled session
+    if (sendToRenderer) {
+      sendToRenderer('scheduler:session-created', {
+        taskId: task.id,
+        taskName: task.name,
+        sessionId,
+        runId,
+        workspacePath: task.workspacePath,
+        model: task.model,
+      })
+    }
+
+    await this.agentManager.startAgent(sessionId, task.taskPrompt, runId, {
       permissionMode: 'full-access',
       workspacePath: task.workspacePath,
       model: task.model,
       messages: [],
-      apiConfig: {
-        billingMode: 'coding-plan',
-        apiKey: '',
-      },
+      apiConfig: this.apiConfig,
     })
 
     return true
@@ -140,21 +167,42 @@ export class SchedulerManager {
     schedule.gracefulShutdown()
   }
 
-  private frequencyToCron(frequency: string): string | null {
-    switch (frequency) {
-      case 'hourly': return '0 * * * *'
-      case 'daily': return '0 9 * * *'
-      case 'weekly': return '0 9 * * 1'
-      case 'weekdays': return '0 9 * * 1-5'
-      default: return null
+  private frequencyToCron(task: ScheduledTaskData): string | null {
+    const time = task.scheduleTime || '09:00'
+    const [hourStr, minuteStr] = time.split(':')
+    const hour = parseInt(hourStr, 10) || 9
+    const minute = parseInt(minuteStr, 10) || 0
+
+    switch (task.frequency) {
+      case 'hourly':
+        return `${minute} * * * *`
+      case 'daily':
+        return `${minute} ${hour} * * *`
+      case 'weekly': {
+        const dow = task.scheduleDayOfWeek ?? 1
+        return `${minute} ${hour} * * ${dow}`
+      }
+      case 'monthly': {
+        const dom = task.scheduleDayOfMonth ?? 1
+        return `${minute} ${hour} ${dom} * *`
+      }
+      case 'weekdays':
+        return `${minute} ${hour} * * 1-5`
+      default:
+        return null
     }
   }
 
   private scheduleTask(task: ScheduledTaskData): void {
-    const cron = this.frequencyToCron(task.frequency)
-    if (!cron) return
-
     this.cancelJob(task.id)
+
+    if (task.frequency === 'once') {
+      this.scheduleOnce(task)
+      return
+    }
+
+    const cron = this.frequencyToCron(task)
+    if (!cron) return
 
     const job = schedule.scheduleJob(cron, () => {
       this.runTaskNow(task.id)
@@ -162,12 +210,37 @@ export class SchedulerManager {
 
     if (job) {
       this.jobs.set(task.id, job)
-      // Update next run time
       const nextInvocation = job.nextInvocation()
       if (nextInvocation) {
         task.nextRun = nextInvocation.getTime()
         this.saveTask(task)
       }
+    }
+  }
+
+  private scheduleOnce(task: ScheduledTaskData): void {
+    if (!task.scheduleDateTime) return
+
+    const targetDate = new Date(task.scheduleDateTime)
+    if (targetDate.getTime() <= Date.now()) {
+      // Already past — skip
+      return
+    }
+
+    const job = schedule.scheduleJob(targetDate, () => {
+      this.runTaskNow(task.id)
+      // Auto-disable after one-time execution
+      task.enabled = false
+      task.lastRun = Date.now()
+      task.nextRun = null
+      this.saveTask(task)
+      this.jobs.delete(task.id)
+    })
+
+    if (job) {
+      this.jobs.set(task.id, job)
+      task.nextRun = targetDate.getTime()
+      this.saveTask(task)
     }
   }
 

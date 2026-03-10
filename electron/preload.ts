@@ -6,7 +6,7 @@ const api = {
   selectFiles: () => ipcRenderer.invoke('dialog:select-files'),
 
   // Agent
-  startAgent: (data: { sessionId: string; message: string; session: any }) =>
+  startAgent: (data: { sessionId: string; message: string; runId: string; session: any }) =>
     ipcRenderer.invoke('agent:start', data),
   stopAgent: (data: { sessionId: string }) =>
     ipcRenderer.invoke('agent:stop', data),
@@ -25,6 +25,15 @@ const api = {
   deleteScheduledTask: (data: { id: string }) => ipcRenderer.invoke('scheduler:delete', data),
   toggleScheduledTask: (data: { id: string; enabled: boolean }) => ipcRenderer.invoke('scheduler:toggle', data),
   runScheduledTaskNow: (data: { id: string }) => ipcRenderer.invoke('scheduler:run-now', data),
+  setSchedulerApiConfig: (config: { billingMode: string; apiKey: string; customBaseUrl?: string }) =>
+    ipcRenderer.invoke('scheduler:set-api-config', config),
+
+  // Skills
+  listSkills: () => ipcRenderer.invoke('skills:list'),
+  toggleSkill: (data: { id: string; enabled: boolean }) => ipcRenderer.invoke('skills:toggle', data),
+  deleteSkill: (data: { id: string }) => ipcRenderer.invoke('skills:delete', data),
+  createSkill: (data: { name: string; description: string; content: string }) => ipcRenderer.invoke('skills:create', data),
+  importSkill: () => ipcRenderer.invoke('skills:import'),
 
   // File system
   listDirectory: (dirPath: string) => ipcRenderer.invoke('fs:list-directory', dirPath),
@@ -72,6 +81,11 @@ const api = {
     const listener = (_event: any, data: any) => callback(data)
     ipcRenderer.on('scheduler:event', listener)
     return () => ipcRenderer.removeListener('scheduler:event', listener)
+  },
+  onSchedulerSessionCreated: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('scheduler:session-created', listener)
+    return () => ipcRenderer.removeListener('scheduler:session-created', listener)
   },
 }
 

@@ -20,14 +20,24 @@ export interface ToolCall {
   error?: string
 }
 
+export interface ContentBlock {
+  type: 'text' | 'tool-call' | 'iteration-end'
+  content?: string
+  toolCallId?: string
+  iterationIndex?: number
+}
+
 export interface Message {
   id: string
   role: MessageRole
   content: string
   timestamp: number
+  runId?: string
   toolCalls?: ToolCall[]
   thinking?: string
   isStreaming?: boolean
+  contentBlocks?: ContentBlock[]
+  iterationIndex?: number
 }
 
 export type SessionStatus = 'idle' | 'running' | 'completed' | 'error' | 'waiting-input'
@@ -50,6 +60,7 @@ export interface Session {
   name: string
   messages: Message[]
   status: SessionStatus
+  activeRunId?: string | null
   permissionMode: PermissionMode
   workspacePath: string | null
   attachedFiles: string[]
@@ -63,7 +74,7 @@ export interface Session {
   hasUnviewedResult: boolean
 }
 
-export type ScheduledFrequency = 'manual' | 'hourly' | 'daily' | 'weekly' | 'weekdays'
+export type ScheduledFrequency = 'manual' | 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'weekdays'
 
 export interface ScheduledTask {
   id: string
@@ -77,11 +88,16 @@ export interface ScheduledTask {
   lastRun: number | null
   nextRun: number | null
   createdAt: number
+  scheduleTime?: string
+  scheduleDayOfWeek?: number
+  scheduleDayOfMonth?: number
+  scheduleDateTime?: string
 }
 
 export interface PermissionRequest {
   id: string
   sessionId: string
+  runId?: string
   type: 'file-write' | 'file-delete' | 'file-overwrite' | 'command-execute' | 'system-config' | 'send-message' | 'task-plan'
   description: string
   details: string
@@ -98,16 +114,16 @@ export interface AppSettings {
 
 // IPC Channel types
 export interface IpcChannels {
-  'agent:start': { sessionId: string; message: string }
+  'agent:start': { sessionId: string; message: string; runId: string }
   'agent:stop': { sessionId: string }
-  'agent:stream': { sessionId: string; chunk: StreamChunk }
-  'agent:complete': { sessionId: string }
-  'agent:error': { sessionId: string; error: string }
+  'agent:stream': { sessionId: string; runId: string; chunk: StreamChunk }
+  'agent:complete': { sessionId: string; runId: string; status: 'completed' | 'stopped' }
+  'agent:error': { sessionId: string; runId: string; error: string }
   'agent:permission-request': PermissionRequest
   'agent:permission-response': { requestId: string; approved: boolean; alwaysAllow?: boolean }
-  'agent:task-update': { sessionId: string; tasks: TaskItem[] }
-  'agent:tool-call': { sessionId: string; toolCall: ToolCall }
-  'agent:workspace-files': { sessionId: string; files: WorkspaceFile[] }
+  'agent:task-update': { sessionId: string; runId: string; tasks: TaskItem[] }
+  'agent:tool-call': { sessionId: string; runId: string; toolCall: ToolCall }
+  'agent:workspace-files': { sessionId: string; runId: string; files: WorkspaceFile[] }
   'dialog:select-folder': void
   'dialog:select-files': void
   'scheduler:create': ScheduledTask
@@ -121,13 +137,14 @@ export interface IpcChannels {
   'sessions:delete': { id: string }
 }
 
-export type StreamChunkType = 'thinking' | 'content' | 'tool-call-start' | 'tool-call-result' | 'error' | 'done'
+export type StreamChunkType = 'thinking' | 'content' | 'tool-call-start' | 'tool-call-result' | 'error' | 'done' | 'iteration-end'
 
 export interface StreamChunk {
   type: StreamChunkType
   content?: string
   toolCall?: ToolCall
   taskUpdate?: TaskItem[]
+  iterationIndex?: number
 }
 
 // Available models
@@ -138,6 +155,20 @@ export const AVAILABLE_MODELS = [
   { id: 'deepseek-v3', name: 'DeepSeek V3', codingPlan: false },
   { id: 'deepseek-r1', name: 'DeepSeek R1', codingPlan: false },
 ] as const
+
+// Skill types
+export interface Skill {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  version?: string
+  content: string
+  source: 'prebuilt' | 'user-created' | 'imported'
+  enabled: boolean
+  filePath: string
+  createdAt: number
+}
 
 export const DEFAULT_SETTINGS: AppSettings = {
   apiConfig: {

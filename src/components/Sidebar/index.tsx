@@ -1,18 +1,19 @@
 import { useState } from 'react'
-import { Plus, Search, Clock, Calendar, MessageSquare, LogOut } from 'lucide-react'
+import { Plus, Search, Calendar, MessageSquare, LogOut, Sparkles } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import SessionList from './SessionList'
 import ActiveTasks from './ActiveTasks'
 import ScheduledTasks from './ScheduledTasks'
 import HistorySearch from './HistorySearch'
+import SkillsPanel from './SkillsPanel'
 
-type SidebarTab = 'sessions' | 'scheduled' | 'search'
+type SidebarTab = 'sessions' | 'skills' | 'scheduled' | 'search'
 
 export default function Sidebar() {
   const [activeTab, setActiveTab] = useState<SidebarTab>('sessions')
-  const { createSession } = useSessionStore()
-  const { logout } = useSettingsStore()
+  const createSession = useSessionStore(state => state.createSession)
+  const logout = useSettingsStore(state => state.logout)
 
   return (
     <aside className="w-72 bg-surface border-r border-border-subtle flex flex-col h-full no-drag relative z-30">
@@ -30,13 +31,19 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Tab Navigation */}
-      <div className="px-3 flex gap-1 mb-2">
+      {/* Tab Navigation — vertical list */}
+      <div className="px-3 flex flex-col gap-0.5 mb-2">
         <TabButton
           active={activeTab === 'sessions'}
           onClick={() => setActiveTab('sessions')}
           icon={<MessageSquare className="w-3.5 h-3.5" />}
           label="Sessions"
+        />
+        <TabButton
+          active={activeTab === 'skills'}
+          onClick={() => setActiveTab('skills')}
+          icon={<Sparkles className="w-3.5 h-3.5" />}
+          label="Skills"
         />
         <TabButton
           active={activeTab === 'scheduled'}
@@ -60,6 +67,7 @@ export default function Sidebar() {
             <SessionList />
           </>
         )}
+        {activeTab === 'skills' && <SkillsPanel />}
         {activeTab === 'scheduled' && <ScheduledTasks />}
         {activeTab === 'search' && <HistorySearch />}
       </div>
@@ -87,7 +95,7 @@ function TabButton({ active, onClick, icon, label }: {
   return (
     <button
       onClick={onClick}
-      className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
+      className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-md transition-all duration-200 ${
         active
           ? 'bg-accent-50 text-accent-700'
           : 'text-text-secondary hover:bg-gray-50 hover:text-charcoal'

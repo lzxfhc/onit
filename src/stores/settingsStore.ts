@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AppSettings, ApiConfig, PermissionMode, ScheduledTask } from '../types'
+import type { AppSettings, ApiConfig, PermissionMode, ScheduledTask, Skill } from '../types'
 import { DEFAULT_SETTINGS } from '../types'
 
 interface SettingsState {
@@ -7,6 +7,7 @@ interface SettingsState {
   isLoggedIn: boolean
   scheduledTasks: ScheduledTask[]
   permissionRequests: any[]
+  skills: Skill[]
 
   // Settings actions
   updateApiConfig: (config: Partial<ApiConfig>) => void
@@ -24,9 +25,16 @@ interface SettingsState {
   toggleScheduledTask: (id: string, enabled: boolean) => Promise<void>
   runScheduledTaskNow: (id: string) => Promise<void>
 
+  // Skills
+  loadSkills: () => Promise<void>
+  toggleSkill: (id: string, enabled: boolean) => Promise<void>
+  deleteSkill: (id: string) => Promise<void>
+  importSkill: () => Promise<Skill | null>
+
   // Permission requests
   addPermissionRequest: (request: any) => void
   removePermissionRequest: (id: string) => void
+  removePermissionRequestsForSession: (sessionId: string, runId?: string) => void
 }
 
 const SETTINGS_KEY = 'onit-settings'
@@ -36,6 +44,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   isLoggedIn: false,
   scheduledTasks: [],
   permissionRequests: [],
+  skills: [],
 
   updateApiConfig: (config) => {
     set(state => ({
@@ -60,6 +69,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       settings: { ...state.settings, apiConfig: config },
     }))
     get().saveSettings()
+    // Sync API config to scheduler
+    try {
+      window.electronAPI.setSchedulerApiConfig({
+        billingMode: config.billingMode,
+        apiKey: config.apiKey,
+        customBaseUrl: config.customBaseUrl,
+      })
+    } catch {}
   },
 
   logout: () => {
@@ -73,6 +90,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         const settings = JSON.parse(stored) as AppSettings
         const isLoggedIn = !!settings.apiConfig.apiKey
         set({ settings, isLoggedIn })
+        // Sync API config to scheduler on load
+        if (isLoggedIn) {
+          try {
+            window.electronAPI.setSchedulerApiConfig({
+              billingMode: settings.apiConfig.billingMode,
+              apiKey: settings.apiConfig.apiKey,
+              customBaseUrl: settings.apiConfig.customBaseUrl,
+            })
+          } catch {}
+        }
       }
     } catch {
       // Use defaults
@@ -131,15 +158,69 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     await window.electronAPI.runScheduledTaskNow({ id })
   },
 
+  loadSkills: async () => {
+    try {
+      const skills = await window.electronAPI.listSkills()
+      set({ skills })
+    } catch {
+      // Ignore
+    }
+  },
+
+  toggleSkill: async (id, enabled) => {
+    try {
+      await window.electronAPI.toggleSkill({ id, enabled })
+      set(state => ({
+        skills: state.skills.map(s => s.id === id ? { ...s, enabled } : s),
+      }))
+    } catch {}
+  },
+
+  deleteSkill: async (id) => {
+    try {
+      await window.electronAPI.deleteSkill({ id })
+      set(state => ({
+        skills: state.skills.filter(s => s.id !== id),
+      }))
+    } catch {}
+  },
+
+  importSkill: async () => {
+    try {
+      const skill = await window.electronAPI.importSkill()
+      if (skill) {
+        set(state => ({
+          skills: [...state.skills, skill],
+        }))
+        return skill
+      }
+      return null
+    } catch {
+      return null
+    }
+  },
+
   addPermissionRequest: (request) => {
     set(state => ({
-      permissionRequests: [...state.permissionRequests, request],
+      permissionRequests: state.permissionRequests.some(r => r.id === request.id)
+        ? state.permissionRequests
+        : [...state.permissionRequests, request],
     }))
   },
 
   removePermissionRequest: (id) => {
     set(state => ({
       permissionRequests: state.permissionRequests.filter(r => r.id !== id),
+    }))
+  },
+
+  removePermissionRequestsForSession: (sessionId, runId) => {
+    set(state => ({
+      permissionRequests: state.permissionRequests.filter(request => {
+        if (request.sessionId !== sessionId) return true
+        if (!runId) return false
+        return request.runId && request.runId !== runId
+      }),
     }))
   },
 }))

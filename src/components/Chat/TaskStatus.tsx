@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useMemo, useState } from 'react'
 import {
   CheckCircle2, Circle, Loader2, Terminal, FileText,
   FolderOpen, ChevronDown, ChevronRight, XCircle
@@ -11,13 +11,20 @@ interface Props {
 
 type PanelTab = 'tasks' | 'tools' | 'files'
 
-export default function TaskStatusPanel({ session }: Props) {
+function getToolCallGroups(messages: Session['messages']): ToolCall[][] {
+  return messages
+    .map(message => message.toolCalls)
+    .filter((toolCalls): toolCalls is ToolCall[] => Array.isArray(toolCalls) && toolCalls.length > 0)
+}
+
+function TaskStatusPanel({ session }: Props) {
   const [activeTab, setActiveTab] = useState<PanelTab>('tasks')
 
-  // Collect all tool calls from messages
-  const allToolCalls = session.messages
-    .filter(m => m.toolCalls && m.toolCalls.length > 0)
-    .flatMap(m => m.toolCalls || [])
+  const allToolCalls = useMemo(() => (
+    session.messages
+      .filter(message => message.toolCalls && message.toolCalls.length > 0)
+      .flatMap(message => message.toolCalls || [])
+  ), [session.messages])
 
   const tabCounts = {
     tasks: session.tasks.length,
@@ -218,3 +225,16 @@ function FilesTab({ files, workspacePath }: { files: WorkspaceFile[]; workspaceP
     </div>
   )
 }
+
+export default memo(TaskStatusPanel, (prevProps, nextProps) => {
+  if (prevProps.session.tasks !== nextProps.session.tasks) return false
+  if (prevProps.session.workspaceFiles !== nextProps.session.workspaceFiles) return false
+  if (prevProps.session.workspacePath !== nextProps.session.workspacePath) return false
+
+  const prevToolCallGroups = getToolCallGroups(prevProps.session.messages)
+  const nextToolCallGroups = getToolCallGroups(nextProps.session.messages)
+
+  if (prevToolCallGroups.length !== nextToolCallGroups.length) return false
+
+  return prevToolCallGroups.every((toolCalls, index) => toolCalls === nextToolCallGroups[index])
+})

@@ -1,6 +1,6 @@
 {
   "name": "onit",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Onit - Desktop AI Agent",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -70,6 +70,12 @@
     "asar": true,
     "extraMetadata": {
       "main": "dist-electron/main.js"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "electron/skills",
+        "to": "skills"
+      }
+    ]
   }
 }
