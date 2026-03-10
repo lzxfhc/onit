@@ -6,7 +6,7 @@ const api = {
   selectFiles: () => ipcRenderer.invoke('dialog:select-files'),
 
   // Agent
-  startAgent: (data: { sessionId: string; message: string; session: any }) =>
+  startAgent: (data: { sessionId: string; message: string; runId: string; session: any }) =>
     ipcRenderer.invoke('agent:start', data),
   stopAgent: (data: { sessionId: string }) =>
     ipcRenderer.invoke('agent:stop', data),

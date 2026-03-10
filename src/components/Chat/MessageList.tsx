@@ -12,12 +12,35 @@ export default function MessageList({ messages, isRunning }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const isAutoScrollRef = useRef(true)
+  const previousMessageCountRef = useRef(0)
+  const previousLastMessageIdRef = useRef<string | null>(null)
+
+  const lastMessage = messages[messages.length - 1]
+  const lastMessageSignature = lastMessage
+    ? `${lastMessage.id}:${lastMessage.content.length}:${lastMessage.thinking?.length || 0}:${lastMessage.toolCalls?.length || 0}:${lastMessage.contentBlocks?.length || 0}:${lastMessage.isStreaming ? 1 : 0}`
+    : 'empty'
 
   useEffect(() => {
-    if (isAutoScrollRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    const container = containerRef.current
+    if (!container || !isAutoScrollRef.current) {
+      previousMessageCountRef.current = messages.length
+      previousLastMessageIdRef.current = lastMessage?.id || null
+      return
     }
-  }, [messages, messages[messages.length - 1]?.content])
+
+    const hasNewMessage =
+      previousMessageCountRef.current !== messages.length ||
+      previousLastMessageIdRef.current !== (lastMessage?.id || null)
+
+    if (hasNewMessage) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    } else {
+      container.scrollTop = container.scrollHeight
+    }
+
+    previousMessageCountRef.current = messages.length
+    previousLastMessageIdRef.current = lastMessage?.id || null
+  }, [messages.length, lastMessageSignature])
 
   const handleScroll = () => {
     const container = containerRef.current
@@ -61,7 +84,7 @@ export default function MessageList({ messages, isRunning }: Props) {
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto smooth-scroll pt-14 pb-4"
+      className="flex-1 overflow-y-auto pt-14 pb-4"
     >
       <div className="max-w-3xl mx-auto px-6">
         {messages.map((message, idx) => (
@@ -72,10 +95,9 @@ export default function MessageList({ messages, isRunning }: Props) {
           />
         ))}
 
-        {/* Streaming indicator */}
-        {isRunning && messages.length > 0 && messages[messages.length - 1]?.isStreaming &&
-          messages[messages.length - 1]?.content === '' &&
-          !messages[messages.length - 1]?.thinking && (
+        {isRunning && lastMessage?.isStreaming &&
+          lastMessage.content === '' &&
+          !lastMessage.thinking && (
           <div className="flex items-center gap-2 py-3 text-text-tertiary animate-fade-in">
             <Loader2 className="w-4 h-4 animate-spin" />
             <span className="text-xs">Thinking...</span>

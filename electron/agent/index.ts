@@ -15,11 +15,43 @@ interface SkillData {
   content: string
 }
 
+interface SessionToolCallData {
+  id?: string
+  name?: string
+  arguments?: string
+  status?: 'pending' | 'running' | 'completed' | 'error' | string
+  result?: string
+  error?: string
+}
+
+interface SessionContentBlockData {
+  type?: 'text' | 'tool-call' | 'iteration-end' | string
+  content?: string
+  toolCallId?: string
+  iterationIndex?: number
+}
+
+interface SessionMessageData {
+  role?: 'system' | 'user' | 'assistant' | 'tool' | string
+  content?: string
+  toolCalls?: SessionToolCallData[]
+  contentBlocks?: SessionContentBlockData[]
+}
+
+type RestoredToolCall = NonNullable<AgentMessage['tool_calls']>[number]
+
+const MAX_ATTACHED_FILES = 8
+const MAX_ATTACHED_FILE_CHARS = 12000
+const MAX_TOTAL_ATTACHED_CHARS = 40000
+const MAX_RESTORED_TOOL_CONTENT_CHARS = 3000
+
 interface AgentSession {
   sessionId: string
+  runId: string
   messages: AgentMessage[]
   abortController: AbortController | null
   isRunning: boolean
+  completionStatus: 'completed' | 'stopped' | 'error'
   permissionMode: string
   workspacePath: string | null
   model: string
@@ -41,7 +73,7 @@ export class AgentManager {
     this.sendToRenderer = sendToRenderer
   }
 
-  async startAgent(sessionId: string, userMessage: string, sessionData: any): Promise<boolean> {
+  async startAgent(sessionId: string, userMessage: string, runId: string, sessionData: any): Promise<boolean> {
     let agentSession = this.sessions.get(sessionId)
 
     if (agentSession?.isRunning) {
@@ -51,6 +83,7 @@ export class AgentManager {
 
     const apiConfig = sessionData.apiConfig || {}
     const enabledSkills: SkillData[] = sessionData.enabledSkills || []
+    const attachedFileMessages = this.buildAttachedFileMessages(sessionData.attachedFiles || [])
 
     // Parse @skill-name mentions from user message and inject skill content
     const mentionedSkillContents = this.extractMentionedSkills(userMessage, enabledSkills)
@@ -72,15 +105,13 @@ export class AgentManager {
       messages.push({ role: 'system', content: skillContent })
     }
 
+    for (const attachedFileMessage of attachedFileMessages) {
+      messages.push(attachedFileMessage)
+    }
+
     // Add existing messages from session (convert from renderer format)
     if (sessionData.messages) {
-      for (const msg of sessionData.messages) {
-        if (msg.role === 'user') {
-          messages.push({ role: 'user', content: msg.content })
-        } else if (msg.role === 'assistant' && msg.content) {
-          messages.push({ role: 'assistant', content: msg.content })
-        }
-      }
+      messages.push(...this.restoreConversationHistory(sessionData.messages as SessionMessageData[]))
     }
 
     // Add the new user message
@@ -88,9 +119,11 @@ export class AgentManager {
 
     agentSession = {
       sessionId,
+      runId,
       messages,
       abortController: new AbortController(),
       isRunning: true,
+      completionStatus: 'completed',
       permissionMode: sessionData.permissionMode || 'accept-edit',
       workspacePath: sessionData.workspacePath,
       model: sessionData.model || 'qianfan-code-latest',
@@ -110,6 +143,7 @@ export class AgentManager {
     this.runAgentLoop(agentSession).catch(error => {
       this.sendToRenderer('agent:error', {
         sessionId,
+        runId,
         error: error.message || 'Unknown agent error',
       })
     })
@@ -121,6 +155,7 @@ export class AgentManager {
     const session = this.sessions.get(sessionId)
     if (session) {
       session.isRunning = false
+      session.completionStatus = 'stopped'
       session.abortController?.abort()
       session.abortController = null
       for (const [, pending] of session.pendingPermissions) {
@@ -172,6 +207,284 @@ export class AgentManager {
     }
 
     return contents
+  }
+
+  private buildAttachedFileMessages(attachedFiles: string[]): AgentMessage[] {
+    const messages: AgentMessage[] = []
+    let totalChars = 0
+
+    for (const filePath of attachedFiles.slice(0, MAX_ATTACHED_FILES)) {
+      try {
+        if (!fs.existsSync(filePath)) {
+          messages.push({
+            role: 'system',
+            content: `[Attached File Unavailable]\n\nThe user attached this file, but it could not be found: ${filePath}`,
+          })
+          continue
+        }
+
+        const stat = fs.statSync(filePath)
+        if (!stat.isFile()) continue
+
+        const remainingChars = MAX_TOTAL_ATTACHED_CHARS - totalChars
+        if (remainingChars <= 0) break
+
+        const content = fs.readFileSync(filePath, 'utf-8')
+        const cap = Math.min(MAX_ATTACHED_FILE_CHARS, remainingChars)
+        const truncated = content.length > cap
+        const excerpt = truncated ? `${content.slice(0, cap)}\n\n[Attached file truncated]` : content
+
+        totalChars += excerpt.length
+        messages.push({
+          role: 'system',
+          content: `[Attached File: ${filePath}]\n\n${excerpt}`,
+        })
+      } catch {
+        messages.push({
+          role: 'system',
+          content: `[Attached File Unreadable]\n\nThe user attached this file, but it could not be decoded as text: ${filePath}`,
+        })
+      }
+    }
+
+    return messages
+  }
+
+  private restoreConversationHistory(sessionMessages: SessionMessageData[]): AgentMessage[] {
+    const restored: AgentMessage[] = []
+
+    for (const message of sessionMessages) {
+      if (!message) continue
+
+      if (message.role === 'user') {
+        restored.push({ role: 'user', content: typeof message.content === 'string' ? message.content : '' })
+        continue
+      }
+
+      if (message.role === 'assistant') {
+        restored.push(...this.restoreAssistantMessage(message))
+      }
+    }
+
+    return restored
+  }
+
+  private restoreAssistantMessage(message: SessionMessageData): AgentMessage[] {
+    const contentBlocks = Array.isArray(message.contentBlocks) ? message.contentBlocks : []
+
+    if (contentBlocks.length > 0) {
+      const restoredFromBlocks = this.restoreAssistantMessageFromBlocks(message)
+      if (restoredFromBlocks.length > 0) {
+        return restoredFromBlocks
+      }
+    }
+
+    return this.restoreAssistantMessageFallback(message)
+  }
+
+  private restoreAssistantMessageFromBlocks(message: SessionMessageData): AgentMessage[] {
+    const restored: AgentMessage[] = []
+    const contentBlocks = Array.isArray(message.contentBlocks) ? message.contentBlocks : []
+    const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : []
+    const toolCallMap = new Map<string, SessionToolCallData>()
+    const consumedToolCallIds = new Set<string>()
+
+    for (const toolCall of toolCalls) {
+      if (toolCall.id) {
+        toolCallMap.set(toolCall.id, toolCall)
+      }
+    }
+
+    let currentText = ''
+    let currentToolCallIds: string[] = []
+
+    const flushCurrentTurn = () => {
+      const assistantContent = this.normalizeRestoredAssistantContent(currentText)
+      const restoredToolCalls = currentToolCallIds
+        .map(toolCallId => {
+          const toolCall = toolCallMap.get(toolCallId)
+          if (!toolCall) return null
+          consumedToolCallIds.add(toolCallId)
+          return this.restoreToolCallDefinition(toolCall)
+        })
+        .filter((toolCall): toolCall is RestoredToolCall => toolCall !== null)
+
+      if (assistantContent || restoredToolCalls.length > 0) {
+        const assistantMessage: AgentMessage = {
+          role: 'assistant',
+          content: assistantContent,
+        }
+
+        if (restoredToolCalls.length > 0) {
+          assistantMessage.tool_calls = restoredToolCalls
+        }
+
+        restored.push(assistantMessage)
+      }
+
+      for (const toolCallId of currentToolCallIds) {
+        const toolCall = toolCallMap.get(toolCallId)
+        const toolMessage = toolCall ? this.restoreToolResultMessage(toolCall) : null
+        if (toolMessage) {
+          restored.push(toolMessage)
+        }
+      }
+
+      currentText = ''
+      currentToolCallIds = []
+    }
+
+    for (const block of contentBlocks) {
+      if (!block) continue
+
+      if (block.type === 'text') {
+        currentText += typeof block.content === 'string' ? block.content : ''
+        continue
+      }
+
+      if (block.type === 'tool-call') {
+        if (block.toolCallId && !currentToolCallIds.includes(block.toolCallId)) {
+          currentToolCallIds.push(block.toolCallId)
+        }
+        continue
+      }
+
+      if (block.type === 'iteration-end') {
+        flushCurrentTurn()
+      }
+    }
+
+    flushCurrentTurn()
+
+    const missingToolCalls = toolCalls.filter(toolCall => toolCall.id && !consumedToolCallIds.has(toolCall.id))
+    const restoredMissingToolCalls = missingToolCalls
+      .map(toolCall => this.restoreToolCallDefinition(toolCall))
+      .filter((toolCall): toolCall is RestoredToolCall => toolCall !== null)
+
+    if (restoredMissingToolCalls.length > 0) {
+      restored.push({
+        role: 'assistant',
+        content: null,
+        tool_calls: restoredMissingToolCalls,
+      })
+
+      for (const toolCall of missingToolCalls) {
+        const toolMessage = this.restoreToolResultMessage(toolCall)
+        if (toolMessage) {
+          restored.push(toolMessage)
+        }
+      }
+    }
+
+    return restored
+  }
+
+  private restoreAssistantMessageFallback(message: SessionMessageData): AgentMessage[] {
+    const restored: AgentMessage[] = []
+    const toolCalls = Array.isArray(message.toolCalls) ? message.toolCalls : []
+    const assistantContent = this.normalizeRestoredAssistantContent(
+      typeof message.content === 'string' ? message.content : '',
+    )
+    const restoredToolCalls = toolCalls
+      .map(toolCall => this.restoreToolCallDefinition(toolCall))
+      .filter((toolCall): toolCall is RestoredToolCall => toolCall !== null)
+
+    if (assistantContent || restoredToolCalls.length > 0) {
+      const assistantMessage: AgentMessage = {
+        role: 'assistant',
+        content: assistantContent,
+      }
+
+      if (restoredToolCalls.length > 0) {
+        assistantMessage.tool_calls = restoredToolCalls
+      }
+
+      restored.push(assistantMessage)
+    }
+
+    for (const toolCall of toolCalls) {
+      const toolMessage = this.restoreToolResultMessage(toolCall)
+      if (toolMessage) {
+        restored.push(toolMessage)
+      }
+    }
+
+    return restored
+  }
+
+  private restoreToolCallDefinition(toolCall: SessionToolCallData): RestoredToolCall | null {
+    if (!toolCall.id || !toolCall.name) {
+      return null
+    }
+
+    return {
+      id: toolCall.id,
+      type: 'function',
+      function: {
+        name: toolCall.name,
+        arguments: typeof toolCall.arguments === 'string' ? toolCall.arguments : '{}',
+      },
+    }
+  }
+
+  private restoreToolResultMessage(toolCall: SessionToolCallData): AgentMessage | null {
+    if (!toolCall.id || !toolCall.name) {
+      return null
+    }
+
+    return {
+      role: 'tool',
+      content: this.buildRestoredToolResultContent(toolCall),
+      tool_call_id: toolCall.id,
+      name: toolCall.name,
+    }
+  }
+
+  private buildRestoredToolResultContent(toolCall: SessionToolCallData): string {
+    const result = typeof toolCall.result === 'string' ? toolCall.result : ''
+    const error = typeof toolCall.error === 'string' ? toolCall.error : ''
+
+    if (toolCall.status === 'completed') {
+      return this.truncateRestoredToolContent(
+        result || `Tool ${toolCall.name || 'unknown_tool'} completed successfully without captured output.`,
+      )
+    }
+
+    if (toolCall.status === 'error') {
+      if (error === 'Permission denied') {
+        return `Permission denied by user for: ${toolCall.name}`
+      }
+
+      return this.truncateRestoredToolContent(
+        error || result || `Tool ${toolCall.name || 'unknown_tool'} failed without a captured error message.`,
+      )
+    }
+
+    if (toolCall.status === 'running' || toolCall.status === 'pending') {
+      const prefix = `Tool call was interrupted before completion: ${toolCall.name || 'unknown_tool'}`
+      return this.truncateRestoredToolContent(
+        result || error ? `${prefix}
+
+${result || error}` : prefix,
+      )
+    }
+
+    return this.truncateRestoredToolContent(
+      result || error || `Tool ${toolCall.name || 'unknown_tool'} finished with an unknown status.`,
+    )
+  }
+
+  private truncateRestoredToolContent(content: string): string {
+    if (content.length <= MAX_RESTORED_TOOL_CONTENT_CHARS) {
+      return content
+    }
+
+    return `${content.slice(0, MAX_RESTORED_TOOL_CONTENT_CHARS)}
+[truncated]`
+  }
+
+  private normalizeRestoredAssistantContent(content: string): string | null {
+    return content.trim().length > 0 ? content : null
   }
 
   private buildSystemPrompt(
@@ -369,12 +682,23 @@ When providing final results, format them clearly with markdown. For code, use a
 
       req.on('error', reject)
 
+      let abortHandler: (() => void) | null = null
       if (agentSession.abortController) {
-        agentSession.abortController.signal.addEventListener('abort', () => {
+        abortHandler = () => {
           req.destroy()
           reject(new Error('Agent stopped'))
-        })
+        }
+        agentSession.abortController.signal.addEventListener('abort', abortHandler, { once: true })
       }
+
+      const cleanupAbortHandler = () => {
+        if (abortHandler && agentSession.abortController) {
+          agentSession.abortController.signal.removeEventListener('abort', abortHandler)
+          abortHandler = null
+        }
+      }
+
+      req.on('close', cleanupAbortHandler)
 
       req.write(body)
       req.end()
@@ -394,6 +718,7 @@ When providing final results, format them clearly with markdown. For code, use a
       if (riskLevel === 'dangerous') {
         this.sendToRenderer('agent:stream', {
           sessionId: agentSession.sessionId,
+          runId: agentSession.runId,
           chunk: { type: 'content', content: `\n> **Risk Notice:** Executing ${toolName} - ${description}\n\n` },
         })
       }
@@ -414,6 +739,7 @@ When providing final results, format them clearly with markdown. For code, use a
       this.sendToRenderer('agent:permission-request', {
         id: requestId,
         sessionId: agentSession.sessionId,
+        runId: agentSession.runId,
         type: this.getPermissionType(toolName, riskLevel),
         description,
         details,
@@ -458,6 +784,7 @@ When providing final results, format them clearly with markdown. For code, use a
         const { content, toolCalls } = await this.callLLM(agentSession, (chunk) => {
           this.sendToRenderer('agent:stream', {
             sessionId: agentSession.sessionId,
+            runId: agentSession.runId,
             chunk,
           })
         })
@@ -467,6 +794,7 @@ When providing final results, format them clearly with markdown. For code, use a
         // If there's content and no tool calls, we're done
         if (toolCalls.length === 0) {
           agentSession.messages.push({ role: 'assistant', content: content || '' })
+          agentSession.completionStatus = 'completed'
           break
         }
 
@@ -484,19 +812,9 @@ When providing final results, format them clearly with markdown. For code, use a
           const toolName = tc.function.name
           const toolArgs = tc.function.arguments
 
-          // Notify about tool call start
-          this.sendToRenderer('agent:tool-call', {
-            sessionId: agentSession.sessionId,
-            toolCall: {
-              id: tc.id,
-              name: toolName,
-              arguments: toolArgs,
-              status: 'running',
-            },
-          })
-
           this.sendToRenderer('agent:stream', {
             sessionId: agentSession.sessionId,
+            runId: agentSession.runId,
             chunk: { type: 'tool-call-start', toolCall: { id: tc.id, name: toolName, arguments: toolArgs, status: 'running' } },
           })
 
@@ -520,6 +838,7 @@ When providing final results, format them clearly with markdown. For code, use a
               })
               this.sendToRenderer('agent:stream', {
                 sessionId: agentSession.sessionId,
+                runId: agentSession.runId,
                 chunk: {
                   type: 'tool-call-result',
                   toolCall: { id: tc.id, name: toolName, arguments: toolArgs, status: 'error', error: 'Permission denied' },
@@ -538,6 +857,7 @@ When providing final results, format them clearly with markdown. For code, use a
               const tasks = JSON.parse(result.output)
               this.sendToRenderer('agent:task-update', {
                 sessionId: agentSession.sessionId,
+                runId: agentSession.runId,
                 tasks,
               })
             } catch {}
@@ -559,6 +879,7 @@ When providing final results, format them clearly with markdown. For code, use a
           // Notify about tool call completion
           this.sendToRenderer('agent:stream', {
             sessionId: agentSession.sessionId,
+            runId: agentSession.runId,
             chunk: {
               type: 'tool-call-result',
               toolCall: {
@@ -576,6 +897,7 @@ When providing final results, format them clearly with markdown. For code, use a
         // Send iteration-end signal for UI collapse
         this.sendToRenderer('agent:stream', {
           sessionId: agentSession.sessionId,
+          runId: agentSession.runId,
           chunk: { type: 'iteration-end', iterationIndex: iteration },
         })
 
@@ -596,16 +918,22 @@ When providing final results, format them clearly with markdown. For code, use a
       }
     } catch (error: any) {
       if (error.message !== 'Agent stopped') {
+        agentSession.completionStatus = 'error'
         this.sendToRenderer('agent:error', {
           sessionId: agentSession.sessionId,
+          runId: agentSession.runId,
           error: error.message || 'Unknown error in agent loop',
         })
       }
     } finally {
       agentSession.isRunning = false
-      this.sendToRenderer('agent:complete', {
-        sessionId: agentSession.sessionId,
-      })
+      if (agentSession.completionStatus !== 'error') {
+        this.sendToRenderer('agent:complete', {
+          sessionId: agentSession.sessionId,
+          runId: agentSession.runId,
+          status: agentSession.completionStatus,
+        })
+      }
     }
   }
 
@@ -622,6 +950,7 @@ When providing final results, format them clearly with markdown. For code, use a
         }))
       this.sendToRenderer('agent:workspace-files', {
         sessionId: agentSession.sessionId,
+        runId: agentSession.runId,
         files,
       })
     } catch {}

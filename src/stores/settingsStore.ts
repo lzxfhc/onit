@@ -34,6 +34,7 @@ interface SettingsState {
   // Permission requests
   addPermissionRequest: (request: any) => void
   removePermissionRequest: (id: string) => void
+  removePermissionRequestsForSession: (sessionId: string, runId?: string) => void
 }
 
 const SETTINGS_KEY = 'onit-settings'
@@ -201,13 +202,25 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   addPermissionRequest: (request) => {
     set(state => ({
-      permissionRequests: [...state.permissionRequests, request],
+      permissionRequests: state.permissionRequests.some(r => r.id === request.id)
+        ? state.permissionRequests
+        : [...state.permissionRequests, request],
     }))
   },
 
   removePermissionRequest: (id) => {
     set(state => ({
       permissionRequests: state.permissionRequests.filter(r => r.id !== id),
+    }))
+  },
+
+  removePermissionRequestsForSession: (sessionId, runId) => {
+    set(state => ({
+      permissionRequests: state.permissionRequests.filter(request => {
+        if (request.sessionId !== sessionId) return true
+        if (!runId) return false
+        return request.runId && request.runId !== runId
+      }),
     }))
   },
 }))

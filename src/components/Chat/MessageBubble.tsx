@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { memo, useDeferredValue, useMemo, useState } from 'react'
 import { User, Bot, ChevronDown, ChevronRight, Terminal, CheckCircle2, XCircle, Loader2, Brain } from 'lucide-react'
 import type { Message, ToolCall, ContentBlock } from '../../types'
 import ReactMarkdown from 'react-markdown'
@@ -9,7 +9,36 @@ interface Props {
   isLast: boolean
 }
 
-export default function MessageBubble({ message, isLast }: Props) {
+interface RenderSegment {
+  type: 'text' | 'tool-group'
+  blocks: ContentBlock[]
+}
+
+const MARKDOWN_PLUGINS = [remarkGfm]
+
+function segmentBlocks(blocks: ContentBlock[]): RenderSegment[] {
+  const segments: RenderSegment[] = []
+
+  for (const block of blocks) {
+    if (block.type === 'text') {
+      segments.push({ type: 'text', blocks: [block] })
+      continue
+    }
+
+    if (block.type === 'tool-call') {
+      const lastSegment = segments[segments.length - 1]
+      if (lastSegment && lastSegment.type === 'tool-group') {
+        lastSegment.blocks.push(block)
+      } else {
+        segments.push({ type: 'tool-group', blocks: [block] })
+      }
+    }
+  }
+
+  return segments
+}
+
+const MessageBubble = memo(function MessageBubble({ message }: Props) {
   const isUser = message.role === 'user'
 
   return (
@@ -39,12 +68,10 @@ export default function MessageBubble({ message, isLast }: Props) {
             )}
           </div>
 
-          {/* Thinking/Reasoning */}
           {message.thinking && (
             <ThinkingBlock content={message.thinking} isStreaming={message.isStreaming} />
           )}
 
-          {/* Render based on whether we have contentBlocks (new) or not (legacy) */}
           {message.contentBlocks && message.contentBlocks.length > 0 ? (
             <ChronologicalContent
               blocks={message.contentBlocks}
@@ -58,32 +85,23 @@ export default function MessageBubble({ message, isLast }: Props) {
       </div>
     </div>
   )
-}
+}, (prevProps, nextProps) => prevProps.message === nextProps.message)
 
-// Segment types for rendering: text renders inline, tool-groups collapse into summary
-interface RenderSegment {
-  type: 'text' | 'tool-group'
-  blocks: ContentBlock[]
-}
+const MarkdownText = memo(function MarkdownText({ content, isStreaming }: {
+  content: string
+  isStreaming?: boolean
+}) {
+  const deferredContent = useDeferredValue(content)
+  const renderedContent = isStreaming ? (deferredContent || content) : content
 
-// Walk through all contentBlocks and group consecutive tool-calls between text blocks
-function segmentBlocks(blocks: ContentBlock[]): RenderSegment[] {
-  const segments: RenderSegment[] = []
-  for (const block of blocks) {
-    if (block.type === 'text') {
-      segments.push({ type: 'text', blocks: [block] })
-    } else if (block.type === 'tool-call') {
-      const last = segments[segments.length - 1]
-      if (last && last.type === 'tool-group') {
-        last.blocks.push(block)
-      } else {
-        segments.push({ type: 'tool-group', blocks: [block] })
-      }
-    }
-    // Skip 'iteration-end' blocks — not used for rendering
-  }
-  return segments
-}
+  return (
+    <div className="markdown-content">
+      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>
+        {renderedContent}
+      </ReactMarkdown>
+    </div>
+  )
+})
 
 function ChronologicalContent({ blocks, toolCalls, isStreaming }: {
   blocks: ContentBlock[]
@@ -91,59 +109,49 @@ function ChronologicalContent({ blocks, toolCalls, isStreaming }: {
   isStreaming?: boolean
 }) {
   const segments = useMemo(() => segmentBlocks(blocks), [blocks])
+  const toolCallMap = useMemo(() => {
+    return new Map((toolCalls || []).map(toolCall => [toolCall.id, toolCall]))
+  }, [toolCalls])
 
   return (
     <div className="space-y-1.5">
-      {segments.map((seg, idx) => {
-        if (seg.type === 'text') {
-          const block = seg.blocks[0]
-          return block.content ? (
-            <div key={`text-${idx}`} className="markdown-content">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                {block.content}
-              </ReactMarkdown>
-            </div>
-          ) : null
-        }
+      {segments.map((segment, index) => {
+        if (segment.type === 'text') {
+          const block = segment.blocks[0]
+          if (!block.content) return null
 
-        // tool-group: check if any tool call is still running
-        const resolvedCalls = seg.blocks
-          .map(b => toolCalls?.find(t => t.id === b.toolCallId))
-          .filter(Boolean) as ToolCall[]
-
-        const hasRunning = resolvedCalls.some(tc => tc.status === 'running' || tc.status === 'pending')
-
-        // If any tool is still running, render individually for live feedback
-        if (hasRunning) {
           return (
-            <div key={`tg-${idx}`} className="space-y-1.5">
-              {resolvedCalls.map(tc => (
-                <ToolCallBlock key={tc.id} toolCall={tc} />
-              ))}
-            </div>
+            <MarkdownText
+              key={`text-${index}`}
+              content={block.content}
+              isStreaming={isStreaming}
+            />
           )
         }
 
-        // All done: collapse into a single summary line
+        const resolvedCalls = segment.blocks
+          .map(block => block.toolCallId ? toolCallMap.get(block.toolCallId) : undefined)
+          .filter(Boolean) as ToolCall[]
+
+        if (resolvedCalls.length === 0) return null
+
         return (
-          <ToolGroupSummary
-            key={`tg-${idx}`}
-            toolCalls={resolvedCalls}
-          />
+          <ToolGroup key={`tg-${index}`} toolCalls={resolvedCalls} />
         )
       })}
     </div>
   )
 }
 
-// Single collapsible summary for a group of completed tool calls
-function ToolGroupSummary({ toolCalls }: { toolCalls: ToolCall[] }) {
+function ToolGroup({ toolCalls }: { toolCalls: ToolCall[] }) {
   const [expanded, setExpanded] = useState(false)
+  const hasRunning = toolCalls.some(toolCall => toolCall.status === 'running' || toolCall.status === 'pending')
+  const hasError = !hasRunning && toolCalls.some(toolCall => toolCall.status === 'error')
 
   const summary = useMemo(() => {
     const counts: Record<string, number> = {}
-    for (const tc of toolCalls) {
-      const label = getToolSummaryLabel(tc.name)
+    for (const toolCall of toolCalls) {
+      const label = getToolSummaryLabel(toolCall.name)
       counts[label] = (counts[label] || 0) + 1
     }
     return Object.entries(counts)
@@ -154,22 +162,43 @@ function ToolGroupSummary({ toolCalls }: { toolCalls: ToolCall[] }) {
   if (!summary || toolCalls.length === 0) return null
 
   return (
-    <div>
+    <div className={`rounded border transition-all duration-200 ${
+      hasRunning
+        ? 'border-accent/20 bg-accent/5'
+        : hasError
+          ? 'border-danger/20 bg-danger-light/50'
+          : 'border-border-subtle bg-gray-50/50'
+    }`}>
       <button
-        onClick={() => setExpanded(!expanded)}
-        className="inline-flex items-center gap-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors py-0.5"
+        onClick={() => setExpanded(prev => !prev)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left"
       >
-        <span>{summary}</span>
-        {expanded ? (
-          <ChevronDown className="w-3 h-3" />
+        {hasRunning ? (
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
+        ) : hasError ? (
+          <XCircle className="w-3.5 h-3.5 text-danger" />
         ) : (
-          <ChevronRight className="w-3 h-3" />
+          <Terminal className="w-3.5 h-3.5 text-text-tertiary" />
+        )}
+        <span className={`text-xs font-medium truncate flex-1 ${
+          hasRunning
+            ? 'text-accent-700'
+            : hasError
+              ? 'text-danger'
+              : 'text-charcoal'
+        }`}>
+          {hasRunning ? `Running · ${summary}` : summary}
+        </span>
+        {expanded ? (
+          <ChevronDown className="w-3 h-3 text-text-tertiary shrink-0" />
+        ) : (
+          <ChevronRight className="w-3 h-3 text-text-tertiary shrink-0" />
         )}
       </button>
       <div className={`iteration-collapse ${expanded ? 'expanded' : 'collapsed'}`}>
-        <div className="pt-1.5 space-y-1.5">
-          {toolCalls.map(tc => (
-            <ToolCallBlock key={tc.id} toolCall={tc} />
+        <div className="px-3 pb-2.5 space-y-1.5">
+          {toolCalls.map(toolCall => (
+            <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
           ))}
         </div>
       </div>
@@ -177,7 +206,6 @@ function ToolGroupSummary({ toolCalls }: { toolCalls: ToolCall[] }) {
   )
 }
 
-// Legacy rendering for old messages without contentBlocks
 function LegacyContent({ message }: { message: Message }) {
   const isUser = message.role === 'user'
 
@@ -185,21 +213,19 @@ function LegacyContent({ message }: { message: Message }) {
     <>
       {message.toolCalls && message.toolCalls.length > 0 && (
         <div className="space-y-1.5 mb-3">
-          {message.toolCalls.map(tc => (
-            <ToolCallBlock key={tc.id} toolCall={tc} />
+          {message.toolCalls.map(toolCall => (
+            <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
           ))}
         </div>
       )}
       {message.content && (
-        <div className={`${isUser ? 'text-sm text-charcoal' : 'markdown-content'}`}>
-          {isUser ? (
-            <p className="whitespace-pre-wrap">{message.content}</p>
-          ) : (
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {message.content}
-            </ReactMarkdown>
-          )}
-        </div>
+        isUser ? (
+          <div className="text-sm text-charcoal whitespace-pre-wrap leading-relaxed">
+            {message.content}
+          </div>
+        ) : (
+          <MarkdownText content={message.content} isStreaming={message.isStreaming} />
+        )
       )}
     </>
   )
@@ -228,7 +254,7 @@ function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?
   return (
     <div className="mb-3">
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => setExpanded(prev => !prev)}
         className="flex items-center gap-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
       >
         <Brain className="w-3.5 h-3.5" />
@@ -247,10 +273,19 @@ function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?
   )
 }
 
-function ToolCallBlock({ toolCall }: { toolCall: ToolCall }) {
+const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: ToolCall }) {
   const [expanded, setExpanded] = useState(false)
 
-  const getStatusIcon = () => {
+  const toolPath = useMemo(() => {
+    try {
+      const args = JSON.parse(toolCall.arguments)
+      return args.path || args.command || args.directory || args.query || args.url || ''
+    } catch {
+      return ''
+    }
+  }, [toolCall.arguments])
+
+  const statusIcon = (() => {
     switch (toolCall.status) {
       case 'running':
         return <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
@@ -261,33 +296,7 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCall }) {
       default:
         return <Terminal className="w-3.5 h-3.5 text-text-tertiary" />
     }
-  }
-
-  const getToolLabel = (name: string) => {
-    const labels: Record<string, string> = {
-      read_file: 'Read File',
-      write_file: 'Write File',
-      edit_file: 'Edit File',
-      delete_file: 'Delete File',
-      list_directory: 'List Directory',
-      search_files: 'Search Files',
-      search_content: 'Search Content',
-      execute_command: 'Execute Command',
-      create_task_list: 'Task List',
-      web_search: 'Web Search',
-      web_fetch: 'Fetch Page',
-    }
-    return labels[name] || name
-  }
-
-  const getToolPath = () => {
-    try {
-      const args = JSON.parse(toolCall.arguments)
-      return args.path || args.command || args.directory || args.query || args.url || ''
-    } catch {
-      return ''
-    }
-  }
+  })()
 
   return (
     <div className={`rounded border transition-all duration-200 ${
@@ -296,15 +305,15 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCall }) {
         : 'border-border-subtle bg-gray-50/50'
     }`}>
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => setExpanded(prev => !prev)}
         className="w-full flex items-center gap-2 px-3 py-2 text-left"
       >
-        {getStatusIcon()}
+        {statusIcon}
         <span className="text-xs font-medium text-charcoal">
           {getToolLabel(toolCall.name)}
         </span>
         <span className="text-[10px] text-text-tertiary truncate flex-1">
-          {getToolPath()}
+          {toolPath}
         </span>
         {expanded ? (
           <ChevronDown className="w-3 h-3 text-text-tertiary shrink-0" />
@@ -340,6 +349,23 @@ function ToolCallBlock({ toolCall }: { toolCall: ToolCall }) {
       )}
     </div>
   )
+})
+
+function getToolLabel(name: string) {
+  const labels: Record<string, string> = {
+    read_file: 'Read File',
+    write_file: 'Write File',
+    edit_file: 'Edit File',
+    delete_file: 'Delete File',
+    list_directory: 'List Directory',
+    search_files: 'Search Files',
+    search_content: 'Search Content',
+    execute_command: 'Execute Command',
+    create_task_list: 'Task List',
+    web_search: 'Web Search',
+    web_fetch: 'Fetch Page',
+  }
+  return labels[name] || name
 }
 
 function formatJSON(str: string): string {
@@ -349,3 +375,5 @@ function formatJSON(str: string): string {
     return str
   }
 }
+
+export default MessageBubble

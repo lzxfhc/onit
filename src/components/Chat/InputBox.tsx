@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { memo, useState, useRef, useEffect, useCallback } from 'react'
+import { shallow } from 'zustand/shallow'
 import {
   Send, Square, FolderOpen, Paperclip, ChevronDown,
   X, FileText, Shield, ShieldCheck, ShieldOff,
@@ -7,16 +8,31 @@ import {
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { AVAILABLE_MODELS } from '../../types'
-import type { PermissionMode, Session, Skill } from '../../types'
+import type { PermissionMode, Skill } from '../../types'
 
 interface Props {
-  onSend: (content: string) => void
-  onStop: () => void
+  onSend: (content: string) => void | Promise<void>
+  onStop: () => void | Promise<void>
   isRunning: boolean
-  session: Session
+  sessionId: string
 }
 
-export default function InputBox({ onSend, onStop, isRunning, session }: Props) {
+function getMentionMatch(value: string, caretPosition: number) {
+  const beforeCursor = value.slice(0, caretPosition)
+  const match = beforeCursor.match(/(^|\s)@([\w-]*)$/)
+  if (!match) return null
+
+  const start = beforeCursor.lastIndexOf('@')
+  if (start < 0) return null
+
+  return {
+    query: match[2] || '',
+    start,
+    end: caretPosition,
+  }
+}
+
+function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
   const [input, setInput] = useState('')
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [showPermissionPicker, setShowPermissionPicker] = useState(false)
@@ -28,155 +44,183 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
   const modelPickerRef = useRef<HTMLDivElement>(null)
   const permPickerRef = useRef<HTMLDivElement>(null)
   const mentionRef = useRef<HTMLDivElement>(null)
-  const {
-    setWorkspace, setPermissionMode, setModel,
-    addAttachedFile, removeAttachedFile,
-  } = useSessionStore()
-  const { settings, skills } = useSettingsStore()
+  const mentionRangeRef = useRef<{ start: number; end: number } | null>(null)
 
-  const enabledSkills = skills.filter(s => s.enabled)
+  const session = useSessionStore((state) => {
+    const current = state.sessions.find(item => item.id === sessionId)
+    return {
+      id: sessionId,
+      workspacePath: current?.workspacePath || null,
+      permissionMode: current?.permissionMode || 'accept-edit',
+      attachedFiles: current?.attachedFiles || [],
+      model: current?.model || 'qianfan-code-latest',
+      setWorkspace: state.setWorkspace,
+      setPermissionMode: state.setPermissionMode,
+      setModel: state.setModel,
+      addAttachedFile: state.addAttachedFile,
+      removeAttachedFile: state.removeAttachedFile,
+    }
+  }, shallow)
 
-  const filteredMentionSkills = enabledSkills.filter(s =>
-    !mentionFilter || s.name.includes(mentionFilter) || s.displayName.toLowerCase().includes(mentionFilter.toLowerCase())
+  const { settings, skills } = useSettingsStore((state) => ({
+    settings: state.settings,
+    skills: state.skills,
+  }), shallow)
+
+  const enabledSkills = skills.filter(skill => skill.enabled)
+
+  const filteredMentionSkills = enabledSkills.filter(skill =>
+    !mentionFilter ||
+    skill.name.toLowerCase().includes(mentionFilter.toLowerCase()) ||
+    skill.displayName.toLowerCase().includes(mentionFilter.toLowerCase()),
   )
 
-  // Auto resize textarea
   useEffect(() => {
-    const ta = textareaRef.current
-    if (ta) {
-      ta.style.height = 'auto'
-      ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'
+    const textarea = textareaRef.current
+    if (textarea) {
+      textarea.style.height = 'auto'
+      textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px'
     }
   }, [input])
 
-  // Close pickers on outside click
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (modelPickerRef.current && !modelPickerRef.current.contains(e.target as Node)) {
+    const handler = (event: MouseEvent) => {
+      if (modelPickerRef.current && !modelPickerRef.current.contains(event.target as Node)) {
         setShowModelPicker(false)
       }
-      if (permPickerRef.current && !permPickerRef.current.contains(e.target as Node)) {
+      if (permPickerRef.current && !permPickerRef.current.contains(event.target as Node)) {
         setShowPermissionPicker(false)
       }
-      if (mentionRef.current && !mentionRef.current.contains(e.target as Node)) {
+      if (mentionRef.current && !mentionRef.current.contains(event.target as Node)) {
         setShowSkillMention(false)
       }
     }
+
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  // Listen for auto-input events (from SkillsPanel "Create with Onit")
   useEffect(() => {
-    const handler = (e: CustomEvent) => {
-      if (e.detail?.text) {
-        setInput(e.detail.text)
+    const handler = (event: CustomEvent) => {
+      if (event.detail?.text) {
+        setInput(event.detail.text)
         setTimeout(() => textareaRef.current?.focus(), 100)
       }
     }
+
     window.addEventListener('onit:auto-input', handler as EventListener)
     return () => window.removeEventListener('onit:auto-input', handler as EventListener)
   }, [])
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value
-    setInput(value)
-
-    // @mention only triggers when @ is at the very start of input (position 0)
-    if (value.startsWith('@')) {
-      // Extract the text after @ up to the first space (or end of string)
-      const afterAt = value.substring(1)
-      const spaceIdx = afterAt.indexOf(' ')
-      // If there's a space, @ selection is already completed — don't show popup
-      if (spaceIdx >= 0) {
-        setShowSkillMention(false)
-        return
-      }
-      // Show mention popup with filter
-      setMentionFilter(afterAt)
-      setShowSkillMention(true)
-      setMentionIndex(0)
+  const updateMentionState = useCallback((value: string, caretPosition: number) => {
+    const match = getMentionMatch(value, caretPosition)
+    if (!match) {
+      mentionRangeRef.current = null
+      setShowSkillMention(false)
       return
     }
 
-    setShowSkillMention(false)
+    mentionRangeRef.current = { start: match.start, end: match.end }
+    setMentionFilter(match.query)
+    setShowSkillMention(true)
+    setMentionIndex(0)
+  }, [])
+
+  const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const value = event.target.value
+    const caretPosition = event.target.selectionStart ?? value.length
+
+    setInput(value)
+    updateMentionState(value, caretPosition)
   }
 
   const insertMention = useCallback((skill: Skill) => {
-    // Replace entire @... prefix with @skill-name
-    const afterAt = input.substring(1)
-    const spaceIdx = afterAt.indexOf(' ')
-    const rest = spaceIdx >= 0 ? afterAt.substring(spaceIdx) : ''
-    const newValue = `@${skill.name} ${rest.trimStart()}`
-    setInput(newValue)
+    const mentionRange = mentionRangeRef.current
+    if (!mentionRange) return
+
+    const before = input.slice(0, mentionRange.start)
+    const after = input.slice(mentionRange.end)
+    const needsSpace = after.length > 0 && !after.startsWith(' ') ? ' ' : ''
+    const nextValue = `${before}@${skill.name}${needsSpace}${after}`
+
+    setInput(nextValue)
     setShowSkillMention(false)
-    textareaRef.current?.focus()
+    mentionRangeRef.current = null
+
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current
+      if (!textarea) return
+      const cursor = before.length + skill.name.length + 1 + needsSpace.length
+      textarea.focus()
+      textarea.setSelectionRange(cursor, cursor)
+    })
   }, [input])
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    // Ignore key events during IME composition (e.g. Chinese/Japanese input)
+  const handleSend = async () => {
+    const trimmedInput = input.trim()
+
+    if (isRunning) {
+      await onStop()
+      if (!trimmedInput) return
+    } else if (!trimmedInput) {
+      return
+    }
+
+    await onSend(trimmedInput)
+    setInput('')
+    setShowSkillMention(false)
+    mentionRangeRef.current = null
+  }
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
     if (isComposingRef.current) return
 
-    // Handle mention navigation
     if (showSkillMention && filteredMentionSkills.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
         setMentionIndex(prev => Math.min(prev + 1, filteredMentionSkills.length - 1))
         return
       }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
+
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
         setMentionIndex(prev => Math.max(prev - 1, 0))
         return
       }
-      if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault()
+
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault()
         insertMention(filteredMentionSkills[mentionIndex])
         return
       }
-      if (e.key === 'Escape') {
+
+      if (event.key === 'Escape') {
         setShowSkillMention(false)
         return
       }
     }
 
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      void handleSend()
     }
-  }
-
-  const handleSend = () => {
-    if (isRunning) {
-      onStop()
-      setTimeout(() => {
-        if (input.trim()) {
-          onSend(input.trim())
-          setInput('')
-        }
-      }, 200)
-      return
-    }
-    if (!input.trim()) return
-    onSend(input.trim())
-    setInput('')
   }
 
   const handleSelectFolder = async () => {
     const folder = await window.electronAPI.selectFolder()
-    if (folder) setWorkspace(session.id, folder)
+    if (folder) session.setWorkspace(session.id, folder)
   }
 
   const handleSelectFiles = async () => {
     const files = await window.electronAPI.selectFiles()
-    for (const f of files) {
-      addAttachedFile(session.id, f)
+    for (const filePath of files) {
+      session.addAttachedFile(session.id, filePath)
     }
   }
 
   const getModelName = () => {
-    const m = AVAILABLE_MODELS.find(m => m.id === session.model)
-    return m ? m.name : session.model
+    const selected = AVAILABLE_MODELS.find(item => item.id === session.model)
+    return selected ? selected.name : session.model
   }
 
   const permissionModes: { id: PermissionMode; label: string; desc: string; icon: React.ReactNode }[] = [
@@ -185,20 +229,19 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
     { id: 'full-access', label: 'Full Access', desc: 'Auto-execute all', icon: <ShieldOff className="w-3.5 h-3.5" /> },
   ]
 
-  const currentPerm = permissionModes.find(p => p.id === session.permissionMode) || permissionModes[1]
+  const currentPerm = permissionModes.find(item => item.id === session.permissionMode) || permissionModes[1]
 
   return (
     <div className="border-t border-border-subtle bg-surface px-4 py-3">
       <div className="max-w-3xl mx-auto">
-        {/* Attached files */}
         {session.attachedFiles.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-2">
-            {session.attachedFiles.map(f => (
-              <span key={f} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-50 border border-border-subtle rounded text-[10px] text-text-secondary">
+            {session.attachedFiles.map(filePath => (
+              <span key={filePath} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-50 border border-border-subtle rounded text-[10px] text-text-secondary">
                 <FileText className="w-3 h-3" />
-                {f.split('/').pop()}
+                {filePath.split('/').pop()}
                 <button
-                  onClick={() => removeAttachedFile(session.id, f)}
+                  onClick={() => session.removeAttachedFile(session.id, filePath)}
                   className="hover:text-danger transition-colors"
                 >
                   <X className="w-3 h-3" />
@@ -208,10 +251,8 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
           </div>
         )}
 
-        {/* Input area */}
         <div className="flex items-end gap-2">
           <div className="flex-1 relative bg-canvas border border-border-subtle rounded-lg focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/10 transition-all">
-            {/* Skill mention dropdown — appears above textarea near cursor */}
             {showSkillMention && filteredMentionSkills.length > 0 && (
               <div
                 ref={mentionRef}
@@ -226,9 +267,7 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
                       key={skill.id}
                       onClick={() => insertMention(skill)}
                       className={`w-full text-left px-3 py-2 transition-colors ${
-                        idx === mentionIndex
-                          ? 'bg-accent-50'
-                          : 'hover:bg-gray-50'
+                        idx === mentionIndex ? 'bg-accent-50' : 'hover:bg-gray-50'
                       }`}
                     >
                       <div className="flex items-center gap-2">
@@ -248,16 +287,17 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               onCompositionStart={() => { isComposingRef.current = true }}
-              onCompositionEnd={() => { isComposingRef.current = false }}
-              placeholder={isRunning ? 'Type to interrupt and send new instruction...' : 'Ask me anything... (@ at start to invoke skills)'}
+              onCompositionEnd={(event) => {
+                isComposingRef.current = false
+                updateMentionState(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)
+              }}
+              placeholder={isRunning ? 'Type to interrupt and send new instruction...' : 'Ask me anything... (type @ to invoke skills)'}
               className="w-full resize-none bg-transparent px-4 py-3 text-sm text-charcoal placeholder:text-text-tertiary focus:outline-none"
               rows={1}
               style={{ minHeight: '44px', maxHeight: '200px' }}
             />
 
-            {/* Toolbar inside textarea */}
             <div className="flex items-center gap-1 px-2 pb-2">
-              {/* Workspace */}
               <button
                 onClick={handleSelectFolder}
                 className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-all ${
@@ -268,12 +308,9 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
                 title={session.workspacePath || 'Select workspace folder'}
               >
                 <FolderOpen className="w-3 h-3" />
-                {session.workspacePath
-                  ? session.workspacePath.split('/').pop()
-                  : 'Workspace'}
+                {session.workspacePath ? session.workspacePath.split('/').pop() : 'Workspace'}
               </button>
 
-              {/* Attach files */}
               <button
                 onClick={handleSelectFiles}
                 className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-text-tertiary hover:bg-gray-100 hover:text-text-secondary transition-all"
@@ -283,10 +320,9 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
                 Attach
               </button>
 
-              {/* Model selector */}
               <div className="relative ml-auto" ref={modelPickerRef}>
                 <button
-                  onClick={() => setShowModelPicker(!showModelPicker)}
+                  onClick={() => setShowModelPicker(prev => !prev)}
                   className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-text-tertiary hover:bg-gray-100 hover:text-text-secondary transition-all"
                 >
                   {getModelName()}
@@ -295,28 +331,30 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
                 {showModelPicker && (
                   <div className="absolute bottom-full right-0 mb-1 bg-surface border border-border-subtle rounded shadow-card-hover py-1 min-w-[180px] z-50 animate-fade-in">
                     {AVAILABLE_MODELS
-                      .filter(m => settings.apiConfig.billingMode === 'coding-plan' ? m.codingPlan : !m.codingPlan)
-                      .map(m => (
-                      <button
-                        key={m.id}
-                        onClick={() => { setModel(session.id, m.id); setShowModelPicker(false) }}
-                        className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
-                          session.model === m.id
-                            ? 'bg-accent-50 text-accent-700'
-                            : 'text-text-secondary hover:bg-gray-50'
-                        }`}
-                      >
-                        {m.name}
-                      </button>
-                    ))}
+                      .filter(model => settings.apiConfig.billingMode === 'coding-plan' ? model.codingPlan : !model.codingPlan)
+                      .map(model => (
+                        <button
+                          key={model.id}
+                          onClick={() => {
+                            session.setModel(session.id, model.id)
+                            setShowModelPicker(false)
+                          }}
+                          className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                            session.model === model.id
+                              ? 'bg-accent-50 text-accent-700'
+                              : 'text-text-secondary hover:bg-gray-50'
+                          }`}
+                        >
+                          {model.name}
+                        </button>
+                      ))}
                   </div>
                 )}
               </div>
 
-              {/* Permission mode */}
               <div className="relative" ref={permPickerRef}>
                 <button
-                  onClick={() => setShowPermissionPicker(!showPermissionPicker)}
+                  onClick={() => setShowPermissionPicker(prev => !prev)}
                   className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] transition-all ${
                     session.permissionMode === 'full-access'
                       ? 'text-warning hover:bg-warning-light'
@@ -330,24 +368,22 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
                 </button>
                 {showPermissionPicker && (
                   <div className="absolute bottom-full right-0 mb-1 bg-surface border border-border-subtle rounded shadow-card-hover py-1 min-w-[200px] z-50 animate-fade-in">
-                    {permissionModes.map(pm => (
+                    {permissionModes.map(mode => (
                       <button
-                        key={pm.id}
+                        key={mode.id}
                         onClick={() => {
-                          setPermissionMode(session.id, pm.id)
+                          session.setPermissionMode(session.id, mode.id)
                           setShowPermissionPicker(false)
                         }}
                         className={`w-full text-left px-3 py-2 transition-colors ${
-                          session.permissionMode === pm.id
-                            ? 'bg-accent-50'
-                            : 'hover:bg-gray-50'
+                          session.permissionMode === mode.id ? 'bg-accent-50' : 'hover:bg-gray-50'
                         }`}
                       >
                         <div className="flex items-center gap-2">
-                          {pm.icon}
-                          <span className="text-xs font-medium text-charcoal">{pm.label}</span>
+                          {mode.icon}
+                          <span className="text-xs font-medium text-charcoal">{mode.label}</span>
                         </div>
-                        <p className="text-[10px] text-text-tertiary mt-0.5 ml-5.5">{pm.desc}</p>
+                        <p className="text-[10px] text-text-tertiary mt-0.5 ml-5.5">{mode.desc}</p>
                       </button>
                     ))}
                   </div>
@@ -356,9 +392,8 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
             </div>
           </div>
 
-          {/* Send/Stop button */}
           <button
-            onClick={isRunning ? onStop : handleSend}
+            onClick={() => { void handleSend() }}
             disabled={!isRunning && !input.trim()}
             className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
               isRunning
@@ -376,7 +411,6 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
           </button>
         </div>
 
-        {/* Active Background Tasks */}
         <ActiveTasksBar currentSessionId={session.id} />
       </div>
     </div>
@@ -384,9 +418,14 @@ export default function InputBox({ onSend, onStop, isRunning, session }: Props) 
 }
 
 function ActiveTasksBar({ currentSessionId }: { currentSessionId: string }) {
-  const { sessions, setActiveSession, markSessionViewed } = useSessionStore()
-  const activeTasks = sessions.filter(s =>
-    s.id !== currentSessionId && (s.isBackgroundRunning || s.hasUnviewedResult)
+  const { sessions, setActiveSession, markSessionViewed } = useSessionStore((state) => ({
+    sessions: state.sessions,
+    setActiveSession: state.setActiveSession,
+    markSessionViewed: state.markSessionViewed,
+  }), shallow)
+
+  const activeTasks = sessions.filter(session =>
+    session.id !== currentSessionId && (session.isBackgroundRunning || session.hasUnviewedResult),
   )
 
   if (activeTasks.length === 0) return null
@@ -394,23 +433,25 @@ function ActiveTasksBar({ currentSessionId }: { currentSessionId: string }) {
   return (
     <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border-light overflow-x-auto">
       <span className="text-[10px] text-text-tertiary font-medium shrink-0">Active:</span>
-      {activeTasks.map(s => (
+      {activeTasks.map(session => (
         <button
-          key={s.id}
+          key={session.id}
           onClick={() => {
-            setActiveSession(s.id)
-            if (s.hasUnviewedResult) markSessionViewed(s.id)
+            setActiveSession(session.id)
+            if (session.hasUnviewedResult) markSessionViewed(session.id)
           }}
           className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-gray-50 hover:bg-gray-100 border border-border-light text-[10px] text-text-secondary transition-all shrink-0"
         >
-          {s.isBackgroundRunning ? (
+          {session.isBackgroundRunning ? (
             <Loader2 className="w-3 h-3 animate-spin text-accent" />
-          ) : s.hasUnviewedResult ? (
+          ) : session.hasUnviewedResult ? (
             <CheckCircle2 className="w-3 h-3 text-success" />
           ) : null}
-          <span className="truncate max-w-[120px]">{s.name}</span>
+          <span className="truncate max-w-[120px]">{session.name}</span>
         </button>
       ))}
     </div>
   )
 }
+
+export default memo(InputBox)

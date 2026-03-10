@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { shallow } from 'zustand/shallow'
 import { Plus, Trash2, ToggleLeft, ToggleRight, ChevronDown, Download, Sparkles } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -7,8 +8,16 @@ import type { Skill } from '../../types'
 type SkillsTab = 'prebuilt' | 'created' | 'imported'
 
 export default function SkillsPanel() {
-  const { skills, toggleSkill, deleteSkill, importSkill } = useSettingsStore()
-  const { createSession, setActiveSession } = useSessionStore()
+  const { skills, toggleSkill, deleteSkill, importSkill } = useSettingsStore((state) => ({
+    skills: state.skills,
+    toggleSkill: state.toggleSkill,
+    deleteSkill: state.deleteSkill,
+    importSkill: state.importSkill,
+  }), shallow)
+  const { createSession, setActiveSession } = useSessionStore((state) => ({
+    createSession: state.createSession,
+    setActiveSession: state.setActiveSession,
+  }), shallow)
   const [activeTab, setActiveTab] = useState<SkillsTab>('prebuilt')
   const [showAddMenu, setShowAddMenu] = useState(false)
 

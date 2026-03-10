@@ -135,6 +135,7 @@ export class SchedulerManager {
     this.saveTask(task)
 
     const sessionId = `scheduled-${task.id}-${Date.now()}`
+    const runId = `${sessionId}-run`
 
     // Notify renderer about the new scheduled session
     if (sendToRenderer) {
@@ -142,10 +143,13 @@ export class SchedulerManager {
         taskId: task.id,
         taskName: task.name,
         sessionId,
+        runId,
+        workspacePath: task.workspacePath,
+        model: task.model,
       })
     }
 
-    await this.agentManager.startAgent(sessionId, task.taskPrompt, {
+    await this.agentManager.startAgent(sessionId, task.taskPrompt, runId, {
       permissionMode: 'full-access',
       workspacePath: task.workspacePath,
       model: task.model,

@@ -32,6 +32,7 @@ export interface Message {
   role: MessageRole
   content: string
   timestamp: number
+  runId?: string
   toolCalls?: ToolCall[]
   thinking?: string
   isStreaming?: boolean
@@ -59,6 +60,7 @@ export interface Session {
   name: string
   messages: Message[]
   status: SessionStatus
+  activeRunId?: string | null
   permissionMode: PermissionMode
   workspacePath: string | null
   attachedFiles: string[]
@@ -95,6 +97,7 @@ export interface ScheduledTask {
 export interface PermissionRequest {
   id: string
   sessionId: string
+  runId?: string
   type: 'file-write' | 'file-delete' | 'file-overwrite' | 'command-execute' | 'system-config' | 'send-message' | 'task-plan'
   description: string
   details: string
@@ -111,16 +114,16 @@ export interface AppSettings {
 
 // IPC Channel types
 export interface IpcChannels {
-  'agent:start': { sessionId: string; message: string }
+  'agent:start': { sessionId: string; message: string; runId: string }
   'agent:stop': { sessionId: string }
-  'agent:stream': { sessionId: string; chunk: StreamChunk }
-  'agent:complete': { sessionId: string }
-  'agent:error': { sessionId: string; error: string }
+  'agent:stream': { sessionId: string; runId: string; chunk: StreamChunk }
+  'agent:complete': { sessionId: string; runId: string; status: 'completed' | 'stopped' }
+  'agent:error': { sessionId: string; runId: string; error: string }
   'agent:permission-request': PermissionRequest
   'agent:permission-response': { requestId: string; approved: boolean; alwaysAllow?: boolean }
-  'agent:task-update': { sessionId: string; tasks: TaskItem[] }
-  'agent:tool-call': { sessionId: string; toolCall: ToolCall }
-  'agent:workspace-files': { sessionId: string; files: WorkspaceFile[] }
+  'agent:task-update': { sessionId: string; runId: string; tasks: TaskItem[] }
+  'agent:tool-call': { sessionId: string; runId: string; toolCall: ToolCall }
+  'agent:workspace-files': { sessionId: string; runId: string; files: WorkspaceFile[] }
   'dialog:select-folder': void
   'dialog:select-files': void
   'scheduler:create': ScheduledTask
@@ -141,6 +144,7 @@ export interface StreamChunk {
   content?: string
   toolCall?: ToolCall
   taskUpdate?: TaskItem[]
+  iterationIndex?: number
 }
 
 // Available models

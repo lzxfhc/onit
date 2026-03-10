@@ -12,8 +12,8 @@ type SidebarTab = 'sessions' | 'skills' | 'scheduled' | 'search'
 
 export default function Sidebar() {
   const [activeTab, setActiveTab] = useState<SidebarTab>('sessions')
-  const { createSession } = useSessionStore()
-  const { logout } = useSettingsStore()
+  const createSession = useSessionStore(state => state.createSession)
+  const logout = useSettingsStore(state => state.logout)
 
   return (
     <aside className="w-72 bg-surface border-r border-border-subtle flex flex-col h-full no-drag relative z-30">

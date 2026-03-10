@@ -1,150 +1,233 @@
-import { useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { v4 as uuidv4 } from 'uuid'
 import MessageList from './MessageList'
 import InputBox from './InputBox'
 import TaskStatusPanel from './TaskStatus'
-import type { Message } from '../../types'
+import type { Message, StreamChunk } from '../../types'
+
+function isCurrentRun(sessionId: string, runId?: string) {
+  if (!runId) return false
+  const session = useSessionStore.getState().sessions.find(s => s.id === sessionId)
+  return session?.activeRunId === runId
+}
+
+function getRunKey(sessionId: string, runId: string) {
+  return `${sessionId}:${runId}`
+}
+
+interface PendingStreamChunks {
+  sessionId: string
+  runId: string
+  chunks: StreamChunk[]
+}
 
 export default function ChatView() {
-  const {
-    sessions, activeSessionId, addMessage, updateLastMessage,
-    appendToLastMessage, setSessionStatus, updateTasks,
-    updateWorkspaceFiles, updateToolCall, appendContentBlock,
-    addIterationEndMarker, saveSession, getActiveSession,
-  } = useSessionStore()
-  const { settings, addPermissionRequest } = useSettingsStore()
-  const cleanupRef = useRef<(() => void)[]>([])
+  const activeSession = useSessionStore(state =>
+    state.sessions.find(session => session.id === state.activeSessionId) || null,
+  )
+  const pendingStreamChunksRef = useRef<Map<string, PendingStreamChunks>>(new Map())
+  const pendingAnimationFrameRef = useRef<number | null>(null)
 
-  const activeSession = getActiveSession()
+  const flushPendingStreamChunks = useCallback((targetKey?: string) => {
+    const pending = pendingStreamChunksRef.current
+    const sessionStore = useSessionStore.getState()
+    const targets = targetKey
+      ? (() => {
+          const entry = pending.get(targetKey)
+          return entry ? [[targetKey, entry] as const] : []
+        })()
+      : Array.from(pending.entries())
 
-  // Set up IPC listeners
-  useEffect(() => {
-    cleanupRef.current.forEach(fn => fn())
-    cleanupRef.current = []
-
-    const unsubStream = window.electronAPI.onAgentStream((data: any) => {
-      const { sessionId, chunk } = data
-      if (chunk.type === 'content' && chunk.content) {
-        // Write to contentBlocks for chronological rendering (primary)
-        useSessionStore.getState().appendContentBlock(sessionId, { type: 'text', content: chunk.content })
-        // Also update message.content for search/history/legacy compatibility
-        appendToLastMessage(sessionId, chunk.content)
-      } else if (chunk.type === 'thinking' && chunk.content) {
-        const currentSessions = useSessionStore.getState().sessions
-        const session = currentSessions.find(s => s.id === sessionId)
-        if (session) {
-          const lastMsg = session.messages[session.messages.length - 1]
-          if (lastMsg?.role === 'assistant') {
-            updateLastMessage(sessionId, {
-              thinking: (lastMsg.thinking || '') + chunk.content,
-            })
-          }
-        }
-      } else if (chunk.type === 'tool-call-start' && chunk.toolCall) {
-        updateToolCall(sessionId, chunk.toolCall)
-        useSessionStore.getState().appendContentBlock(sessionId, { type: 'tool-call', toolCallId: chunk.toolCall.id })
-      } else if (chunk.type === 'tool-call-result' && chunk.toolCall) {
-        updateToolCall(sessionId, chunk.toolCall)
-      } else if (chunk.type === 'iteration-end') {
-        useSessionStore.getState().addIterationEndMarker(sessionId, chunk.iterationIndex)
+    for (const [key, payload] of targets) {
+      pending.delete(key)
+      if (payload.chunks.length > 0) {
+        sessionStore.applyStreamChunks(payload.sessionId, payload.runId, payload.chunks)
       }
-    })
-
-    const unsubComplete = window.electronAPI.onAgentComplete((data: any) => {
-      setSessionStatus(data.sessionId, 'idle')
-      updateLastMessage(data.sessionId, { isStreaming: false })
-      saveSession(data.sessionId)
-    })
-
-    const unsubError = window.electronAPI.onAgentError((data: any) => {
-      setSessionStatus(data.sessionId, 'error')
-      const errorMsg: Message = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: `Error: ${data.error}`,
-        timestamp: Date.now(),
-      }
-      addMessage(data.sessionId, errorMsg)
-      saveSession(data.sessionId)
-    })
-
-    const unsubPermission = window.electronAPI.onPermissionRequest((data: any) => {
-      addPermissionRequest(data)
-    })
-
-    const unsubTaskUpdate = window.electronAPI.onTaskUpdate((data: any) => {
-      updateTasks(data.sessionId, data.tasks)
-    })
-
-    const unsubWorkspaceFiles = window.electronAPI.onWorkspaceFiles((data: any) => {
-      updateWorkspaceFiles(data.sessionId, data.files)
-    })
-
-    cleanupRef.current = [unsubStream, unsubComplete, unsubError, unsubPermission, unsubTaskUpdate, unsubWorkspaceFiles]
-
-    return () => {
-      cleanupRef.current.forEach(fn => fn())
     }
   }, [])
 
-  const handleSendMessage = async (content: string) => {
-    if (!activeSession || !content.trim()) return
+  const schedulePendingStreamFlush = useCallback(() => {
+    if (pendingAnimationFrameRef.current !== null) return
+
+    pendingAnimationFrameRef.current = window.requestAnimationFrame(() => {
+      pendingAnimationFrameRef.current = null
+      flushPendingStreamChunks()
+    })
+  }, [flushPendingStreamChunks])
+
+  useEffect(() => {
+    const flushRun = (sessionId: string, runId: string) => {
+      flushPendingStreamChunks(getRunKey(sessionId, runId))
+    }
+
+    const unsubStream = window.electronAPI.onAgentStream((data: any) => {
+      const { sessionId, runId, chunk } = data
+      const key = getRunKey(sessionId, runId)
+      const existing = pendingStreamChunksRef.current.get(key)
+
+      if (existing) {
+        existing.chunks.push(chunk)
+      } else {
+        pendingStreamChunksRef.current.set(key, {
+          sessionId,
+          runId,
+          chunks: [chunk],
+        })
+      }
+
+      schedulePendingStreamFlush()
+    })
+
+    const unsubComplete = window.electronAPI.onAgentComplete((data: any) => {
+      const { sessionId, runId, status } = data
+      flushRun(sessionId, runId)
+      useSessionStore.getState().completeRun(sessionId, runId, status)
+      useSettingsStore.getState().removePermissionRequestsForSession(sessionId, runId)
+      useSessionStore.getState().saveSession(sessionId)
+    })
+
+    const unsubError = window.electronAPI.onAgentError((data: any) => {
+      const { sessionId, runId, error } = data
+      flushRun(sessionId, runId)
+
+      const sessionStore = useSessionStore.getState()
+      const session = sessionStore.sessions.find(s => s.id === sessionId)
+      const lastMessage = session?.messages[session.messages.length - 1]
+      const belongsToCurrentRun = session?.activeRunId === runId || lastMessage?.runId === runId
+
+      if (!belongsToCurrentRun) return
+
+      sessionStore.completeRun(sessionId, runId, 'error')
+      useSettingsStore.getState().removePermissionRequestsForSession(sessionId, runId)
+
+      const errorMsg: Message = {
+        id: uuidv4(),
+        role: 'assistant',
+        content: `Error: ${error}`,
+        timestamp: Date.now(),
+        runId,
+      }
+      sessionStore.addMessage(sessionId, errorMsg)
+      sessionStore.saveSession(sessionId)
+    })
+
+    const unsubPermission = window.electronAPI.onPermissionRequest((data: any) => {
+      if (!isCurrentRun(data.sessionId, data.runId)) return
+      useSettingsStore.getState().addPermissionRequest(data)
+    })
+
+    const unsubTaskUpdate = window.electronAPI.onTaskUpdate((data: any) => {
+      if (!isCurrentRun(data.sessionId, data.runId)) return
+      useSessionStore.getState().updateTasks(data.sessionId, data.tasks)
+    })
+
+    const unsubWorkspaceFiles = window.electronAPI.onWorkspaceFiles((data: any) => {
+      if (!isCurrentRun(data.sessionId, data.runId)) return
+      useSessionStore.getState().updateWorkspaceFiles(data.sessionId, data.files)
+    })
+
+    return () => {
+      if (pendingAnimationFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingAnimationFrameRef.current)
+        pendingAnimationFrameRef.current = null
+      }
+      flushPendingStreamChunks()
+      unsubStream()
+      unsubComplete()
+      unsubError()
+      unsubPermission()
+      unsubTaskUpdate()
+      unsubWorkspaceFiles()
+    }
+  }, [flushPendingStreamChunks, schedulePendingStreamFlush])
+
+  const handleSendMessage = useCallback(async (content: string) => {
+    const trimmedContent = content.trim()
+    if (!trimmedContent) return
+
+    const sessionStore = useSessionStore.getState()
+    const settingsStore = useSettingsStore.getState()
+    const activeSessionId = sessionStore.activeSessionId
+
+    if (!activeSessionId) return
+
+    const latestSession = sessionStore.sessions.find(session => session.id === activeSessionId)
+    if (!latestSession) return
+
+    const runId = uuidv4()
+    const now = Date.now()
 
     const userMsg: Message = {
       id: uuidv4(),
       role: 'user',
-      content: content.trim(),
-      timestamp: Date.now(),
+      content: trimmedContent,
+      timestamp: now,
     }
-    addMessage(activeSession.id, userMsg)
 
     const assistantMsg: Message = {
       id: uuidv4(),
       role: 'assistant',
       content: '',
-      timestamp: Date.now(),
+      timestamp: now,
       isStreaming: true,
       toolCalls: [],
       contentBlocks: [],
-    }
-    addMessage(activeSession.id, assistantMsg)
-    setSessionStatus(activeSession.id, 'running')
-
-    // Auto-name session on first message
-    if (activeSession.messages.length === 0) {
-      const name = content.trim().substring(0, 40) + (content.length > 40 ? '...' : '')
-      useSessionStore.getState().updateSession(activeSession.id, { name })
+      runId,
     }
 
-    // Start agent
+    sessionStore.startAssistantRun(latestSession.id, userMsg, assistantMsg, runId)
+    settingsStore.removePermissionRequestsForSession(latestSession.id)
+
+    if (latestSession.messages.length === 0) {
+      const name = trimmedContent.substring(0, 40) + (trimmedContent.length > 40 ? '...' : '')
+      sessionStore.updateSession(latestSession.id, { name })
+    }
+
     try {
       await window.electronAPI.startAgent({
-        sessionId: activeSession.id,
-        message: content.trim(),
+        sessionId: latestSession.id,
+        message: trimmedContent,
+        runId,
         session: {
-          ...activeSession,
-          apiConfig: settings.apiConfig,
+          ...latestSession,
+          activeRunId: runId,
+          apiConfig: settingsStore.settings.apiConfig,
         },
       })
     } catch (err: any) {
-      setSessionStatus(activeSession.id, 'error')
-      updateLastMessage(activeSession.id, {
+      sessionStore.completeRun(latestSession.id, runId, 'error')
+      settingsStore.removePermissionRequestsForSession(latestSession.id, runId)
+      sessionStore.addMessage(latestSession.id, {
+        id: uuidv4(),
+        role: 'assistant',
         content: `Failed to start agent: ${err.message}`,
-        isStreaming: false,
+        timestamp: Date.now(),
+        runId,
       })
     }
-  }
+  }, [])
 
-  const handleStopAgent = async () => {
-    if (!activeSession) return
+  const handleStopAgent = useCallback(async () => {
+    const sessionStore = useSessionStore.getState()
+    const settingsStore = useSettingsStore.getState()
+    const activeSessionId = sessionStore.activeSessionId
+
+    if (!activeSessionId) return
+
+    const session = sessionStore.sessions.find(item => item.id === activeSessionId)
+    if (!session?.activeRunId) return
+
+    const runId = session.activeRunId
+
     try {
-      await window.electronAPI.stopAgent({ sessionId: activeSession.id })
-      setSessionStatus(activeSession.id, 'idle')
-      updateLastMessage(activeSession.id, { isStreaming: false })
-    } catch {}
-  }
+      await window.electronAPI.stopAgent({ sessionId: session.id })
+    } finally {
+      sessionStore.completeRun(session.id, runId, 'stopped')
+      settingsStore.removePermissionRequestsForSession(session.id, runId)
+    }
+  }, [])
 
   if (!activeSession) {
     return (
@@ -156,7 +239,6 @@ export default function ChatView() {
 
   return (
     <div className="flex-1 flex min-h-0">
-      {/* Chat Area */}
       <div className="flex-1 flex flex-col min-w-0">
         <MessageList
           messages={activeSession.messages}
@@ -166,11 +248,10 @@ export default function ChatView() {
           onSend={handleSendMessage}
           onStop={handleStopAgent}
           isRunning={activeSession.status === 'running'}
-          session={activeSession}
+          sessionId={activeSession.id}
         />
       </div>
 
-      {/* Task Status Panel (right side) */}
       {(activeSession.tasks.length > 0 || activeSession.workspaceFiles.length > 0 ||
         activeSession.messages.some(m => m.toolCalls && m.toolCalls.length > 0)) && (
         <TaskStatusPanel session={activeSession} />

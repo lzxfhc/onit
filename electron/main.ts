@@ -90,14 +90,14 @@ function setupIPC() {
   })
 
   // Agent: start — inject enabled skills
-  ipcMain.handle('agent:start', async (_event, data: { sessionId: string; message: string; session: any }) => {
+  ipcMain.handle('agent:start', async (_event, data: { sessionId: string; message: string; runId: string; session: any }) => {
     const enabledSkills = skillManager.getEnabledSkills().map(s => ({
       name: s.name,
       displayName: s.displayName,
       description: s.description,
       content: s.content,
     }))
-    return agentManager.startAgent(data.sessionId, data.message, {
+    return agentManager.startAgent(data.sessionId, data.message, data.runId, {
       ...data.session,
       enabledSkills,
     })

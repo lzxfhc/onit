@@ -1,26 +1,66 @@
 import { useEffect } from 'react'
+import { shallow } from 'zustand/shallow'
 import { useSettingsStore } from './stores/settingsStore'
 import { useSessionStore } from './stores/sessionStore'
 import Login from './components/Login'
 import Sidebar from './components/Sidebar'
 import ChatView from './components/Chat'
 import PermissionDialog from './components/Dialogs/PermissionDialog'
+import type { Session } from './types'
 
 export default function App() {
-  const { isLoggedIn, loadSettings, loadScheduledTasks, loadSkills, permissionRequests } = useSettingsStore()
-  const { loadSessions } = useSessionStore()
+  const { isLoggedIn, loadSettings, loadScheduledTasks, loadSkills, permissionRequests } = useSettingsStore((state) => ({
+    isLoggedIn: state.isLoggedIn,
+    loadSettings: state.loadSettings,
+    loadScheduledTasks: state.loadScheduledTasks,
+    loadSkills: state.loadSkills,
+    permissionRequests: state.permissionRequests,
+  }), shallow)
+  const { loadSessions, registerExternalSession, saveSession } = useSessionStore((state) => ({
+    loadSessions: state.loadSessions,
+    registerExternalSession: state.registerExternalSession,
+    saveSession: state.saveSession,
+  }), shallow)
 
   useEffect(() => {
     loadSettings()
   }, [])
 
   useEffect(() => {
-    if (isLoggedIn) {
-      loadSessions()
-      loadScheduledTasks()
-      loadSkills()
+    if (!isLoggedIn) return
+
+    loadSessions()
+    loadScheduledTasks()
+    loadSkills()
+
+    const unsubscribe = window.electronAPI.onSchedulerSessionCreated((data: any) => {
+      const session: Session = {
+        id: data.sessionId,
+        name: data.taskName,
+        messages: [],
+        status: 'running',
+        activeRunId: data.runId,
+        permissionMode: 'full-access',
+        workspacePath: data.workspacePath || null,
+        attachedFiles: [],
+        model: data.model || 'qianfan-code-latest',
+        tasks: [],
+        workspaceFiles: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        isBackgroundRunning: true,
+        backgroundCompleted: false,
+        hasUnviewedResult: false,
+      }
+
+      registerExternalSession(session)
+      saveSession(session.id)
+    })
+
+    return () => {
+      unsubscribe()
     }
-  }, [isLoggedIn])
+  }, [isLoggedIn, loadSessions, loadScheduledTasks, loadSkills, registerExternalSession, saveSession])
 
   if (!isLoggedIn) {
     return <Login />
