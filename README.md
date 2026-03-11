@@ -40,7 +40,7 @@
 | 前端 | React 18 + TypeScript + Tailwind CSS 3 |
 | 状态管理 | Zustand |
 | 构建 | Vite 5 + electron-builder |
-| LLM API | 千帆 (Baidu) / 火山引擎 / 灵积 |
+| LLM API | 兼容各家coding plan和api接口 |
 
 ## 安装
 
