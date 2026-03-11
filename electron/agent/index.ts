@@ -505,6 +505,9 @@ ${result || error}` : prefix,
     const dateStr = `${days[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}, ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
     const osName = os.platform() === 'darwin' ? 'macOS' : os.platform() === 'win32' ? 'Windows' : 'Linux'
     const homeDir = os.homedir()
+    const platformHint = os.platform() === 'win32'
+      ? '\nThe user is on Windows. Use Windows-compatible commands (cmd.exe or PowerShell). Use backslash paths. Common equivalents: ls->dir, cat->type, rm->del, cp->copy, mv->move, grep->findstr.\n'
+      : ''
 
     // Skills section
     let skillsSection = ''
@@ -520,7 +523,7 @@ ${result || error}` : prefix,
 Current date and time: ${dateStr}
 Operating system: ${osName}
 Home directory: ${homeDir}
-
+${platformHint}
 ${workspace}
 
 Core principles:

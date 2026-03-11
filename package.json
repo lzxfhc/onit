@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build && electron-builder",
+    "build:mac": "tsc && vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64",
+    "build:win": "tsc && vite build && electron-builder --win --x64",
     "build:vite": "tsc && vite build",
     "preview": "vite preview",
     "electron:dev": "vite"
@@ -55,6 +57,16 @@
       ],
       "category": "public.app-category.productivity",
       "identity": null
+    },
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "dmg": {
       "title": "Onit",

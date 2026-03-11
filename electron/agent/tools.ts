@@ -1,4 +1,5 @@
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
 import https from 'https'
@@ -202,9 +203,25 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
       return 'dangerous'
     case 'execute_command': {
       const cmd = (args.command || '').toLowerCase()
-      const dangerousPatterns = ['rm -rf', 'rm -r', 'rmdir', 'format', 'mkfs', 'dd if=', 'chmod -R', 'chown -R', 'kill -9', 'pkill', 'shutdown', 'reboot']
+      const dangerousPatterns = [
+        'rm -rf', 'rm -r', 'rmdir', 'format', 'mkfs', 'dd if=',
+        'chmod -R', 'chown -R', 'kill -9', 'pkill', 'shutdown', 'reboot',
+        // Windows dangerous
+        'del /f /s /q', 'del /s /q', 'rd /s /q', 'rmdir /s /q',
+        'remove-item -recurse -force', 'format-volume',
+        'diskpart', 'shutdown /s', 'shutdown /r',
+        'stop-process -force', 'taskkill /f',
+      ]
       if (dangerousPatterns.some(p => cmd.includes(p))) return 'dangerous'
-      const moderatePatterns = ['rm ', 'mv ', 'cp ', 'install', 'uninstall', 'pip', 'npm', 'brew', 'curl', 'wget', 'git push', 'git reset']
+      const moderatePatterns = [
+        'rm ', 'mv ', 'cp ', 'install', 'uninstall',
+        'pip', 'npm', 'brew', 'curl', 'wget',
+        'git push', 'git reset',
+        // Windows moderate
+        'del ', 'move ', 'copy ', 'xcopy', 'robocopy',
+        'choco ', 'scoop ', 'winget ',
+        'set-executionpolicy', 'new-service',
+      ]
       if (moderatePatterns.some(p => cmd.includes(p))) return 'moderate'
       return 'safe'
     }
@@ -217,7 +234,7 @@ function globMatch(pattern: string, filename: string): boolean {
   const regex = pattern
     .replace(/\./g, '\.')
     .replace(/\*\*/g, '{{GLOBSTAR}}')
-    .replace(/\*/g, '[^/]*')
+    .replace(/\*/g, '[^/\\\\]*')
     .replace(/\{\{GLOBSTAR\}\}/g, '.*')
   return new RegExp(`^${regex}$`).test(filename)
 }
@@ -525,7 +542,7 @@ export async function executeTool(
       }
 
       case 'list_directory': {
-        const dirPath = args.path || workspacePath || process.env.HOME || '/'
+        const dirPath = args.path || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
         if (!fs.existsSync(dirPath)) {
           return { success: false, output: `Directory not found: ${dirPath}`, riskLevel }
         }
@@ -539,7 +556,7 @@ export async function executeTool(
 
       case 'search_files': {
         const results: string[] = []
-        searchFilesRecursive(args.directory, args.pattern, results)
+        await searchFilesRecursive(args.directory, args.directory, args.pattern, results, { visited: 0 })
         if (results.length === 0) {
           return { success: true, output: `No files matching "${args.pattern}" found in ${args.directory}`, riskLevel }
         }
@@ -548,7 +565,7 @@ export async function executeTool(
 
       case 'search_content': {
         const results: string[] = []
-        searchContentRecursive(args.directory, args.query, args.file_pattern, results)
+        await searchContentRecursive(args.directory, args.directory, args.query, args.file_pattern, results, { visited: 0 })
         if (results.length === 0) {
           return { success: true, output: `No matches for "${args.query}" found in ${args.directory}`, riskLevel }
         }
@@ -556,7 +573,7 @@ export async function executeTool(
       }
 
       case 'execute_command': {
-        const cwd = args.working_directory || workspacePath || process.env.HOME || '/'
+        const cwd = args.working_directory || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
         return runCommand(args.command, cwd, riskLevel)
       }
 
@@ -688,14 +705,16 @@ function parseBingResults(html: string, maxResults: number): SearchResult[] {
 }
 
 const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'User-Agent': process.platform === 'win32'
+    ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
   'Accept-Encoding': 'identity',
   'Cache-Control': 'no-cache',
   'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
   'Sec-Ch-Ua-Mobile': '?0',
-  'Sec-Ch-Ua-Platform': '"macOS"',
+  'Sec-Ch-Ua-Platform': process.platform === 'win32' ? '"Windows"' : '"macOS"',
   'Sec-Fetch-Dest': 'document',
   'Sec-Fetch-Mode': 'navigate',
   'Sec-Fetch-Site': 'none',

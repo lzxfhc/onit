@@ -40,6 +40,7 @@ const api = {
 
   // App
   getDataPath: () => ipcRenderer.invoke('app:get-data-path'),
+  getPlatform: () => process.platform,
 
   // Events
   onAgentStream: (callback: (data: any) => void) => {

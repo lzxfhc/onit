@@ -1,6 +1,7 @@
 import { PanelRight, PanelRightClose } from 'lucide-react'
 import { shallow } from 'zustand/shallow'
 import { useSessionStore } from '../stores/sessionStore'
+import { isWindows } from '../utils/platform'
 
 interface Props {
   rightPanelOpen: boolean
@@ -38,7 +39,9 @@ export default function TopBar({ rightPanelOpen, onToggleRightPanel }: Props) {
 
       {/* Right section: always rendered when session exists, button stays in fixed position */}
       {showToggle && (
-        <div className="w-72 shrink-0 flex items-center justify-end px-3 bg-canvas border-b border-border-subtle">
+        <div className={`w-72 shrink-0 flex items-center justify-end px-3 bg-canvas border-b border-border-subtle ${
+          isWindows ? 'pr-[140px]' : ''
+        }`}>
           <button
             onClick={onToggleRightPanel}
             className="btn-icon no-drag"
@@ -51,6 +54,11 @@ export default function TopBar({ rightPanelOpen, onToggleRightPanel }: Props) {
             )}
           </button>
         </div>
+      )}
+
+      {/* Windows: fallback right padding when no session (for titleBarOverlay buttons) */}
+      {!showToggle && isWindows && (
+        <div className="w-[140px] shrink-0 bg-canvas border-b border-border-subtle" />
       )}
     </div>
   )
