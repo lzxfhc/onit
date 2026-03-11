@@ -187,15 +187,12 @@ npm run build:win
 - **Multi-session support** — Run multiple agent sessions simultaneously, switch freely between them.
 - **Built-in tools** — File read/write/edit/delete, directory listing, content search, command execution, web search, URL fetching, task management.
 - **Skills system** — Custom prompt templates invoked via `@` mention in the input box. Extensible and configurable.
-- **Multi-provider Coding Plan** — Supports Qianfan, Volcengine, and Dashscope providers with independent model parameters.
+- **Multi-provider Coding Plan** — Supports list companies‘ coding plan providers with independent model parameters.
 - **Three permission modes** — Plan Mode (confirm everything), AcceptEdit (smart confirmations), Full Access (auto-execute).
 - **Scheduled tasks** — Set up recurring tasks with cron-like scheduling.
 - **Workspace awareness** — Select a working directory for the agent to focus on your project.
 - **File attachment** — Attach files directly to your conversation for the agent to analyze.
-- **Streaming responses** — See the agent's thinking and actions in real-time.
 - **Background execution** — Switch to another session while the agent works, get notified when it's done.
-- **History search** — Full-text search across all your past conversations.
-- **TopBar & side panel** — Session name display, collapsible right panel with Tasks / Tools / Files tabs.
 
 ## Tech Stack
 
