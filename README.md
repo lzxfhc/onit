@@ -27,7 +27,9 @@
 ## Features / 功能特点
 
 - **Multi-session support** — Run multiple agent sessions simultaneously, switch freely between them.
-- **Built-in tools** — File read/write/edit/delete, directory listing, content search, command execution, task management.
+- **Built-in tools** — File read/write/edit/delete, directory listing, content search, command execution, web search, URL fetching, task management.
+- **Skills system** — Custom prompt templates invoked via `@` mention in the input box. Extensible and configurable.
+- **Multi-provider Coding Plan** — Supports Qianfan, Volcengine, and Dashscope providers with independent model parameters.
 - **Three permission modes** — Plan Mode (confirm everything), AcceptEdit (smart confirmations), Full Access (auto-execute).
 - **Scheduled tasks** — Set up recurring tasks with cron-like scheduling.
 - **Workspace awareness** — Select a working directory for the agent to focus on your project.
@@ -35,11 +37,14 @@
 - **Streaming responses** — See the agent's thinking and actions in real-time.
 - **Background execution** — Switch to another session while the agent works, get notified when it's done.
 - **History search** — Full-text search across all your past conversations.
+- **TopBar & side panel** — Session name display, collapsible right panel with Tasks / Tools / Files tabs.
 
 ---
 
 - **多会话支持** — 同时运行多个 Agent 会话，自由切换。
-- **内置工具集** — 文件读写编辑删除、目录列表、内容搜索、命令执行、任务管理。
+- **内置工具集** — 文件读写编辑删除、目录列表、内容搜索、命令执行、Web 搜索、网页抓取、任务管理。
+- **Skills 系统** — 自定义提示词模板，在输入框中通过 `@` 快速调用。可扩展、可配置。
+- **多平台 Coding Plan** — 支持千帆、火山引擎、灵积三个 Provider，各自独立模型参数。
 - **三种权限模式** — Plan 模式（确认所有操作）、AcceptEdit（智能确认）、Full Access（自动执行）。
 - **定时任务** — 设置周期性自动执行的任务。
 - **工作区感知** — 选择工作目录，让 Agent 专注于你的项目。
@@ -47,6 +52,7 @@
 - **流式响应** — 实时查看 Agent 的思考过程和操作动态。
 - **后台执行** — 切换到其他会话时 Agent 继续工作，完成后通知你。
 - **历史搜索** — 跨所有历史对话的全文搜索。
+- **顶栏与侧边面板** — 显示会话名称，可折叠右侧面板含任务 / 工具 / 文件三个 Tab。
 
 ---
 
@@ -58,7 +64,7 @@
 | Frontend | React 18 + TypeScript + Tailwind CSS 3 |
 | State | Zustand |
 | Build | Vite 5 + electron-builder |
-| LLM API | Qianfan (Baidu) |
+| LLM API | Qianfan (Baidu) / Volcengine / Dashscope |
 
 ---
 
@@ -90,11 +96,15 @@ The app is distributed as a `.dmg` file. Since the app is not code-signed with a
 
    **如果再次出现 Gatekeeper 提示**，再点击一次 **"仍要打开"** 即可完成安装！
 
-### Windows
+### Windows (x64)
 
-Download the Windows installer and follow the standard installation wizard.
+1. Download and extract the Windows build package.
 
-下载 Windows 安装程序，按照标准安装向导完成安装。
+   下载并解压 Windows 构建包。
+
+2. Run `install-onit.bat` — The script will install Onit to `%LOCALAPPDATA%\Onit`, create desktop and Start Menu shortcuts, and launch the app automatically.
+
+   运行 `install-onit.bat` — 脚本会将 Onit 安装到 `%LOCALAPPDATA%\Onit`，创建桌面和开始菜单快捷方式，并自动启动应用。
 
 ---
 
@@ -106,8 +116,11 @@ On first launch, you'll need to enter your API key. Onit supports two billing mo
 
 首次启动时需要输入 API Key。Onit 支持两种计费模式：
 
-- **Coding Plan** — Uses `qianfan-code-latest` model, optimized for coding tasks.
+- **Coding Plan** — Optimized for coding tasks. Supports Qianfan, Volcengine, and Dashscope providers.
 - **API Call** — Choose from multiple models (ERNIE 4.5, DeepSeek V3, etc.).
+
+- **Coding Plan** — 为编码任务优化。支持千帆、火山引擎、灵积三个 Provider。
+- **API Call** — 可选择多种模型（ERNIE 4.5、DeepSeek V3 等）。
 
 ### 2. Start a Conversation / 开始对话
 
@@ -119,17 +132,23 @@ Type your request in natural language. For example:
 - "Create a Python script that converts CSV to JSON"
 - "Search for all TODO comments in this directory"
 
-### 3. Set a Workspace / 设置工作区
+### 3. Use Skills / 使用 Skills
+
+Type `@` in the input box to invoke a skill. Skills are customizable prompt templates for common tasks.
+
+在输入框中输入 `@` 调用 Skill。Skills 是可自定义的提示词模板，用于常见任务场景。
+
+### 4. Set a Workspace / 设置工作区
 
 Click the **Workspace** button in the input area to select a folder. The agent will have context about your project files.
 
 点击输入区域的 **Workspace** 按钮选择文件夹。Agent 将了解你项目文件的上下文。
 
-### 4. Choose Permission Mode / 选择权限模式
+### 5. Choose Permission Mode / 选择权限模式
 
-- **Plan Mode** 🛡️ — Agent asks before any file operation or command. Best for learning what the agent does.
-- **AcceptEdit** ✅ — Smart defaults: safe operations run automatically, sensitive ones ask for permission. Recommended.
-- **Full Access** ⚠️ — Everything runs automatically. Use only when you fully trust the task.
+- **Plan Mode** — Agent asks before any file operation or command. Best for learning what the agent does.
+- **AcceptEdit** — Smart defaults: safe operations run automatically, sensitive ones ask for permission. Recommended.
+- **Full Access** — Everything runs automatically. Use only when you fully trust the task.
 
 ---
 
@@ -141,7 +160,8 @@ electron/               # Electron main process
 ├── preload.ts          # Context bridge (main ↔ renderer)
 └── agent/
     ├── index.ts        # Agent core — ReAct loop, LLM streaming
-    ├── tools.ts        # Built-in tools (file ops, search, exec)
+    ├── tools.ts        # Built-in tools (file ops, search, exec, web)
+    ├── skills.ts       # Skills loader and manager
     ├── scheduler.ts    # Scheduled task manager
     └── types.ts        # Agent-side types
 
@@ -152,9 +172,12 @@ src/                    # React renderer
 │   └── settingsStore.ts# Settings & API config
 ├── components/
 │   ├── Login.tsx       # API key entry
+│   ├── TopBar.tsx      # Top bar with session name & panel toggle
 │   ├── Sidebar/        # Session list, scheduled tasks, search
 │   ├── Chat/           # Message list, input, task status panel
 │   └── Dialogs/        # Permission & scheduling dialogs
+├── utils/
+│   └── platform.ts     # Cross-platform utilities
 ├── App.tsx             # Root component
 └── index.css           # Tailwind + custom styles
 ```
@@ -170,41 +193,57 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install
 # Start dev server with hot reload
 npm run dev
 
-# Build for macOS (skip code signing for development)
-CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --arm64
+# Build for macOS ARM64
+npm run build:mac
+
+# Build for Windows x64
+npm run build:win
 ```
 
 ### Branches / 分支
 
 | Branch | Description |
 |--------|------------|
-| `main` | v1.0.0 — macOS ARM64 release |
-| `windows` | v1.0.0 — Windows platform adaptation |
+| `main` | Latest macOS release (v1.2.0) |
+| `windows` | Latest Windows release (v1.2.0) |
 
 ---
 
 ## Data Storage / 数据存储
 
-| Data | Location |
-|------|----------|
-| Sessions | `~/Library/Application Support/onit/onit-data/sessions/` (macOS) |
-| Scheduled Tasks | `~/Library/Application Support/onit/onit-data/scheduled/` (macOS) |
-| Settings | Browser localStorage (key: `onit-settings`) |
+| Data | macOS | Windows |
+|------|-------|---------|
+| Sessions | `~/Library/Application Support/onit/onit-data/sessions/` | `%APPDATA%\onit\onit-data\sessions\` |
+| Scheduled Tasks | `~/Library/Application Support/onit/onit-data/scheduled/` | `%APPDATA%\onit\onit-data\scheduled\` |
+| Skills | `~/Library/Application Support/onit/onit-data/skills/` | `%APPDATA%\onit\onit-data\skills\` |
+| Settings | Browser localStorage (key: `onit-settings`) | Browser localStorage (key: `onit-settings`) |
+
+---
+
+## Version History / 版本历史
+
+| Version | Date | Highlights |
+|---------|------|-----------|
+| v1.2.0 | 2025-03 | Multi-provider Coding Plan, TopBar, right panel, search tool fixes |
+| v1.1.0 | 2025-02 | Skills system, web tools (search + fetch), scheduled task enhancements |
+| v1.0.0 | 2025-01 | Initial release — agent loop, file tools, permission system, multi-session |
 
 ---
 
 ## Notes / 备注
 
 - **Not code-signed** — The app is not signed with an Apple Developer certificate or Microsoft Authenticode. You'll need to bypass OS security prompts during installation (see instructions above).
-- **LLM API required** — Onit requires a Qianfan (Baidu) API key to function. It does not include a built-in model.
+- **LLM API required** — Onit requires an API key (Qianfan / Volcengine / Dashscope) to function. It does not include a built-in model.
 - **macOS ARM64 only** — The macOS build targets Apple Silicon (M1/M2/M3/M4). Intel Macs are not currently supported.
+- **Windows x64** — The Windows build targets 64-bit x86 systems.
 - **Scheduled tasks require the app to be running** — There is no background daemon; tasks only execute while Onit is open.
 
 ---
 
 - **未签名** — 应用未使用 Apple 开发者证书或 Microsoft Authenticode 签名。安装时需要绕过系统安全提示（参见上方安装说明）。
-- **需要 LLM API** — Onit 需要千帆（百度）API Key 才能运行，不内置模型。
-- **仅支持 macOS ARM64** — macOS 版本仅支持 Apple Silicon（M1/M2/M3/M4），暂不支持 Intel Mac。
+- **需要 LLM API** — Onit 需要 API Key（千帆 / 火山引擎 / 灵积）才能运行，不内置模型。
+- **macOS 仅支持 ARM64** — macOS 版本仅支持 Apple Silicon（M1/M2/M3/M4），暂不支持 Intel Mac。
+- **Windows x64** — Windows 版本支持 64 位 x86 系统。
 - **定时任务需保持应用运行** — 没有后台守护进程，任务仅在 Onit 打开时执行。
 
 ---
