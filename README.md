@@ -1,68 +1,38 @@
 # Onit - Desktop AI Agent
 
-> Open-source desktop AI agent. Use any model, any provider.
+> You say it. Onit.
 >
-> 开源桌面端 AI Agent，自由调用任意模型。
+> 你的桌面搭档，随时待命。把琐碎的小任务交给 Onit，你专注重要的事。
 
 ---
 
 ## What is Onit? / 这是什么？
 
-**Onit** is an open-source desktop AI agent for macOS and Windows. It brings the power of CLI-level code agents to a visual interface, so that anyone — regardless of technical background — can use natural language to accomplish everyday tasks: file management, code generation, data analysis, web research, and more.
+**Onit** is a native desktop AI agent application for macOS and Windows. Unlike browser-based AI chat tools, Onit runs directly on your computer — it can read and write files, execute commands, search the web, analyze data, manage tasks, and orchestrate workflows across applications. All through natural conversation.
 
-**Onit** 是一款开源的桌面端 AI Agent 应用，支持 macOS 和 Windows。它将命令行 Code Agent 的通用能力带入可视化界面，让非技术背景的用户也能通过自然语言完成日常任务：文件管理、代码编写、数据分析、信息检索等。
+**Onit** 是一款原生桌面端 AI Agent 应用，支持 macOS 和 Windows。不同于浏览器中的 AI 聊天工具，Onit 直接运行在你的电脑上——它能读写文件、执行命令、搜索网页、分析数据、管理任务，在多个应用之间串联信息完成工作。全部通过自然对话完成。
 
----
+It's designed to be a general-purpose desktop agent for everyone. No programming knowledge required — just describe what you need, and the agent figures out how to get it done.
 
-## Why Onit? / 为什么选择 Onit？
-
-Most desktop agent products lock you into a specific vendor — you have to buy credits, subscribe to their plans, and can only use their limited model selection. **Onit is different.**
-
-市面上大多数桌面 Agent 产品都要求与开发厂商账号绑定，通过购买或订阅积分使用，模型可选范围极为有限。**Onit 不一样。**
-
-### Model Freedom / 模型自由调用
-
-Onit is not tied to any single AI provider. It supports mainstream **Coding Plans** (Qianfan, VolcEngine, Alibaba Cloud, etc.) and **direct API access** with your own keys. Switch freely between any provider and any model, for any task. Use what works best — and save money.
-
-Onit 不绑定任何 AI 服务商。兼容市面主流 **Coding Plan**（百度千帆、火山方舟、阿里百炼等），同时支持 **API Key 直接调用**。所有任务均可在任意服务提供商、任意模型之间自由切换，按需选择，灵活且省钱。
-
-### Extensible Skills / Skills 可扩展
-
-Onit comes with a flexible Skills system — use built-in skills, create your own, or import from others. Agent capabilities grow with your needs.
-
-Onit 内置灵活的 Skills 体系，支持内建、自建与导入三种方式，让 Agent 的能力边界按需扩展。
-
-### Safe & Controllable / 安全可控
-
-The agent represents you — it doesn't replace your decisions. Three permission modes let you choose how much autonomy to give:
-
-- **Plan Mode** 🛡️ — Confirm every operation. Best for learning what the agent does.
-- **AcceptEdit** ✅ — Smart confirmations for sensitive operations. Recommended for daily use.
-- **Full Access** ⚠️ — Auto-execute everything. Use when you fully trust the task.
-
-Agent 代表你行事，而不是取代你的决策。三种权限模式让你自由选择：
-
-- **Plan Mode** 🛡️ — 逐步确认所有操作，适合了解 Agent 行为。
-- **AcceptEdit** ✅ — 智能确认敏感操作，推荐日常使用。
-- **Full Access** ⚠️ — 全自动执行，仅在完全信任任务时使用。
-
-### Privacy Vision / 隐私愿景
-
-Onit plans to bundle a local model deployment framework, running small on-device models so that all data stays on your machine — never leaves your device. Bringing full agent capabilities to privacy-conscious users.
-
-Onit 计划打包本地模型部署框架，在用户设备上运行端侧模型，实现所有数据的本地闭环处理，数据不出设备，为注重隐私的用户提供完整的 Agent 能力。
+它的目标是成为面向所有人的通用桌面 Agent。不需要任何编程知识——只需描述你的需求，Agent 就会自主规划并完成任务。
 
 ---
 
 ## Core Philosophy / 核心理念
 
+The agent should **act on your behalf, not make decisions for you**.
+
+Agent 应该**代表你行事，而不是替你做决定**。
+
 - **Transparent** — Every action the agent takes is visible to you. You see every file it reads, every command it runs.
 - **Interruptible** — You can stop the agent at any time. You're always in control.
+- **Human-in-the-loop** — Sensitive operations require your permission. The agent asks before making important changes.
 - **Environment-Aware** — The agent sees your real working context — open files, running apps, file system structure. It infers intent from your environment instead of asking you to explain everything.
-- **Habit Learning** — The agent learns your preferences by observing your behavior — naming conventions, file organization, workflows — rather than asking you to fill out configuration forms.
+- **Habit Learning** — The agent learns your preferences by observing your behavior — naming conventions, file organization, workflows — rather than requiring you to fill out configuration forms.
 
 - **透明** — Agent 的每一步操作对你完全可见，读了哪个文件、运行了什么命令，一目了然。
 - **可中断** — 你可以随时停止 Agent，控制权始终在你手中。
+- **人在回路** — 敏感操作需要你的许可，在执行重要变更前 Agent 会先征得你的同意。
 - **环境感知** — Agent 能看到你的真实工作环境——打开的文件、运行的应用、文件系统结构，从环境中推断意图，而不是让你反复解释背景。
 - **习惯学习** — Agent 通过观察你的行为来学习偏好——命名习惯、文件组织方式、工作流程——而不是让你填写配置表。
 
@@ -72,8 +42,11 @@ Onit 计划打包本地模型部署框架，在用户设备上运行端侧模型
 
 - **Multi-session support** — Run multiple agent sessions simultaneously, switch freely between them.
 - **Built-in tools** — File read/write/edit/delete, directory listing, content search, command execution, task management.
+- **Three permission modes** — Plan Mode (confirm everything), AcceptEdit (smart confirmations), Full Access (auto-execute).
+- **Skills system** — Built-in skills, create your own, or import from others. Agent capabilities grow with your needs.
 - **Scheduled tasks** — Set up recurring tasks with cron-like scheduling.
 - **Workspace (Working Place)** — Select a working directory as the agent's workspace, with permissions scoped to that folder.
+- **Multi-provider support** — Compatible with mainstream Coding Plans and direct API access. Not locked to any single vendor.
 - **File attachment** — Attach files directly to your conversation for the agent to analyze.
 - **Streaming responses** — See the agent's thinking and actions in real-time.
 - **Background execution** — Switch to another session while the agent works, get notified when it's done.
@@ -83,8 +56,11 @@ Onit 计划打包本地模型部署框架，在用户设备上运行端侧模型
 
 - **多会话支持** — 同时运行多个 Agent 会话，自由切换。
 - **内置工具集** — 文件读写编辑删除、目录列表、内容搜索、命令执行、任务管理。
+- **三种权限模式** — Plan Mode（确认所有操作）、AcceptEdit（智能确认）、Full Access（自动执行）。
+- **Skills 体系** — 支持内建、自建与导入，Agent 能力按需扩展。
 - **定时任务** — 设置周期性自动执行的任务。
 - **工作区 (Working Place)** — 以文件夹为单位选择工作区，Agent 操作范围限定在工作区内，权限边界清晰可控。
+- **多服务商支持** — 兼容主流 Coding Plan，同时支持 API Key 直接调用，不绑定任何单一服务商。
 - **文件附件** — 直接附加文件到对话中供 Agent 分析。
 - **流式响应** — 实时查看 Agent 的思考过程和操作动态。
 - **后台执行** — 切换到其他会话时 Agent 继续工作，完成后通知你。
