@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
-import type { ApiConfig, BillingMode } from '../types'
-import { AVAILABLE_MODELS } from '../types'
+import type { ApiConfig, BillingMode, CodingPlanProvider } from '../types'
+import { AVAILABLE_MODELS, CODING_PLAN_PROVIDERS } from '../types'
 import { Zap, Key, Globe, ChevronDown, ArrowRight } from 'lucide-react'
 
 export default function Login() {
   const { login } = useSettingsStore()
   const [billingMode, setBillingMode] = useState<BillingMode>('coding-plan')
+  const [provider, setProvider] = useState<CodingPlanProvider>('qianfan')
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('qianfan-code-latest')
   const [customBaseUrl, setCustomBaseUrl] = useState('')
@@ -24,6 +25,7 @@ export default function Login() {
       apiKey: apiKey.trim(),
       model,
       customBaseUrl: customBaseUrl.trim() || undefined,
+      codingPlanProvider: billingMode === 'coding-plan' ? provider : undefined,
     }
 
     login(config)
@@ -66,7 +68,8 @@ export default function Login() {
               <button
                 onClick={() => {
                   setBillingMode('coding-plan')
-                  setModel('qianfan-code-latest')
+                  const config = CODING_PLAN_PROVIDERS.find(c => c.id === provider)
+                  setModel(config?.model || 'qianfan-code-latest')
                 }}
                 className={`flex-1 py-2 px-3 text-xs font-medium rounded-sm border transition-all ${
                   billingMode === 'coding-plan'
@@ -91,6 +94,30 @@ export default function Login() {
               </button>
             </div>
           </div>
+
+          {/* Provider Selection (only for Coding Plan mode) */}
+          {billingMode === 'coding-plan' && (
+            <div>
+              <label className="label">Provider</label>
+              <div className="relative">
+                <select
+                  value={provider}
+                  onChange={(e) => {
+                    const p = e.target.value as CodingPlanProvider
+                    setProvider(p)
+                    const config = CODING_PLAN_PROVIDERS.find(c => c.id === p)
+                    if (config) setModel(config.model)
+                  }}
+                  className="input appearance-none pr-8"
+                >
+                  {CODING_PLAN_PROVIDERS.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
+              </div>
+            </div>
+          )}
 
           {/* API Key */}
           <div>
@@ -152,7 +179,7 @@ export default function Login() {
                   value={customBaseUrl}
                   onChange={(e) => setCustomBaseUrl(e.target.value)}
                   placeholder={billingMode === 'coding-plan'
-                    ? 'https://qianfan.baidubce.com/v2/coding/chat/completions'
+                    ? CODING_PLAN_PROVIDERS.find(c => c.id === provider)?.baseUrl || ''
                     : 'https://qianfan.baidubce.com/v2/chat/completions'}
                   className="input text-xs"
                 />

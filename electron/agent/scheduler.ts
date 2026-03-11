@@ -27,7 +27,7 @@ export class SchedulerManager {
   private dataDir: string
   private agentManager: AgentManager
   private jobs: Map<string, schedule.Job> = new Map()
-  private apiConfig: { billingMode: string; apiKey: string; customBaseUrl?: string } | null = null
+  private apiConfig: { billingMode: string; apiKey: string; customBaseUrl?: string; codingPlanProvider?: string } | null = null
 
   constructor(dataDir: string, agentManager: AgentManager) {
     this.dataDir = dataDir
@@ -35,7 +35,7 @@ export class SchedulerManager {
     this.loadAndScheduleAll()
   }
 
-  setApiConfig(config: { billingMode: string; apiKey: string; customBaseUrl?: string }): void {
+  setApiConfig(config: { billingMode: string; apiKey: string; customBaseUrl?: string; codingPlanProvider?: string }): void {
     this.apiConfig = config
   }
 

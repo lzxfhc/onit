@@ -84,7 +84,7 @@ export default function MessageList({ messages, isRunning }: Props) {
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto pt-14 pb-4"
+      className="flex-1 overflow-y-auto pb-4"
     >
       <div className="max-w-3xl mx-auto px-6">
         {messages.map((message, idx) => (

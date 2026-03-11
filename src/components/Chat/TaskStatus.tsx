@@ -33,7 +33,7 @@ function TaskStatusPanel({ session }: Props) {
   }
 
   return (
-    <div className="w-72 border-l border-border-subtle bg-surface flex flex-col h-full pt-14">
+    <div className="w-72 border-l border-border-subtle bg-surface flex flex-col h-full">
       {/* Tabs */}
       <div className="flex border-b border-border-subtle">
         <PanelTabButton

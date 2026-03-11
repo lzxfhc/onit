@@ -1,10 +1,26 @@
 export type BillingMode = 'coding-plan' | 'api-call'
 
+export type CodingPlanProvider = 'qianfan' | 'volcengine' | 'dashscope'
+
+export interface CodingPlanProviderConfig {
+  id: CodingPlanProvider
+  name: string
+  baseUrl: string
+  model: string
+}
+
+export const CODING_PLAN_PROVIDERS: CodingPlanProviderConfig[] = [
+  { id: 'qianfan', name: '百度千帆', baseUrl: 'https://qianfan.baidubce.com/v2/coding/chat/completions', model: 'qianfan-code-latest' },
+  { id: 'volcengine', name: '火山方舟', baseUrl: 'https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions', model: 'ark-code-latest' },
+  { id: 'dashscope', name: '阿里百炼', baseUrl: 'https://coding.dashscope.aliyuncs.com/v1/chat/completions', model: 'qwen3.5-plus' },
+]
+
 export interface ApiConfig {
   billingMode: BillingMode
   apiKey: string
   model: string
   customBaseUrl?: string
+  codingPlanProvider?: CodingPlanProvider
 }
 
 export type PermissionMode = 'plan' | 'accept-edit' | 'full-access'
@@ -175,6 +191,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     billingMode: 'coding-plan',
     apiKey: '',
     model: 'qianfan-code-latest',
+    codingPlanProvider: 'qianfan',
   },
   defaultPermissionMode: 'accept-edit',
   maxParallelTasks: 3,

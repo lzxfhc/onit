@@ -23,7 +23,7 @@ interface PendingStreamChunks {
   chunks: StreamChunk[]
 }
 
-export default function ChatView() {
+export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }) {
   const activeSession = useSessionStore(state =>
     state.sessions.find(session => session.id === state.activeSessionId) || null,
   )
@@ -252,10 +252,20 @@ export default function ChatView() {
         />
       </div>
 
-      {(activeSession.tasks.length > 0 || activeSession.workspaceFiles.length > 0 ||
-        activeSession.messages.some(m => m.toolCalls && m.toolCalls.length > 0)) && (
-        <TaskStatusPanel session={activeSession} />
-      )}
+      <div
+        className={`shrink-0 transition-[width] duration-200 ease-out overflow-hidden ${
+          rightPanelOpen ? 'w-72' : 'w-0'
+        }`}
+        aria-hidden={!rightPanelOpen}
+      >
+        <div
+          className={`w-72 h-full transition-opacity duration-200 ${
+            rightPanelOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'
+          }`}
+        >
+          <TaskStatusPanel session={activeSession} />
+        </div>
+      </div>
     </div>
   )
 }

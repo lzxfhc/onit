@@ -25,7 +25,7 @@ const api = {
   deleteScheduledTask: (data: { id: string }) => ipcRenderer.invoke('scheduler:delete', data),
   toggleScheduledTask: (data: { id: string; enabled: boolean }) => ipcRenderer.invoke('scheduler:toggle', data),
   runScheduledTaskNow: (data: { id: string }) => ipcRenderer.invoke('scheduler:run-now', data),
-  setSchedulerApiConfig: (config: { billingMode: string; apiKey: string; customBaseUrl?: string }) =>
+  setSchedulerApiConfig: (config: { billingMode: string; apiKey: string; customBaseUrl?: string; codingPlanProvider?: string }) =>
     ipcRenderer.invoke('scheduler:set-api-config', config),
 
   // Skills

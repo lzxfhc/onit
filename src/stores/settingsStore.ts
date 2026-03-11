@@ -75,6 +75,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         billingMode: config.billingMode,
         apiKey: config.apiKey,
         customBaseUrl: config.customBaseUrl,
+        codingPlanProvider: config.codingPlanProvider,
       })
     } catch {}
   },
@@ -97,6 +98,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
               billingMode: settings.apiConfig.billingMode,
               apiKey: settings.apiConfig.apiKey,
               customBaseUrl: settings.apiConfig.customBaseUrl,
+              codingPlanProvider: settings.apiConfig.codingPlanProvider,
             })
           } catch {}
         }

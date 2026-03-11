@@ -225,5 +225,4 @@
 /* GPU-accelerate spin animation to prevent jank */
 .animate-spin {
   will-change: transform;
-  transform: translateZ(0);
 }

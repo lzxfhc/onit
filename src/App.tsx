@@ -1,9 +1,10 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { shallow } from 'zustand/shallow'
 import { useSettingsStore } from './stores/settingsStore'
 import { useSessionStore } from './stores/sessionStore'
 import Login from './components/Login'
 import Sidebar from './components/Sidebar'
+import TopBar from './components/TopBar'
 import ChatView from './components/Chat'
 import PermissionDialog from './components/Dialogs/PermissionDialog'
 import type { Session } from './types'
@@ -21,6 +22,8 @@ export default function App() {
     registerExternalSession: state.registerExternalSession,
     saveSession: state.saveSession,
   }), shallow)
+
+  const [rightPanelOpen, setRightPanelOpen] = useState(true)
 
   useEffect(() => {
     loadSettings()
@@ -68,15 +71,18 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-canvas overflow-hidden">
-      {/* Title bar drag area */}
-      <div className="fixed top-0 left-0 right-0 h-12 drag-region z-40" />
+      {/* Top Bar */}
+      <TopBar
+        rightPanelOpen={rightPanelOpen}
+        onToggleRightPanel={() => setRightPanelOpen(prev => !prev)}
+      />
 
       {/* Sidebar */}
       <Sidebar />
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col min-w-0">
-        <ChatView />
+      <main className="flex-1 flex flex-col min-w-0 pt-12">
+        <ChatView rightPanelOpen={rightPanelOpen} />
       </main>
 
       {/* Permission dialogs */}

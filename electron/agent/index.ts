@@ -59,6 +59,7 @@ interface AgentSession {
     billingMode: string
     apiKey: string
     customBaseUrl?: string
+    codingPlanProvider?: string
   }
   alwaysAllowedTools: Set<string>
   pendingPermissions: Map<string, { resolve: (approved: boolean) => void }>
@@ -131,6 +132,7 @@ export class AgentManager {
         billingMode: apiConfig.billingMode || 'coding-plan',
         apiKey: apiConfig.apiKey || '',
         customBaseUrl: apiConfig.customBaseUrl,
+        codingPlanProvider: apiConfig.codingPlanProvider,
       },
       alwaysAllowedTools: agentSession?.alwaysAllowedTools || new Set(),
       pendingPermissions: new Map(),
@@ -537,12 +539,30 @@ ${permissionMode === 'full-access' ? 'In Full Access mode: execute tasks autonom
 When providing final results, format them clearly with markdown. For code, use appropriate syntax highlighting.${skillsSection}`
   }
 
-  private getApiUrl(apiConfig: { billingMode: string; customBaseUrl?: string }): string {
+  private getApiUrl(apiConfig: { billingMode: string; customBaseUrl?: string; codingPlanProvider?: string }): string {
     if (apiConfig.customBaseUrl) return apiConfig.customBaseUrl
     if (apiConfig.billingMode === 'coding-plan') {
-      return 'https://qianfan.baidubce.com/v2/coding/chat/completions'
+      return this.getCodingPlanUrl(apiConfig.codingPlanProvider)
     }
     return 'https://qianfan.baidubce.com/v2/chat/completions'
+  }
+
+  private getCodingPlanUrl(provider?: string): string {
+    const urls: Record<string, string> = {
+      qianfan: 'https://qianfan.baidubce.com/v2/coding/chat/completions',
+      volcengine: 'https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions',
+      dashscope: 'https://coding.dashscope.aliyuncs.com/v1/chat/completions',
+    }
+    return urls[provider || 'qianfan'] || urls.qianfan
+  }
+
+  private getCodingPlanModel(provider?: string): string {
+    const models: Record<string, string> = {
+      qianfan: 'qianfan-code-latest',
+      volcengine: 'ark-code-latest',
+      dashscope: 'qwen3.5-plus',
+    }
+    return models[provider || 'qianfan'] || 'qianfan-code-latest'
   }
 
   private async callLLM(
@@ -551,7 +571,7 @@ When providing final results, format them clearly with markdown. For code, use a
   ): Promise<{ content: string; toolCalls: any[] }> {
     const url = this.getApiUrl(agentSession.apiConfig)
     const model = agentSession.apiConfig.billingMode === 'coding-plan'
-      ? 'qianfan-code-latest'
+      ? this.getCodingPlanModel(agentSession.apiConfig.codingPlanProvider)
       : agentSession.model
 
     const body = JSON.stringify({
