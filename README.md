@@ -157,8 +157,8 @@ npm run build:win
 | 版本 | 日期 | 主要更新 |
 |------|------|---------|
 | v1.2.0 | 2025-03 | 多平台 Coding Plan、顶部程序栏、右侧面板、搜索工具修复 |
-| v1.1.0 | 2025-02 | Skills 系统、Web 工具（搜索 + 抓取）、定时任务增强 |
-| v1.0.0 | 2025-01 | 首个版本 — Agent 循环、文件工具、权限系统、多会话 |
+| v1.1.0 | 2025-03 | Skills 系统、Web 工具（搜索 + 抓取）、定时任务增强 |
+| v1.0.0 | 2025-02 | 首个版本 — Agent 循环、文件工具、权限系统、多会话 |
 
 ## 备注
 
@@ -257,8 +257,8 @@ Click the **Workspace** button in the input area to select a folder. The agent w
 | Version | Date | Highlights |
 |---------|------|-----------|
 | v1.2.0 | 2025-03 | Multi-provider Coding Plan, TopBar, right panel, search tool fixes |
-| v1.1.0 | 2025-02 | Skills system, web tools (search + fetch), scheduled task enhancements |
-| v1.0.0 | 2025-01 | Initial release — agent loop, file tools, permission system, multi-session |
+| v1.1.0 | 2025-03 | Skills system, web tools (search + fetch), scheduled task enhancements |
+| v1.0.0 | 2025-02 | Initial release — agent loop, file tools, permission system, multi-session |
 
 ## Notes
 
