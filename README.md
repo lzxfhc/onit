@@ -1,6 +1,8 @@
 # Onit - Desktop AI Agent
 
 > Your reliable AI assistant, right on your desktop.
+>
+> 你的桌面 AI 助手，就在你身边。
 
 [English](#english) | [中文](#中文)
 
