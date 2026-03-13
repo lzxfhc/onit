@@ -1808,7 +1808,9 @@ When providing final results, format them clearly with markdown. For code, use a
           }
 
           // Execute the tool
-          const result = await executeTool(toolName, toolArgs, agentSession.workspacePath)
+          const result = await executeTool(toolName, toolArgs, agentSession.workspacePath, {
+            signal: agentSession.abortController?.signal,
+          })
 
           // Handle task list updates
           if (toolName === 'create_task_list') {
