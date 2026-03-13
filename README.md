@@ -14,6 +14,10 @@
 
 **Onit** 是一款原生桌面 AI Agent 应用，支持 macOS 和 Windows。不同于浏览器中的 AI 聊天工具，Onit 直接运行在你的电脑上，能够读写文件、编写代码、执行命令、搜索网页、管理任务——全部通过自然对话完成。
 
+<p align="center">
+  <img src="docs/screenshots/main-interface.png" width="720" alt="Onit 主界面" />
+</p>
+
 **核心理念：**
 
 - **透明** — Agent 的每一步操作对你完全可见。它读了哪个文件、运行了什么命令，你一目了然。
@@ -28,6 +32,13 @@
 - **多平台 Coding Plan** — 支持主流厂商coding plan，支持api模型调用。
 - **三种权限模式** — Plan 模式（确认所有操作）、AcceptEdit（智能确认）、Full Access（自动执行）。
 - **定时任务** — 设置周期性自动执行的任务。
+
+<p align="center">
+  <img src="docs/screenshots/scheduled-tasks.png" width="280" alt="定时任务" />
+  <br/>
+  <em>定时任务管理</em>
+</p>
+
 - **工作区感知** — 选择工作目录，让 Agent 专注于你的项目。
 - **文件附件** — 直接附加文件到对话中供 Agent 分析。
 - **后台执行** — 切换到其他会话时 Agent 继续工作，完成后通知你。
@@ -68,6 +79,18 @@
 - **Coding Plan** — 为编码任务优化。支持千帆、火山引擎、灵积三个 Provider。
 - **API Call** — 可选择多种模型（ERNIE 4.5、DeepSeek V3 等）。
 
+<p align="center">
+  <img src="docs/screenshots/coding-plan-providers.png" width="620" alt="Coding Plan 多平台支持" />
+  <br/>
+  <em>Coding Plan 模式 — 支持多个 Provider</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/api-login.png" width="620" alt="API Call 模式" />
+  <br/>
+  <em>API Call 模式 — 灵活选择模型</em>
+</p>
+
 ### 2. 开始对话
 
 用自然语言输入你的需求。例如：
@@ -80,6 +103,12 @@
 
 在输入框中输入 `@` 调用 Skill。Skills 是可自定义的提示词模板，用于常见任务场景。
 
+<p align="center">
+  <img src="docs/screenshots/skills-system.png" width="280" alt="Skills 系统" />
+  <br/>
+  <em>内置 Skills + 自定义扩展</em>
+</p>
+
 ### 4. 设置工作区
 
 点击输入区域的 **Workspace** 按钮选择文件夹。Agent 将了解你项目文件的上下文。
@@ -89,6 +118,12 @@
 - **Plan 模式** — Agent 在执行任何文件操作或命令前都会征求确认。适合了解 Agent 的工作方式。
 - **AcceptEdit** — 智能默认：安全操作自动执行，敏感操作询问许可。推荐使用。
 - **Full Access** — 所有操作自动执行。仅在完全信任任务时使用。
+
+<p align="center">
+  <img src="docs/screenshots/permission-modes.png" width="480" alt="三种权限模式" />
+  <br/>
+  <em>Plan / AcceptEdit / Full Access 三种模式</em>
+</p>
 
 ## 项目结构
 
@@ -176,6 +211,10 @@ npm run build:win
 
 **Onit** is a native desktop AI agent application for macOS and Windows. Unlike browser-based AI chat tools, Onit runs directly on your computer, capable of reading files, writing code, executing commands, searching the web, and managing tasks — all through natural conversation.
 
+<p align="center">
+  <img src="docs/screenshots/main-interface.png" width="720" alt="Onit Main Interface" />
+</p>
+
 **Core Philosophy:**
 
 - **Transparent** — Every action the agent takes is visible to you. You see every file it reads, every command it runs.
@@ -230,6 +269,18 @@ On first launch, you'll need to enter your API key. Onit supports two billing mo
 - **Coding Plan** — Optimized for coding tasks. Supports Qianfan, Volcengine, and Dashscope providers.
 - **API Call** — Choose from multiple models (ERNIE 4.5, DeepSeek V3, etc.).
 
+<p align="center">
+  <img src="docs/screenshots/coding-plan-providers.png" width="620" alt="Coding Plan Providers" />
+  <br/>
+  <em>Coding Plan — Multiple providers supported</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/api-login.png" width="620" alt="API Call Mode" />
+  <br/>
+  <em>API Call — Flexible model selection</em>
+</p>
+
 ### 2. Start a Conversation
 
 Type your request in natural language. For example:
@@ -242,6 +293,12 @@ Type your request in natural language. For example:
 
 Type `@` in the input box to invoke a skill. Skills are customizable prompt templates for common tasks.
 
+<p align="center">
+  <img src="docs/screenshots/skills-system.png" width="280" alt="Skills System" />
+  <br/>
+  <em>Built-in skills + custom extensions</em>
+</p>
+
 ### 4. Set a Workspace
 
 Click the **Workspace** button in the input area to select a folder. The agent will have context about your project files.
@@ -251,6 +308,12 @@ Click the **Workspace** button in the input area to select a folder. The agent w
 - **Plan Mode** — Agent asks before any file operation or command. Best for learning what the agent does.
 - **AcceptEdit** — Smart defaults: safe operations run automatically, sensitive ones ask for permission. Recommended.
 - **Full Access** — Everything runs automatically. Use only when you fully trust the task.
+
+<p align="center">
+  <img src="docs/screenshots/permission-modes.png" width="480" alt="Permission Modes" />
+  <br/>
+  <em>Plan / AcceptEdit / Full Access</em>
+</p>
 
 ## Version History
 
