@@ -113,6 +113,19 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
       sessionStore.saveSession(sessionId)
     })
 
+    const unsubMemoryUpdate = window.electronAPI.onAgentMemoryUpdate((data: any) => {
+      const { sessionId, runId, memory } = data
+      flushRun(sessionId, runId)
+
+      const sessionStore = useSessionStore.getState()
+      const session = sessionStore.sessions.find(s => s.id === sessionId)
+      // Memory updates are associated with a specific run. Ignore stale events.
+      if (session?.activeRunId && runId && session.activeRunId !== runId) return
+
+      sessionStore.updateSession(sessionId, { sessionMemory: memory })
+      sessionStore.saveSession(sessionId)
+    })
+
     const unsubPermission = window.electronAPI.onPermissionRequest((data: any) => {
       if (!isCurrentRun(data.sessionId, data.runId)) return
       useSettingsStore.getState().addPermissionRequest(data)
@@ -137,6 +150,7 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
       unsubStream()
       unsubComplete()
       unsubError()
+      unsubMemoryUpdate()
       unsubPermission()
       unsubTaskUpdate()
       unsubWorkspaceFiles()

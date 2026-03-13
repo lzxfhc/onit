@@ -64,18 +64,23 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   login: (config) => {
+    const mergedConfig: ApiConfig = {
+      ...DEFAULT_SETTINGS.apiConfig,
+      ...get().settings.apiConfig,
+      ...config,
+    }
     set(state => ({
       isLoggedIn: true,
-      settings: { ...state.settings, apiConfig: config },
+      settings: { ...state.settings, apiConfig: mergedConfig },
     }))
     get().saveSettings()
     // Sync API config to scheduler
     try {
       window.electronAPI.setSchedulerApiConfig({
-        billingMode: config.billingMode,
-        apiKey: config.apiKey,
-        customBaseUrl: config.customBaseUrl,
-        codingPlanProvider: config.codingPlanProvider,
+        billingMode: mergedConfig.billingMode,
+        apiKey: mergedConfig.apiKey,
+        customBaseUrl: mergedConfig.customBaseUrl,
+        codingPlanProvider: mergedConfig.codingPlanProvider,
       })
     } catch {}
   },
@@ -88,7 +93,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       const stored = localStorage.getItem(SETTINGS_KEY)
       if (stored) {
-        const settings = JSON.parse(stored) as AppSettings
+        const parsed = JSON.parse(stored) as Partial<AppSettings>
+        // Merge with defaults so newly-added fields always have sane values.
+        const settings: AppSettings = {
+          ...DEFAULT_SETTINGS,
+          ...parsed,
+          apiConfig: {
+            ...DEFAULT_SETTINGS.apiConfig,
+            ...(parsed.apiConfig || {}),
+          },
+        }
         const isLoggedIn = !!settings.apiConfig.apiKey
         set({ settings, isLoggedIn })
         // Sync API config to scheduler on load

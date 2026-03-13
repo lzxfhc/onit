@@ -1,5 +1,6 @@
 import { memo, useState, useRef, useEffect, useCallback } from 'react'
 import { shallow } from 'zustand/shallow'
+import { pathBasename } from '../../utils/platform'
 import {
   Send, Square, FolderOpen, Paperclip, ChevronDown,
   X, FileText, Shield, ShieldCheck, ShieldOff,
@@ -239,7 +240,7 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
             {session.attachedFiles.map(filePath => (
               <span key={filePath} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-50 border border-border-subtle rounded text-[10px] text-text-secondary">
                 <FileText className="w-3 h-3" />
-                {filePath.split('/').pop()}
+                {pathBasename(filePath)}
                 <button
                   onClick={() => session.removeAttachedFile(session.id, filePath)}
                   className="hover:text-danger transition-colors"
@@ -308,7 +309,7 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
                 title={session.workspacePath || 'Select workspace folder'}
               >
                 <FolderOpen className="w-3 h-3" />
-                {session.workspacePath ? session.workspacePath.split('/').pop() : 'Workspace'}
+                {session.workspacePath ? pathBasename(session.workspacePath) : 'Workspace'}
               </button>
 
               <button

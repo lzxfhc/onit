@@ -1,4 +1,5 @@
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
 import https from 'https'
@@ -16,6 +17,9 @@ export const AGENT_TOOLS: AgentToolDef[] = [
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Absolute path to the file to read' },
+          start_line: { type: 'number', description: 'Optional 1-based start line (inclusive)' },
+          end_line: { type: 'number', description: 'Optional 1-based end line (inclusive)' },
+          max_length: { type: 'number', description: 'Optional maximum characters to return (default 20000)' },
         },
         required: ['path'],
       },
@@ -202,9 +206,25 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
       return 'dangerous'
     case 'execute_command': {
       const cmd = (args.command || '').toLowerCase()
-      const dangerousPatterns = ['rm -rf', 'rm -r', 'rmdir', 'format', 'mkfs', 'dd if=', 'chmod -R', 'chown -R', 'kill -9', 'pkill', 'shutdown', 'reboot']
+      const dangerousPatterns = [
+        'rm -rf', 'rm -r', 'rmdir', 'format', 'mkfs', 'dd if=',
+        'chmod -R', 'chown -R', 'kill -9', 'pkill', 'shutdown', 'reboot',
+        // Windows dangerous
+        'del /f /s /q', 'del /s /q', 'rd /s /q', 'rmdir /s /q',
+        'remove-item -recurse -force', 'format-volume',
+        'diskpart', 'shutdown /s', 'shutdown /r',
+        'stop-process -force', 'taskkill /f',
+      ]
       if (dangerousPatterns.some(p => cmd.includes(p))) return 'dangerous'
-      const moderatePatterns = ['rm ', 'mv ', 'cp ', 'install', 'uninstall', 'pip', 'npm', 'brew', 'curl', 'wget', 'git push', 'git reset']
+      const moderatePatterns = [
+        'rm ', 'mv ', 'cp ', 'install', 'uninstall',
+        'pip', 'npm', 'brew', 'curl', 'wget',
+        'git push', 'git reset',
+        // Windows moderate
+        'del ', 'move ', 'copy ', 'xcopy', 'robocopy',
+        'choco ', 'scoop ', 'winget ',
+        'set-executionpolicy', 'new-service',
+      ]
       if (moderatePatterns.some(p => cmd.includes(p))) return 'moderate'
       return 'safe'
     }
@@ -217,7 +237,7 @@ function globMatch(pattern: string, filename: string): boolean {
   const regex = pattern
     .replace(/\./g, '\.')
     .replace(/\*\*/g, '{{GLOBSTAR}}')
-    .replace(/\*/g, '[^/]*')
+    .replace(/\*/g, '[^/\\\\]*')
     .replace(/\{\{GLOBSTAR\}\}/g, '.*')
   return new RegExp(`^${regex}$`).test(filename)
 }
@@ -481,12 +501,65 @@ export async function executeTool(
           return { success: false, output: `File not found: ${filePath}`, riskLevel }
         }
         const stat = fs.statSync(filePath)
-        if (stat.size > 1024 * 1024) {
-          const content = fs.readFileSync(filePath, 'utf-8').substring(0, 50000)
-          return { success: true, output: content + '\n\n[File truncated - showing first 50000 characters]', riskLevel }
+
+        const maxLengthRaw = typeof args.max_length === 'number' && Number.isFinite(args.max_length)
+          ? Math.max(1, Math.floor(args.max_length))
+          : 20000
+        const maxLength = Math.min(maxLengthRaw, 240000)
+
+        const startLineRaw = typeof args.start_line === 'number' && Number.isFinite(args.start_line)
+          ? Math.max(1, Math.floor(args.start_line))
+          : null
+        const endLineRaw = typeof args.end_line === 'number' && Number.isFinite(args.end_line)
+          ? Math.max(1, Math.floor(args.end_line))
+          : null
+
+        const wantsLineRange = startLineRaw !== null || endLineRaw !== null
+
+        // If the file is large and the caller didn't ask for a line range, avoid
+        // reading the entire file into memory.
+        if (!wantsLineRange && stat.size > 4 * 1024 * 1024) {
+          const bytesToRead = Math.min(stat.size, maxLength)
+          const fd = fs.openSync(filePath, 'r')
+          try {
+            const buffer = Buffer.alloc(bytesToRead)
+            fs.readSync(fd, buffer, 0, bytesToRead, 0)
+            const excerpt = buffer.toString('utf-8')
+            return {
+              success: true,
+              output: `${excerpt}\n\n[File truncated - large file; showing first ${bytesToRead} bytes. Use start_line/end_line or increase max_length.]`,
+              riskLevel,
+            }
+          } finally {
+            fs.closeSync(fd)
+          }
         }
+
         const content = fs.readFileSync(filePath, 'utf-8')
-        return { success: true, output: content, riskLevel }
+
+        let output = content
+        const notes: string[] = []
+
+        if (wantsLineRange) {
+          const lines = content.split('\n')
+          const totalLines = lines.length
+          const startLine = startLineRaw ?? 1
+          const endLine = Math.min(endLineRaw ?? totalLines, totalLines)
+
+          output = lines.slice(startLine - 1, endLine).join('\n')
+          notes.push(`[Showing lines ${startLine}-${endLine} of ${totalLines}]`)
+        }
+
+        if (output.length > maxLength) {
+          output = output.substring(0, maxLength)
+          notes.push(`[File truncated - showing first ${maxLength} characters. Use start_line/end_line or increase max_length.]`)
+        }
+
+        if (notes.length > 0) {
+          output = `${notes.join(' ')}\n\n${output}`
+        }
+
+        return { success: true, output, riskLevel }
       }
 
       case 'write_file': {
@@ -525,7 +598,7 @@ export async function executeTool(
       }
 
       case 'list_directory': {
-        const dirPath = args.path || workspacePath || process.env.HOME || '/'
+        const dirPath = args.path || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
         if (!fs.existsSync(dirPath)) {
           return { success: false, output: `Directory not found: ${dirPath}`, riskLevel }
         }
@@ -539,7 +612,7 @@ export async function executeTool(
 
       case 'search_files': {
         const results: string[] = []
-        searchFilesRecursive(args.directory, args.pattern, results)
+        await searchFilesRecursive(args.directory, args.directory, args.pattern, results, { visited: 0 })
         if (results.length === 0) {
           return { success: true, output: `No files matching "${args.pattern}" found in ${args.directory}`, riskLevel }
         }
@@ -548,7 +621,7 @@ export async function executeTool(
 
       case 'search_content': {
         const results: string[] = []
-        searchContentRecursive(args.directory, args.query, args.file_pattern, results)
+        await searchContentRecursive(args.directory, args.directory, args.query, args.file_pattern, results, { visited: 0 })
         if (results.length === 0) {
           return { success: true, output: `No matches for "${args.query}" found in ${args.directory}`, riskLevel }
         }
@@ -556,7 +629,7 @@ export async function executeTool(
       }
 
       case 'execute_command': {
-        const cwd = args.working_directory || workspacePath || process.env.HOME || '/'
+        const cwd = args.working_directory || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
         return runCommand(args.command, cwd, riskLevel)
       }
 
@@ -688,14 +761,16 @@ function parseBingResults(html: string, maxResults: number): SearchResult[] {
 }
 
 const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'User-Agent': process.platform === 'win32'
+    ? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    : 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7',
   'Accept-Encoding': 'identity',
   'Cache-Control': 'no-cache',
   'Sec-Ch-Ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
   'Sec-Ch-Ua-Mobile': '?0',
-  'Sec-Ch-Ua-Platform': '"macOS"',
+  'Sec-Ch-Ua-Platform': process.platform === 'win32' ? '"Windows"' : '"macOS"',
   'Sec-Fetch-Dest': 'document',
   'Sec-Fetch-Mode': 'navigate',
   'Sec-Fetch-Site': 'none',

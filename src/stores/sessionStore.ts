@@ -67,6 +67,7 @@ const createDefaultSession = (name?: string): Session => ({
   model: 'qianfan-code-latest',
   tasks: [],
   workspaceFiles: [],
+  sessionMemory: null,
   activeRunId: null,
   createdAt: Date.now(),
   updatedAt: Date.now(),

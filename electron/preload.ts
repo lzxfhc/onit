@@ -40,6 +40,7 @@ const api = {
 
   // App
   getDataPath: () => ipcRenderer.invoke('app:get-data-path'),
+  getPlatform: () => process.platform,
 
   // Events
   onAgentStream: (callback: (data: any) => void) => {
@@ -56,6 +57,11 @@ const api = {
     const listener = (_event: any, data: any) => callback(data)
     ipcRenderer.on('agent:error', listener)
     return () => ipcRenderer.removeListener('agent:error', listener)
+  },
+  onAgentMemoryUpdate: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('agent:memory-update', listener)
+    return () => ipcRenderer.removeListener('agent:memory-update', listener)
   },
   onPermissionRequest: (callback: (data: any) => void) => {
     const listener = (_event: any, data: any) => callback(data)

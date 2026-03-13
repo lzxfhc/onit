@@ -21,6 +21,19 @@ export interface ApiConfig {
   model: string
   customBaseUrl?: string
   codingPlanProvider?: CodingPlanProvider
+  /**
+   * Soft limit for prompt (input) tokens that Onit will try to stay under by
+   * pruning / compressing history before sending requests.
+   *
+   * Note: The upstream model may have a smaller context window. Onit will fall
+   * back if the provider rejects the request due to context limits.
+   */
+  maxInputTokens?: number
+  /**
+   * Requested maximum output tokens for the provider/model (passed as
+   * `max_tokens`). The provider may clamp or reject overly large values.
+   */
+  maxOutputTokens?: number
 }
 
 export type PermissionMode = 'plan' | 'accept-edit' | 'full-access'
@@ -34,6 +47,7 @@ export interface ToolCall {
   status: 'pending' | 'running' | 'completed' | 'error'
   result?: string
   error?: string
+  resultFilePath?: string
 }
 
 export interface ContentBlock {
@@ -83,11 +97,18 @@ export interface Session {
   model: string
   tasks: TaskItem[]
   workspaceFiles: WorkspaceFile[]
+  sessionMemory?: SessionMemory | null
   createdAt: number
   updatedAt: number
   isBackgroundRunning: boolean
   backgroundCompleted: boolean
   hasUnviewedResult: boolean
+}
+
+export interface SessionMemory {
+  content: string
+  updatedAt: number
+  version?: number
 }
 
 export type ScheduledFrequency = 'manual' | 'once' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'weekdays'
@@ -135,6 +156,7 @@ export interface IpcChannels {
   'agent:stream': { sessionId: string; runId: string; chunk: StreamChunk }
   'agent:complete': { sessionId: string; runId: string; status: 'completed' | 'stopped' }
   'agent:error': { sessionId: string; runId: string; error: string }
+  'agent:memory-update': { sessionId: string; runId: string; memory: SessionMemory | null }
   'agent:permission-request': PermissionRequest
   'agent:permission-response': { requestId: string; approved: boolean; alwaysAllow?: boolean }
   'agent:task-update': { sessionId: string; runId: string; tasks: TaskItem[] }
@@ -192,6 +214,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     apiKey: '',
     model: 'qianfan-code-latest',
     codingPlanProvider: 'qianfan',
+    maxInputTokens: 95000,
+    maxOutputTokens: 65000,
   },
   defaultPermissionMode: 'accept-edit',
   maxParallelTasks: 3,

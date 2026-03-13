@@ -176,11 +176,11 @@
 .markdown-content li { @apply leading-relaxed; }
 .markdown-content code:not(pre code) {
   @apply text-xs bg-gray-100 text-pink-600 px-1.5 py-0.5 rounded;
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
 }
 .markdown-content pre {
   @apply bg-terminal text-gray-200 rounded p-4 overflow-x-auto mb-3;
-  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', Consolas, monospace;
 }
 .markdown-content pre code {
   @apply bg-transparent text-inherit p-0 text-xs leading-relaxed;

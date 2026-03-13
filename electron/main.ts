@@ -13,6 +13,7 @@ let skillManager: SkillManager
 const DATA_DIR = path.join(app.getPath('userData'), 'onit-data')
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions')
 const SCHEDULED_DIR = path.join(DATA_DIR, 'scheduled')
+const ARTIFACTS_DIR = path.join(DATA_DIR, 'artifacts')
 const USER_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'user')
 const IMPORTED_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'imported')
 
@@ -26,21 +27,22 @@ function getPrebuiltSkillsDir(): string {
 }
 
 function ensureDirectories() {
-  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR]) {
+  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, ARTIFACTS_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
     }
   }
 }
 
+const isMac = process.platform === 'darwin'
+const isWin = process.platform === 'win32'
+
 function createWindow() {
-  mainWindow = new BrowserWindow({
+  const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: 1400,
     height: 900,
     minWidth: 1000,
     minHeight: 700,
-    titleBarStyle: 'hiddenInset',
-    trafficLightPosition: { x: 16, y: 16 },
     backgroundColor: '#FAFAFA',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -49,7 +51,21 @@ function createWindow() {
       sandbox: false,
     },
     show: false,
-  })
+  }
+
+  if (isMac) {
+    windowOptions.titleBarStyle = 'hiddenInset'
+    windowOptions.trafficLightPosition = { x: 16, y: 16 }
+  } else if (isWin) {
+    windowOptions.titleBarStyle = 'hidden'
+    windowOptions.titleBarOverlay = {
+      color: '#FAFAFA',
+      symbolColor: '#1A1A2E',
+      height: 48,
+    }
+  }
+
+  mainWindow = new BrowserWindow(windowOptions)
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
@@ -237,7 +253,7 @@ app.whenReady().then(() => {
   ensureDirectories()
   agentManager = new AgentManager((channel, data) => {
     mainWindow?.webContents.send(channel, data)
-  })
+  }, { artifactsDir: ARTIFACTS_DIR })
   schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager)
   skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
 
