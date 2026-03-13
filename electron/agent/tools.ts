@@ -94,6 +94,10 @@ export const AGENT_TOOLS: AgentToolDef[] = [
         properties: {
           directory: { type: 'string', description: 'Root directory to search from' },
           pattern: { type: 'string', description: 'Glob pattern to match files (e.g., "*.ts", "**/*.json")' },
+          max_results: { type: 'number', description: 'Optional maximum number of results to return (default 200)' },
+          max_depth: { type: 'number', description: 'Optional maximum directory depth to traverse (default 20)' },
+          timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default 20000; in-workspace 90000)' },
+          max_entries: { type: 'number', description: 'Optional maximum directory entries to visit (default 120000; in-workspace 400000)' },
         },
         required: ['directory', 'pattern'],
       },
@@ -110,6 +114,12 @@ export const AGENT_TOOLS: AgentToolDef[] = [
           directory: { type: 'string', description: 'Root directory to search from' },
           query: { type: 'string', description: 'Text or regex pattern to search for' },
           file_pattern: { type: 'string', description: 'Optional file glob pattern to limit search (e.g., "*.ts")' },
+          max_results: { type: 'number', description: 'Optional maximum number of files to report matches from (default 120)' },
+          max_depth: { type: 'number', description: 'Optional maximum directory depth to traverse (default 16)' },
+          timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default 30000; in-workspace 150000)' },
+          max_entries: { type: 'number', description: 'Optional maximum directory entries to visit (default 80000; in-workspace 240000)' },
+          max_files: { type: 'number', description: 'Optional maximum number of files to scan (default 3000; in-workspace 20000)' },
+          max_read_bytes: { type: 'number', description: 'Optional maximum bytes to read per file (default 1048576; in-workspace 4194304; max 16777216)' },
         },
         required: ['directory', 'query'],
       },
@@ -242,15 +252,38 @@ function globMatch(pattern: string, filename: string): boolean {
   return new RegExp(`^${regex}$`).test(filename)
 }
 
-const SEARCH_MAX_FILE_RESULTS = 100
-const SEARCH_MAX_CONTENT_RESULTS = 50
-const SEARCH_MAX_FILE_DEPTH = 10
-const SEARCH_MAX_CONTENT_DEPTH = 8
-const SEARCH_MAX_READ_BYTES = 512 * 1024
+const SEARCH_MAX_FILE_RESULTS = 200
+const SEARCH_MAX_CONTENT_RESULTS = 120
+const SEARCH_MAX_FILE_DEPTH = 20
+const SEARCH_MAX_CONTENT_DEPTH = 16
+const SEARCH_DEFAULT_READ_BYTES = 1024 * 1024
+const SEARCH_DEFAULT_READ_BYTES_WORKSPACE = 4 * 1024 * 1024
+const SEARCH_MAX_READ_BYTES = 16 * 1024 * 1024
 const SEARCH_YIELD_INTERVAL = 120
+const SEARCH_FILES_TIMEOUT_MS = 20000
+const SEARCH_CONTENT_TIMEOUT_MS = 30000
+const SEARCH_FILES_TIMEOUT_MS_WORKSPACE = 90000
+const SEARCH_CONTENT_TIMEOUT_MS_WORKSPACE = 150000
+const SEARCH_MAX_VISITED_ENTRIES_FILES = 120000
+const SEARCH_MAX_VISITED_ENTRIES_CONTENT = 80000
+const SEARCH_MAX_VISITED_ENTRIES_FILES_WORKSPACE = 400000
+const SEARCH_MAX_VISITED_ENTRIES_CONTENT_WORKSPACE = 240000
+const SEARCH_MAX_SCANNED_FILES_CONTENT = 3000
+const SEARCH_MAX_SCANNED_FILES_CONTENT_WORKSPACE = 20000
+const SEARCH_MAX_TIMEOUT_MS = 10 * 60 * 1000
+const SEARCH_MIN_TIMEOUT_MS = 1000
 
 function shouldSkipSearchEntry(name: string): boolean {
-  return name.startsWith('.') || name === 'node_modules'
+  if (name.startsWith('.')) return true
+
+  const lower = name.toLowerCase()
+  if (lower === 'node_modules') return true
+
+  // Common "huge & rarely useful for code search" bundles.
+  const skippedSuffixes = ['.app', '.framework', '.dylib', '.dSYM'.toLowerCase(), '.xcarchive', '.pkg']
+  if (skippedSuffixes.some(suffix => lower.endsWith(suffix))) return true
+
+  return false
 }
 
 function normalizeRelativePath(rootDir: string, fullPath: string): string {
@@ -261,21 +294,106 @@ function matchesSearchPattern(pattern: string, fileName: string, relativePath: s
   return globMatch(pattern, fileName) || globMatch(pattern, relativePath)
 }
 
-async function maybeYieldTraversal(state: { visited: number }) {
+type SearchStopReason = 'aborted' | 'timeout' | 'max_entries' | 'max_files'
+
+interface SearchTraversalState {
+  visited: number
+  scannedFiles: number
+  startedAt: number
+  deadlineAt: number
+  maxEntries: number
+  maxFiles: number
+  stopReason: SearchStopReason | null
+  signal?: AbortSignal
+}
+
+function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.min(max, Math.max(min, Math.floor(value)))
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (timeoutMs <= 0) return promise
+
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      void promise.catch(() => {})
+      reject(new Error('timeout'))
+    }, timeoutMs)
+
+    promise.then(
+      value => {
+        clearTimeout(timer)
+        resolve(value)
+      },
+      error => {
+        clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
+
+function isSubPath(parentPath: string, childPath: string): boolean {
+  const parent = path.resolve(parentPath)
+  const child = path.resolve(childPath)
+
+  const relative = path.relative(parent, child)
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+function shouldStopSearch(state: SearchTraversalState): boolean {
+  if (state.stopReason) return true
+
+  if (state.signal?.aborted) {
+    state.stopReason = 'aborted'
+    return true
+  }
+
+  if (Date.now() >= state.deadlineAt) {
+    state.stopReason = 'timeout'
+    return true
+  }
+
+  if (state.visited > state.maxEntries) {
+    state.stopReason = 'max_entries'
+    return true
+  }
+
+  if (state.scannedFiles > state.maxFiles) {
+    state.stopReason = 'max_files'
+    return true
+  }
+
+  return false
+}
+
+async function maybeYieldTraversal(state: SearchTraversalState) {
   state.visited += 1
+  if (shouldStopSearch(state)) return
   if (state.visited % SEARCH_YIELD_INTERVAL === 0) {
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
 }
 
-async function readFileExcerpt(filePath: string, maxBytes: number): Promise<{ content: string; truncated: boolean } | null> {
+async function readFileExcerpt(
+  filePath: string,
+  maxBytes: number,
+  state: SearchTraversalState,
+): Promise<{ content: string; truncated: boolean } | null> {
   try {
-    const handle = await fs.promises.open(filePath, 'r')
+    if (shouldStopSearch(state)) return null
+    const handle = await withTimeout(fs.promises.open(filePath, 'r'), 2000)
     try {
-      const stats = await handle.stat()
+      if (shouldStopSearch(state)) return null
+      const stats = await withTimeout(handle.stat(), 2000)
       const bytesToRead = Math.min(stats.size, maxBytes)
       const buffer = Buffer.alloc(bytesToRead)
-      await handle.read(buffer, 0, bytesToRead, 0)
+      if (shouldStopSearch(state)) return null
+      const readTimeoutMs = Math.min(15000, 2000 + Math.floor(bytesToRead / 1024))
+      await withTimeout(handle.read(buffer, 0, bytesToRead, 0), readTimeoutMs)
+      // Skip binary-ish files (e.g., sqlite, images) to avoid huge overhead.
+      if (buffer.includes(0)) return null
       return {
         content: buffer.toString('utf-8'),
         truncated: stats.size > maxBytes,
@@ -293,33 +411,36 @@ async function searchFilesRecursive(
   rootDir: string,
   pattern: string,
   results: string[],
-  state: { visited: number },
-  maxDepth = SEARCH_MAX_FILE_DEPTH,
+  state: SearchTraversalState,
+  options: { maxDepth: number; maxResults: number },
   depth = 0,
 ): Promise<void> {
-  if (depth > maxDepth || results.length >= SEARCH_MAX_FILE_RESULTS) return
+  if (shouldStopSearch(state)) return
+  if (depth > options.maxDepth || results.length >= options.maxResults) return
 
   let entries: fs.Dirent[] = []
   try {
-    entries = await fs.promises.readdir(dir, { withFileTypes: true })
+    entries = await withTimeout(fs.promises.readdir(dir, { withFileTypes: true }), 8000)
   } catch {
     return
   }
 
   for (const entry of entries) {
     await maybeYieldTraversal(state)
+    if (shouldStopSearch(state)) return
     if (shouldSkipSearchEntry(entry.name)) continue
 
     const fullPath = path.join(dir, entry.name)
     const relativePath = normalizeRelativePath(rootDir, fullPath)
 
     if (entry.isDirectory()) {
-      await searchFilesRecursive(fullPath, rootDir, pattern, results, state, maxDepth, depth + 1)
+      await searchFilesRecursive(fullPath, rootDir, pattern, results, state, options, depth + 1)
     } else if (matchesSearchPattern(pattern, entry.name, relativePath)) {
       results.push(fullPath)
     }
 
-    if (results.length >= SEARCH_MAX_FILE_RESULTS) return
+    if (results.length >= options.maxResults) return
+    if (shouldStopSearch(state)) return
   }
 }
 
@@ -329,35 +450,40 @@ async function searchContentRecursive(
   query: string,
   filePattern: string | undefined,
   results: string[],
-  state: { visited: number },
-  maxDepth = SEARCH_MAX_CONTENT_DEPTH,
+  state: SearchTraversalState,
+  options: { maxDepth: number; maxResults: number; maxReadBytes: number },
   depth = 0,
 ): Promise<void> {
-  if (depth > maxDepth || results.length >= SEARCH_MAX_CONTENT_RESULTS) return
+  if (shouldStopSearch(state)) return
+  if (depth > options.maxDepth || results.length >= options.maxResults) return
 
   let entries: fs.Dirent[] = []
   try {
-    entries = await fs.promises.readdir(dir, { withFileTypes: true })
+    entries = await withTimeout(fs.promises.readdir(dir, { withFileTypes: true }), 8000)
   } catch {
     return
   }
 
   for (const entry of entries) {
     await maybeYieldTraversal(state)
+    if (shouldStopSearch(state)) return
     if (shouldSkipSearchEntry(entry.name)) continue
 
     const fullPath = path.join(dir, entry.name)
     const relativePath = normalizeRelativePath(rootDir, fullPath)
 
     if (entry.isDirectory()) {
-      await searchContentRecursive(fullPath, rootDir, query, filePattern, results, state, maxDepth, depth + 1)
-      if (results.length >= SEARCH_MAX_CONTENT_RESULTS) return
+      await searchContentRecursive(fullPath, rootDir, query, filePattern, results, state, options, depth + 1)
+      if (results.length >= options.maxResults) return
       continue
     }
 
     if (filePattern && !matchesSearchPattern(filePattern, entry.name, relativePath)) continue
 
-    const excerpt = await readFileExcerpt(fullPath, SEARCH_MAX_READ_BYTES)
+    state.scannedFiles += 1
+    if (shouldStopSearch(state)) return
+
+    const excerpt = await readFileExcerpt(fullPath, options.maxReadBytes, state)
     if (!excerpt) continue
 
     const lines = excerpt.content.split('\n')
@@ -369,11 +495,14 @@ async function searchContentRecursive(
     })
 
     if (matches.length > 0) {
-      const truncatedNotice = excerpt.truncated ? '\n  [searched first 512 KB only]' : ''
+      const truncatedNotice = excerpt.truncated
+        ? `\n  [searched first ${Math.max(1, Math.round(options.maxReadBytes / 1024))} KB only]`
+        : ''
       results.push(`${fullPath}:\n${matches.slice(0, 5).join('\n')}${matches.length > 5 ? `\n  ... and ${matches.length - 5} more matches` : ''}${truncatedNotice}`)
     }
 
-    if (results.length >= SEARCH_MAX_CONTENT_RESULTS) return
+    if (results.length >= options.maxResults) return
+    if (shouldStopSearch(state)) return
   }
 }
 
@@ -482,7 +611,8 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): P
 export async function executeTool(
   toolName: string,
   argsStr: string,
-  workspacePath: string | null
+  workspacePath: string | null,
+  options?: { signal?: AbortSignal }
 ): Promise<ToolExecutionResult> {
   let args: any
   try {
@@ -494,6 +624,10 @@ export async function executeTool(
   const riskLevel = getToolRiskLevel(toolName, args)
 
   try {
+    if (options?.signal?.aborted) {
+      return { success: false, output: 'Tool execution aborted by user.', riskLevel }
+    }
+
     switch (toolName) {
       case 'read_file': {
         const filePath = args.path
@@ -612,20 +746,78 @@ export async function executeTool(
 
       case 'search_files': {
         const results: string[] = []
-        await searchFilesRecursive(args.directory, args.directory, args.pattern, results, { visited: 0 })
-        if (results.length === 0) {
-          return { success: true, output: `No files matching "${args.pattern}" found in ${args.directory}`, riskLevel }
+        const searchRoot = typeof args.directory === 'string' ? args.directory : workspacePath || ''
+        const inWorkspace = workspacePath ? isSubPath(workspacePath, searchRoot) : false
+        const defaultTimeoutMs = inWorkspace ? SEARCH_FILES_TIMEOUT_MS_WORKSPACE : SEARCH_FILES_TIMEOUT_MS
+        const defaultMaxEntries = inWorkspace ? SEARCH_MAX_VISITED_ENTRIES_FILES_WORKSPACE : SEARCH_MAX_VISITED_ENTRIES_FILES
+
+        const timeoutMs = clampNumber(args.timeout_ms, SEARCH_MIN_TIMEOUT_MS, SEARCH_MAX_TIMEOUT_MS, defaultTimeoutMs)
+        const maxEntries = clampNumber(args.max_entries, 1000, 5_000_000, defaultMaxEntries)
+        const maxDepth = clampNumber(args.max_depth, 0, 64, SEARCH_MAX_FILE_DEPTH)
+        const maxResults = clampNumber(args.max_results, 1, 2000, SEARCH_MAX_FILE_RESULTS)
+
+        const state: SearchTraversalState = {
+          visited: 0,
+          scannedFiles: 0,
+          startedAt: Date.now(),
+          deadlineAt: Date.now() + timeoutMs,
+          maxEntries,
+          maxFiles: Number.POSITIVE_INFINITY,
+          stopReason: null,
+          signal: options?.signal,
         }
-        return { success: true, output: `Found ${results.length} files:\n${results.join('\n')}`, riskLevel }
+
+        await searchFilesRecursive(searchRoot, searchRoot, args.pattern, results, state, { maxDepth, maxResults })
+        const elapsedMs = Date.now() - state.startedAt
+        const stopNotice = state.stopReason
+          ? `\n\n[Search stopped early: ${state.stopReason}. Visited ${state.visited} entries in ${(elapsedMs / 1000).toFixed(1)}s. Narrow the directory or increase limits.]`
+          : ''
+        if (results.length === 0) {
+          return { success: true, output: `No files matching "${args.pattern}" found in ${searchRoot}${stopNotice}`, riskLevel }
+        }
+        return { success: true, output: `Found ${results.length} files:\n${results.join('\n')}${stopNotice}`, riskLevel }
       }
 
       case 'search_content': {
         const results: string[] = []
-        await searchContentRecursive(args.directory, args.directory, args.query, args.file_pattern, results, { visited: 0 })
-        if (results.length === 0) {
-          return { success: true, output: `No matches for "${args.query}" found in ${args.directory}`, riskLevel }
+        const searchRoot = typeof args.directory === 'string' ? args.directory : workspacePath || ''
+        const inWorkspace = workspacePath ? isSubPath(workspacePath, searchRoot) : false
+        const defaultTimeoutMs = inWorkspace ? SEARCH_CONTENT_TIMEOUT_MS_WORKSPACE : SEARCH_CONTENT_TIMEOUT_MS
+        const defaultMaxEntries = inWorkspace ? SEARCH_MAX_VISITED_ENTRIES_CONTENT_WORKSPACE : SEARCH_MAX_VISITED_ENTRIES_CONTENT
+        const defaultMaxFiles = inWorkspace ? SEARCH_MAX_SCANNED_FILES_CONTENT_WORKSPACE : SEARCH_MAX_SCANNED_FILES_CONTENT
+        const defaultMaxReadBytes = inWorkspace ? SEARCH_DEFAULT_READ_BYTES_WORKSPACE : SEARCH_DEFAULT_READ_BYTES
+
+        const timeoutMs = clampNumber(args.timeout_ms, SEARCH_MIN_TIMEOUT_MS, SEARCH_MAX_TIMEOUT_MS, defaultTimeoutMs)
+        const maxEntries = clampNumber(args.max_entries, 1000, 5_000_000, defaultMaxEntries)
+        const maxDepth = clampNumber(args.max_depth, 0, 64, SEARCH_MAX_CONTENT_DEPTH)
+        const maxResults = clampNumber(args.max_results, 1, 500, SEARCH_MAX_CONTENT_RESULTS)
+        const maxFiles = clampNumber(args.max_files, 10, 500_000, defaultMaxFiles)
+        const maxReadBytes = clampNumber(args.max_read_bytes, 1024, SEARCH_MAX_READ_BYTES, defaultMaxReadBytes)
+
+        const state: SearchTraversalState = {
+          visited: 0,
+          scannedFiles: 0,
+          startedAt: Date.now(),
+          deadlineAt: Date.now() + timeoutMs,
+          maxEntries,
+          maxFiles,
+          stopReason: null,
+          signal: options?.signal,
         }
-        return { success: true, output: `Found matches in ${results.length} files:\n${results.join('\n\n')}`, riskLevel }
+
+        await searchContentRecursive(searchRoot, searchRoot, args.query, args.file_pattern, results, state, {
+          maxDepth,
+          maxResults,
+          maxReadBytes,
+        })
+        const elapsedMs = Date.now() - state.startedAt
+        const stopNotice = state.stopReason
+          ? `\n\n[Search stopped early: ${state.stopReason}. Visited ${state.visited} entries, scanned ${Math.min(state.scannedFiles, maxFiles)} files in ${(elapsedMs / 1000).toFixed(1)}s. Narrow the directory or use file_pattern.]`
+          : ''
+        if (results.length === 0) {
+          return { success: true, output: `No matches for "${args.query}" found in ${searchRoot}${stopNotice}`, riskLevel }
+        }
+        return { success: true, output: `Found matches in ${results.length} files:\n${results.join('\n\n')}${stopNotice}`, riskLevel }
       }
 
       case 'execute_command': {

@@ -83,6 +83,12 @@ const SESSION_MEMORY_SOFT_MIN_ITERATIONS = 3
 const SESSION_MEMORY_SOFT_MIN_DROPPED_TOKENS = 2500
 const SESSION_MEMORY_SOFT_FORCE_DROPPED_TOKENS = 12000
 
+// Model call reconnection / retries for transient failures.
+const MODEL_RECONNECT_MAX_RETRIES = 5
+const MODEL_RECONNECT_BASE_DELAY_MS = 2000
+const MODEL_RECONNECT_MAX_DELAY_MS = 15000
+const MODEL_RECONNECT_JITTER_RATIO = 0.15
+
 interface AgentSession {
   sessionId: string
   runId: string
@@ -1426,6 +1432,75 @@ When providing final results, format them clearly with markdown. For code, use a
     return null
   }
 
+  private isRetryableHttpStatus(statusCode: number): boolean {
+    if (statusCode === 408 || statusCode === 429) return true
+    return statusCode >= 500 && statusCode <= 599
+  }
+
+  private isRetryableNetworkError(error: unknown): boolean {
+    if (error instanceof Error && error.message === 'Agent stopped') return false
+
+    const code = (error as any)?.code
+    const retryableCodes = new Set([
+      'ECONNRESET',
+      'ECONNREFUSED',
+      'ETIMEDOUT',
+      'ESOCKETTIMEDOUT',
+      'EPIPE',
+      'ENOTFOUND',
+      'EAI_AGAIN',
+      'ECONNABORTED',
+    ])
+    if (typeof code === 'string' && retryableCodes.has(code)) return true
+
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase()
+    return (
+      message.includes('socket hang up') ||
+      message.includes('econnreset') ||
+      message.includes('etimedout') ||
+      message.includes('timed out') ||
+      message.includes('network socket disconnected') ||
+      message.includes('client network socket disconnected') ||
+      message.includes('connection closed') ||
+      message.includes('connection reset')
+    )
+  }
+
+  private getReconnectDelayMs(attempt: number): number {
+    const exp = Math.max(0, attempt - 1)
+    const base = MODEL_RECONNECT_BASE_DELAY_MS * Math.pow(2, exp)
+    const delay = Math.min(MODEL_RECONNECT_MAX_DELAY_MS, Math.floor(base))
+    const jitter = Math.floor(delay * MODEL_RECONNECT_JITTER_RATIO * Math.random())
+    return delay + jitter
+  }
+
+  private async sleepWithAbort(agentSession: AgentSession, ms: number): Promise<void> {
+    if (ms <= 0) return
+    if (!agentSession.abortController) {
+      await new Promise(resolve => setTimeout(resolve, ms))
+      return
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        cleanup()
+        resolve()
+      }, ms)
+
+      const onAbort = () => {
+        cleanup()
+        reject(new Error('Agent stopped'))
+      }
+
+      const cleanup = () => {
+        clearTimeout(timer)
+        agentSession.abortController?.signal.removeEventListener('abort', onAbort)
+      }
+
+      agentSession.abortController.signal.addEventListener('abort', onAbort, { once: true })
+    })
+  }
+
   private async requestCompletionWithFallback(
     agentSession: AgentSession,
     params: {
@@ -1438,71 +1513,119 @@ When providing final results, format them clearly with markdown. For code, use a
     options: { iteration: number },
     onChunk?: (chunk: any) => void,
   ): Promise<{ content: string; toolCalls: any[] }> {
-    const MAX_ATTEMPTS = 4
+    const MAX_BUDGET_ATTEMPTS = 4
     let lastError: unknown = null
+    let budgetAttempts = 0
+    let reconnectAttempts = 0
 
     let requestParams = { ...params }
     if (typeof requestParams.max_tokens !== 'number') {
       requestParams.max_tokens = this.getEffectiveMaxOutputTokens(agentSession)
     }
 
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    while (true) {
+      let emittedModelChunks = false
+      const streamedOnChunk = onChunk
+        ? (chunk: any) => {
+            if (chunk?.type === 'content' || chunk?.type === 'thinking') {
+              emittedModelChunks = true
+            }
+            onChunk(chunk)
+          }
+        : undefined
+
       try {
-        return await this.requestCompletion(agentSession, requestParams, onChunk)
+        return await this.requestCompletion(agentSession, requestParams, streamedOnChunk)
       } catch (error) {
         lastError = error
         if (!agentSession.isRunning) throw error
 
         const details = this.parseApiErrorDetails(error)
-        // Only retry for provider rejections (HTTP 4xx/5xx). Network errors mid-stream
-        // may have already emitted partial chunks; do not retry to avoid duplicates.
-        if (!details.statusCode) throw error
 
         const classification = this.classifyApiErrorMessage(details.message)
         if (classification.isToolFormatError) throw error
 
-        let adjusted = false
+        const shouldRetryHttp = details.statusCode ? this.isRetryableHttpStatus(details.statusCode) : false
+        const shouldRetryNetwork = !details.statusCode && this.isRetryableNetworkError(error)
 
-        if (classification.isMaxTokensError || classification.isContextLimitError) {
-          const currentOut = this.getEffectiveMaxOutputTokens(agentSession)
-          const nextOut = this.getNextLowerOutputTokens(currentOut)
-          if (nextOut !== null && nextOut < currentOut) {
-            agentSession.effectiveMaxOutputTokens = nextOut
-            requestParams = { ...requestParams, max_tokens: nextOut }
-            adjusted = true
-          }
-        }
+        if (details.statusCode && (classification.isMaxTokensError || classification.isContextLimitError)) {
+          let adjusted = false
 
-        if (classification.isContextLimitError) {
-          const currentIn = this.getEffectiveMaxInputTokens(agentSession)
-          const nextIn = this.getNextLowerInputTokens(currentIn)
-          if (nextIn !== null && nextIn < currentIn) {
-            agentSession.effectiveMaxInputTokens = nextIn
-            adjusted = true
+          if (classification.isMaxTokensError || classification.isContextLimitError) {
+            const currentOut = this.getEffectiveMaxOutputTokens(agentSession)
+            const nextOut = this.getNextLowerOutputTokens(currentOut)
+            if (nextOut !== null && nextOut < currentOut) {
+              agentSession.effectiveMaxOutputTokens = nextOut
+              requestParams = { ...requestParams, max_tokens: nextOut }
+              adjusted = true
+            }
           }
 
-          // Apply the new effective budgets to the prompt. Best-effort memory
-          // compression first, then pruning as a last resort.
-          const hardBudget = this.getEffectiveMaxInputTokens(agentSession)
-          const softBudget = this.getSoftWorkingSetTokens(agentSession)
+          if (classification.isContextLimitError) {
+            const currentIn = this.getEffectiveMaxInputTokens(agentSession)
+            const nextIn = this.getNextLowerInputTokens(currentIn)
+            if (nextIn !== null && nextIn < currentIn) {
+              agentSession.effectiveMaxInputTokens = nextIn
+              adjusted = true
+            }
 
-          await this.maybeCompressSessionMemory(agentSession, {
-            maxInputTokensOverride: Math.min(softBudget, hardBudget),
-            iteration: options.iteration,
-            force: true,
-          })
-          await this.maybeCompressSessionMemory(agentSession, {
-            maxInputTokensOverride: hardBudget,
-            iteration: options.iteration,
-            force: true,
-          })
-          this.pruneConversationForTokenBudget(agentSession, { maxInputTokensOverride: hardBudget })
-          requestParams = { ...requestParams, messages: agentSession.messages }
+            // Apply the new effective budgets to the prompt. Best-effort memory
+            // compression first, then pruning as a last resort.
+            const hardBudget = this.getEffectiveMaxInputTokens(agentSession)
+            const softBudget = this.getSoftWorkingSetTokens(agentSession)
+
+            await this.maybeCompressSessionMemory(agentSession, {
+              maxInputTokensOverride: Math.min(softBudget, hardBudget),
+              iteration: options.iteration,
+              force: true,
+            })
+            await this.maybeCompressSessionMemory(agentSession, {
+              maxInputTokensOverride: hardBudget,
+              iteration: options.iteration,
+              force: true,
+            })
+            this.pruneConversationForTokenBudget(agentSession, { maxInputTokensOverride: hardBudget })
+            requestParams = { ...requestParams, messages: agentSession.messages }
+          }
+
+          if (!adjusted || budgetAttempts >= MAX_BUDGET_ATTEMPTS) {
+            throw error
+          }
+
+          budgetAttempts++
+          continue
         }
 
-        if (!adjusted || attempt === MAX_ATTEMPTS) {
-          throw error
+        if (shouldRetryHttp || shouldRetryNetwork) {
+          reconnectAttempts++
+          if (reconnectAttempts > MODEL_RECONNECT_MAX_RETRIES) {
+            throw error
+          }
+
+          const delayMs = this.getReconnectDelayMs(reconnectAttempts)
+          const seconds = Math.max(1, Math.ceil(delayMs / 1000))
+          const label = details.statusCode ? `HTTP ${details.statusCode}` : 'Network'
+          const reason = (details.message || (error instanceof Error ? error.message : String(error))).trim()
+          const reasonPreview = reason.length > 200 ? `${reason.slice(0, 200)}…` : reason
+
+          // If we already streamed partial model output, roll it back to the
+          // previous iteration boundary before retrying.
+          if (emittedModelChunks && onChunk) {
+            onChunk({ type: 'reconnect' })
+          }
+
+          if (onChunk) {
+            onChunk({
+              type: 'thinking',
+              content: `\n[${label} error: ${reasonPreview} — reconnecting in ${seconds}s, attempt ${reconnectAttempts}/${MODEL_RECONNECT_MAX_RETRIES}]\n`,
+            })
+          }
+
+          await this.sleepWithAbort(agentSession, delayMs)
+          continue
         }
+
+        throw error
       }
     }
 
@@ -1685,7 +1808,9 @@ When providing final results, format them clearly with markdown. For code, use a
           }
 
           // Execute the tool
-          const result = await executeTool(toolName, toolArgs, agentSession.workspacePath)
+          const result = await executeTool(toolName, toolArgs, agentSession.workspacePath, {
+            signal: agentSession.abortController?.signal,
+          })
 
           // Handle task list updates
           if (toolName === 'create_task_list') {

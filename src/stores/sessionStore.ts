@@ -145,6 +145,45 @@ function applyChunkToAssistantMessage(message: Message, chunk: StreamChunk): Mes
     }
   }
 
+  if (chunk.type === 'reconnect') {
+    const blocks = message.contentBlocks ? [...message.contentBlocks] : []
+    if (blocks.length === 0) {
+      return { ...message, content: '', contentBlocks: [] }
+    }
+
+    let boundaryIndex = -1
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i].type === 'iteration-end') {
+        boundaryIndex = i
+        break
+      }
+    }
+
+    const keptBlocks = boundaryIndex >= 0 ? blocks.slice(0, boundaryIndex + 1) : []
+    const nextContent = keptBlocks
+      .filter(block => block.type === 'text')
+      .map(block => block.content || '')
+      .join('')
+
+    const keptToolCallIds = new Set(
+      keptBlocks
+        .filter(block => block.type === 'tool-call')
+        .map(block => block.toolCallId)
+        .filter(Boolean) as string[],
+    )
+
+    const nextToolCalls = message.toolCalls && message.toolCalls.length > 0
+      ? message.toolCalls.filter(toolCall => keptToolCallIds.has(toolCall.id))
+      : message.toolCalls
+
+    return {
+      ...message,
+      content: nextContent,
+      contentBlocks: keptBlocks,
+      toolCalls: nextToolCalls,
+    }
+  }
+
   return message
 }
 
