@@ -175,7 +175,15 @@ export interface IpcChannels {
   'sessions:delete': { id: string }
 }
 
-export type StreamChunkType = 'thinking' | 'content' | 'tool-call-start' | 'tool-call-result' | 'error' | 'done' | 'iteration-end'
+export type StreamChunkType =
+  | 'thinking'
+  | 'content'
+  | 'tool-call-start'
+  | 'tool-call-result'
+  | 'error'
+  | 'done'
+  | 'iteration-end'
+  | 'reconnect'
 
 export interface StreamChunk {
   type: StreamChunkType
