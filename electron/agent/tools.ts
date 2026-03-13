@@ -119,7 +119,7 @@ export const AGENT_TOOLS: AgentToolDef[] = [
           timeout_ms: { type: 'number', description: 'Optional timeout in milliseconds (default 30000; in-workspace 150000)' },
           max_entries: { type: 'number', description: 'Optional maximum directory entries to visit (default 80000; in-workspace 240000)' },
           max_files: { type: 'number', description: 'Optional maximum number of files to scan (default 3000; in-workspace 20000)' },
-          max_read_bytes: { type: 'number', description: 'Optional maximum bytes to read per file (default 524288; in-workspace 1048576)' },
+          max_read_bytes: { type: 'number', description: 'Optional maximum bytes to read per file (default 1048576; in-workspace 4194304; max 16777216)' },
         },
         required: ['directory', 'query'],
       },
@@ -256,7 +256,9 @@ const SEARCH_MAX_FILE_RESULTS = 200
 const SEARCH_MAX_CONTENT_RESULTS = 120
 const SEARCH_MAX_FILE_DEPTH = 20
 const SEARCH_MAX_CONTENT_DEPTH = 16
-const SEARCH_MAX_READ_BYTES = 512 * 1024
+const SEARCH_DEFAULT_READ_BYTES = 1024 * 1024
+const SEARCH_DEFAULT_READ_BYTES_WORKSPACE = 4 * 1024 * 1024
+const SEARCH_MAX_READ_BYTES = 16 * 1024 * 1024
 const SEARCH_YIELD_INTERVAL = 120
 const SEARCH_FILES_TIMEOUT_MS = 20000
 const SEARCH_CONTENT_TIMEOUT_MS = 30000
@@ -388,7 +390,7 @@ async function readFileExcerpt(
       const bytesToRead = Math.min(stats.size, maxBytes)
       const buffer = Buffer.alloc(bytesToRead)
       if (shouldStopSearch(state)) return null
-      const readTimeoutMs = Math.min(8000, 2000 + Math.floor(bytesToRead / 1024))
+      const readTimeoutMs = Math.min(15000, 2000 + Math.floor(bytesToRead / 1024))
       await withTimeout(handle.read(buffer, 0, bytesToRead, 0), readTimeoutMs)
       // Skip binary-ish files (e.g., sqlite, images) to avoid huge overhead.
       if (buffer.includes(0)) return null
@@ -783,14 +785,14 @@ export async function executeTool(
         const defaultTimeoutMs = inWorkspace ? SEARCH_CONTENT_TIMEOUT_MS_WORKSPACE : SEARCH_CONTENT_TIMEOUT_MS
         const defaultMaxEntries = inWorkspace ? SEARCH_MAX_VISITED_ENTRIES_CONTENT_WORKSPACE : SEARCH_MAX_VISITED_ENTRIES_CONTENT
         const defaultMaxFiles = inWorkspace ? SEARCH_MAX_SCANNED_FILES_CONTENT_WORKSPACE : SEARCH_MAX_SCANNED_FILES_CONTENT
-        const defaultMaxReadBytes = inWorkspace ? 1024 * 1024 : SEARCH_MAX_READ_BYTES
+        const defaultMaxReadBytes = inWorkspace ? SEARCH_DEFAULT_READ_BYTES_WORKSPACE : SEARCH_DEFAULT_READ_BYTES
 
         const timeoutMs = clampNumber(args.timeout_ms, SEARCH_MIN_TIMEOUT_MS, SEARCH_MAX_TIMEOUT_MS, defaultTimeoutMs)
         const maxEntries = clampNumber(args.max_entries, 1000, 5_000_000, defaultMaxEntries)
         const maxDepth = clampNumber(args.max_depth, 0, 64, SEARCH_MAX_CONTENT_DEPTH)
         const maxResults = clampNumber(args.max_results, 1, 500, SEARCH_MAX_CONTENT_RESULTS)
         const maxFiles = clampNumber(args.max_files, 10, 500_000, defaultMaxFiles)
-        const maxReadBytes = clampNumber(args.max_read_bytes, 1024, 4 * 1024 * 1024, defaultMaxReadBytes)
+        const maxReadBytes = clampNumber(args.max_read_bytes, 1024, SEARCH_MAX_READ_BYTES, defaultMaxReadBytes)
 
         const state: SearchTraversalState = {
           visited: 0,
