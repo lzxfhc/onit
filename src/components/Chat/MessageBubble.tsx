@@ -1,5 +1,5 @@
-import { memo, useDeferredValue, useMemo, useState } from 'react'
-import { User, Bot, ChevronDown, ChevronRight, Terminal, CheckCircle2, XCircle, Loader2, Brain } from 'lucide-react'
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import { User, Bot, ChevronRight, Terminal, CheckCircle2, XCircle, Loader2, Brain, FileText, Search, Globe, ListTodo } from 'lucide-react'
 import type { Message, ToolCall, ContentBlock } from '../../types'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -12,6 +12,7 @@ interface Props {
 interface RenderSegment {
   type: 'text' | 'tool-group'
   blocks: ContentBlock[]
+  hasIterationEndAfter?: boolean
 }
 
 const MARKDOWN_PLUGINS = [remarkGfm]
@@ -25,6 +26,20 @@ function segmentBlocks(blocks: ContentBlock[]): RenderSegment[] {
       continue
     }
 
+    if (block.type === 'iteration-end') {
+      // Mark the last tool-group as having an iteration-end after it
+      for (let i = segments.length - 1; i >= 0; i--) {
+        if (segments[i].type === 'tool-group') {
+          segments[i].hasIterationEndAfter = true
+          break
+        }
+      }
+      // iteration-end also breaks consecutive tool-call grouping
+      // (next tool-call block will start a new group)
+      segments.push({ type: 'text', blocks: [] })
+      continue
+    }
+
     if (block.type === 'tool-call') {
       const lastSegment = segments[segments.length - 1]
       if (lastSegment && lastSegment.type === 'tool-group') {
@@ -35,7 +50,8 @@ function segmentBlocks(blocks: ContentBlock[]): RenderSegment[] {
     }
   }
 
-  return segments
+  // Remove empty placeholder segments used for breaking groups
+  return segments.filter(s => s.blocks.length > 0 || s.type === 'tool-group')
 }
 
 const MessageBubble = memo(function MessageBubble({ message }: Props) {
@@ -136,17 +152,30 @@ function ChronologicalContent({ blocks, toolCalls, isStreaming }: {
         if (resolvedCalls.length === 0) return null
 
         return (
-          <ToolGroup key={`tg-${index}`} toolCalls={resolvedCalls} />
+          <ToolGroup key={`tg-${index}`} toolCalls={resolvedCalls} isActive={!!isStreaming && !segment.hasIterationEndAfter} />
         )
       })}
     </div>
   )
 }
 
-function ToolGroup({ toolCalls }: { toolCalls: ToolCall[] }) {
-  const [expanded, setExpanded] = useState(false)
+function ToolGroup({ toolCalls, isActive }: { toolCalls: ToolCall[]; isActive: boolean }) {
+  const [manualOverride, setManualOverride] = useState<boolean | null>(null)
   const hasRunning = toolCalls.some(toolCall => toolCall.status === 'running' || toolCall.status === 'pending')
   const hasError = !hasRunning && toolCalls.some(toolCall => toolCall.status === 'error')
+
+  // Track previous running state to detect completion transition
+  const prevHasRunning = useRef(hasRunning)
+  useEffect(() => {
+    if (prevHasRunning.current && !hasRunning) {
+      // Running → completed: auto-collapse
+      setManualOverride(null)
+    }
+    prevHasRunning.current = hasRunning
+  }, [hasRunning])
+
+  // Auto-expand when running (unless user manually collapsed)
+  const expanded = manualOverride !== null ? manualOverride : hasRunning
 
   const summary = useMemo(() => {
     const counts: Record<string, number> = {}
@@ -162,44 +191,35 @@ function ToolGroup({ toolCalls }: { toolCalls: ToolCall[] }) {
   if (!summary || toolCalls.length === 0) return null
 
   return (
-    <div className={`rounded border transition-all duration-200 ${
-      hasRunning
-        ? 'border-accent/20 bg-accent/5'
-        : hasError
-          ? 'border-danger/20 bg-danger-light/50'
-          : 'border-border-subtle bg-gray-50/50'
-    }`}>
+    <div>
       <button
-        onClick={() => setExpanded(prev => !prev)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-left"
+        onClick={() => setManualOverride(prev => prev !== null ? !prev : !expanded)}
+        className="w-full flex items-center gap-1.5 px-1 py-1.5 text-left"
       >
         {hasRunning ? (
-          <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-accent shrink-0" />
         ) : hasError ? (
-          <XCircle className="w-3.5 h-3.5 text-danger" />
+          <XCircle className="w-3.5 h-3.5 text-danger shrink-0" />
         ) : (
-          <Terminal className="w-3.5 h-3.5 text-text-tertiary" />
+          <CheckCircle2 className="w-3.5 h-3.5 text-success/60 shrink-0" />
         )}
-        <span className={`text-xs font-medium truncate flex-1 ${
-          hasRunning
-            ? 'text-accent-700'
-            : hasError
-              ? 'text-danger'
-              : 'text-charcoal'
+        <span className={`text-xs truncate ${
+          hasRunning ? 'text-text-secondary' : hasError ? 'text-danger' : 'text-text-tertiary'
         }`}>
-          {hasRunning ? `Running · ${summary}` : summary}
+          {hasRunning ? 'Running...' : summary}
         </span>
-        {expanded ? (
-          <ChevronDown className="w-3 h-3 text-text-tertiary shrink-0" />
-        ) : (
-          <ChevronRight className="w-3 h-3 text-text-tertiary shrink-0" />
+        {hasRunning && (
+          <span className="text-[10px] text-accent bg-accent/10 px-1.5 py-0.5 rounded-full shrink-0">In Progress</span>
         )}
+        <ChevronRight className={`w-3 h-3 text-text-tertiary shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
       </button>
-      <div className={`iteration-collapse ${expanded ? 'expanded' : 'collapsed'}`}>
-        <div className="px-3 pb-2.5 space-y-1.5">
-          {toolCalls.map(toolCall => (
-            <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
-          ))}
+      <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+        <div className="overflow-hidden min-h-0">
+          <div className="px-1 pb-2 space-y-1.5">
+            {toolCalls.map(toolCall => (
+              <ToolCallBlock key={toolCall.id} toolCall={toolCall} />
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -260,15 +280,17 @@ function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?
         <Brain className="w-3.5 h-3.5" />
         <span>Thinking</span>
         {isStreaming && <Loader2 className="w-3 h-3 animate-spin" />}
-        {expanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
       </button>
-      {expanded && (
-        <div className="mt-1.5 pl-5 border-l-2 border-border-light animate-fade-in">
-          <p className="text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap">
-            {content}
-          </p>
+      <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+        <div className="overflow-hidden min-h-0">
+          <div className="mt-1.5 pl-5 border-l-2 border-border-light">
+            <p className="text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap">
+              {content}
+            </p>
+          </div>
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -294,12 +316,12 @@ const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: Tool
       case 'error':
         return <XCircle className="w-3.5 h-3.5 text-danger" />
       default:
-        return <Terminal className="w-3.5 h-3.5 text-text-tertiary" />
+        return getToolCategoryIcon(toolCall.name)
     }
   })()
 
   return (
-    <div className={`rounded border transition-all duration-200 ${
+    <div className={`rounded border transition-colors duration-200 ${
       toolCall.status === 'error'
         ? 'border-danger/20 bg-danger-light/50'
         : 'border-border-subtle bg-gray-50/50'
@@ -315,38 +337,36 @@ const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: Tool
         <span className="text-[10px] text-text-tertiary truncate flex-1">
           {toolPath}
         </span>
-        {expanded ? (
-          <ChevronDown className="w-3 h-3 text-text-tertiary shrink-0" />
-        ) : (
-          <ChevronRight className="w-3 h-3 text-text-tertiary shrink-0" />
-        )}
+        <ChevronRight className={`w-3 h-3 text-text-tertiary shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
       </button>
-      {expanded && (
-        <div className="px-3 pb-2.5 animate-fade-in">
-          <div className="mb-2">
-            <span className="text-[10px] text-text-tertiary font-medium">Input:</span>
-            <pre className="mt-1 text-[11px] text-charcoal bg-white/60 rounded p-2 overflow-x-auto font-mono">
-              {formatJSON(toolCall.arguments)}
-            </pre>
+      <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+        <div className="overflow-hidden min-h-0">
+          <div className="px-3 pb-2.5">
+            <div className="mb-2">
+              <span className="text-[10px] text-text-tertiary font-medium">Input:</span>
+              <pre className="mt-1 text-[11px] text-charcoal bg-white/60 rounded p-2 overflow-x-auto font-mono">
+                {formatJSON(toolCall.arguments)}
+              </pre>
+            </div>
+            {toolCall.result && (
+              <div>
+                <span className="text-[10px] text-text-tertiary font-medium">Output:</span>
+                <pre className="mt-1 text-[11px] bg-terminal text-gray-200 rounded p-2 overflow-x-auto font-mono max-h-48 overflow-y-auto">
+                  {toolCall.result}
+                </pre>
+              </div>
+            )}
+            {toolCall.error && (
+              <div>
+                <span className="text-[10px] text-danger font-medium">Error:</span>
+                <pre className="mt-1 text-[11px] text-danger bg-danger-light rounded p-2 overflow-x-auto font-mono">
+                  {toolCall.error}
+                </pre>
+              </div>
+            )}
           </div>
-          {toolCall.result && (
-            <div>
-              <span className="text-[10px] text-text-tertiary font-medium">Output:</span>
-              <pre className="mt-1 text-[11px] bg-terminal text-gray-200 rounded p-2 overflow-x-auto font-mono max-h-48 overflow-y-auto">
-                {toolCall.result}
-              </pre>
-            </div>
-          )}
-          {toolCall.error && (
-            <div>
-              <span className="text-[10px] text-danger font-medium">Error:</span>
-              <pre className="mt-1 text-[11px] text-danger bg-danger-light rounded p-2 overflow-x-auto font-mono">
-                {toolCall.error}
-              </pre>
-            </div>
-          )}
         </div>
-      )}
+      </div>
     </div>
   )
 })
@@ -374,6 +394,18 @@ function formatJSON(str: string): string {
   } catch {
     return str
   }
+}
+
+function getToolCategoryIcon(name: string) {
+  const fileTools = ['read_file', 'write_file', 'edit_file', 'delete_file']
+  const searchTools = ['list_directory', 'search_files', 'search_content']
+  const webTools = ['web_search', 'web_fetch']
+
+  if (fileTools.includes(name)) return <FileText className="w-3.5 h-3.5 text-text-tertiary" />
+  if (searchTools.includes(name)) return <Search className="w-3.5 h-3.5 text-text-tertiary" />
+  if (webTools.includes(name)) return <Globe className="w-3.5 h-3.5 text-text-tertiary" />
+  if (name === 'create_task_list') return <ListTodo className="w-3.5 h-3.5 text-text-tertiary" />
+  return <Terminal className="w-3.5 h-3.5 text-text-tertiary" />
 }
 
 export default MessageBubble
