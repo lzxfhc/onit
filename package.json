@@ -1,6 +1,6 @@
 {
   "name": "onit",
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Onit - Desktop AI Agent",
   "main": "dist-electron/main.js",
   "scripts": {

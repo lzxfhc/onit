@@ -1,15 +1,13 @@
 import { memo, useMemo, useState } from 'react'
 import {
-  CheckCircle2, Circle, Loader2, Terminal, FileText,
-  FolderOpen, ChevronDown, ChevronRight, XCircle
+  CheckCircle2, Circle, Loader2, Wrench, FileText,
+  FolderOpen, ChevronRight, XCircle
 } from 'lucide-react'
 import type { Session, TaskItem, ToolCall, WorkspaceFile } from '../../types'
 
 interface Props {
   session: Session
 }
-
-type PanelTab = 'tasks' | 'tools' | 'files'
 
 function getToolCallGroups(messages: Session['messages']): ToolCall[][] {
   return messages
@@ -18,7 +16,15 @@ function getToolCallGroups(messages: Session['messages']): ToolCall[][] {
 }
 
 function TaskStatusPanel({ session }: Props) {
-  const [activeTab, setActiveTab] = useState<PanelTab>('tasks')
+  const [expandedPanels, setExpandedPanels] = useState<Record<string, boolean>>({
+    tasks: true,
+    tools: true,
+    files: true,
+  })
+
+  const togglePanel = (panel: string) => {
+    setExpandedPanels(prev => ({ ...prev, [panel]: !prev[panel] }))
+  }
 
   const allToolCalls = useMemo(() => (
     session.messages
@@ -26,68 +32,70 @@ function TaskStatusPanel({ session }: Props) {
       .flatMap(message => message.toolCalls || [])
   ), [session.messages])
 
-  const tabCounts = {
-    tasks: session.tasks.length,
-    tools: allToolCalls.length,
-    files: session.workspaceFiles.length,
-  }
-
   return (
-    <div className="w-72 border-l border-border-subtle bg-surface flex flex-col h-full">
-      {/* Tabs */}
-      <div className="flex border-b border-border-subtle">
-        <PanelTabButton
-          active={activeTab === 'tasks'}
-          onClick={() => setActiveTab('tasks')}
-          label="Tasks"
-          count={tabCounts.tasks}
-        />
-        <PanelTabButton
-          active={activeTab === 'tools'}
-          onClick={() => setActiveTab('tools')}
-          label="Tools"
-          count={tabCounts.tools}
-        />
-        <PanelTabButton
-          active={activeTab === 'files'}
-          onClick={() => setActiveTab('files')}
-          label="Files"
-          count={tabCounts.files}
-        />
-      </div>
+    <div className="w-72 border-l border-border-subtle bg-surface flex flex-col h-full pb-2">
+      <CollapsiblePanel
+        title="Tasks"
+        count={session.tasks.length}
+        icon={<CheckCircle2 className="w-3.5 h-3.5 text-accent" />}
+        expanded={expandedPanels.tasks}
+        onToggle={() => togglePanel('tasks')}
+      >
+        <TasksTab tasks={session.tasks} />
+      </CollapsiblePanel>
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto p-3">
-        {activeTab === 'tasks' && <TasksTab tasks={session.tasks} />}
-        {activeTab === 'tools' && <ToolsTab toolCalls={allToolCalls} />}
-        {activeTab === 'files' && <FilesTab files={session.workspaceFiles} workspacePath={session.workspacePath} />}
-      </div>
+      <CollapsiblePanel
+        title="Tools"
+        count={allToolCalls.length}
+        icon={<Wrench className="w-3.5 h-3.5 text-text-tertiary" />}
+        expanded={expandedPanels.tools}
+        onToggle={() => togglePanel('tools')}
+      >
+        <ToolsTab toolCalls={allToolCalls} />
+      </CollapsiblePanel>
+
+      <CollapsiblePanel
+        title="Files"
+        count={session.workspaceFiles.length}
+        icon={<FolderOpen className="w-3.5 h-3.5 text-text-tertiary" />}
+        expanded={expandedPanels.files}
+        onToggle={() => togglePanel('files')}
+      >
+        <FilesTab files={session.workspaceFiles} workspacePath={session.workspacePath} />
+      </CollapsiblePanel>
     </div>
   )
 }
 
-function PanelTabButton({ active, onClick, label, count }: {
-  active: boolean
-  onClick: () => void
-  label: string
+function CollapsiblePanel({ title, count, icon, expanded, onToggle, children }: {
+  title: string
   count: number
+  icon: React.ReactNode
+  expanded: boolean
+  onToggle: () => void
+  children: React.ReactNode
 }) {
   return (
-    <button
-      onClick={onClick}
-      className={`flex-1 py-2.5 text-xs font-medium transition-all border-b-2 ${
-        active
-          ? 'border-accent text-accent-700'
-          : 'border-transparent text-text-tertiary hover:text-text-secondary'
-      }`}
-    >
-      {label}
-      {count > 0 && (
-        <span className={`ml-1 text-[10px] ${active ? 'text-accent' : 'text-text-tertiary'}`}>
-          ({count})
-        </span>
-      )}
-    </button>
+    <div className="mx-2 mt-2 rounded-lg border border-border-subtle bg-white flex flex-col flex-initial min-h-0">
+      <button
+        onClick={onToggle}
+        className="h-9 flex-none w-full flex items-center gap-2 px-3 hover:bg-gray-50/80 transition-colors rounded-lg"
+      >
+        <ChevronRight className={`w-3 h-3 text-text-tertiary shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
+        {icon}
+        <span className="text-xs font-medium text-charcoal">{title}</span>
+        {count > 0 && (
+          <span className="text-[10px] text-text-tertiary">({count})</span>
+        )}
+      </button>
+      <div className={`grid min-h-0 transition-[grid-template-rows] duration-200 ease-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
+        <div className="overflow-hidden min-h-0">
+          <div className="h-full overflow-y-auto px-3 pt-2.5 pb-3 border-t border-border-subtle">
+            {children}
+          </div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -148,7 +156,7 @@ function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
       case 'running': return <Loader2 className="w-3.5 h-3.5 animate-spin text-accent" />
       case 'completed': return <CheckCircle2 className="w-3.5 h-3.5 text-success" />
       case 'error': return <XCircle className="w-3.5 h-3.5 text-danger" />
-      default: return <Terminal className="w-3.5 h-3.5 text-text-tertiary" />
+      default: return <Wrench className="w-3.5 h-3.5 text-text-tertiary" />
     }
   }
 
@@ -163,9 +171,9 @@ function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
           {toolCall.name}
         </span>
         {expanded ? (
-          <ChevronDown className="w-3 h-3 text-text-tertiary" />
+          <ChevronRight className="w-3 h-3 text-text-tertiary rotate-90 transition-transform duration-200" />
         ) : (
-          <ChevronRight className="w-3 h-3 text-text-tertiary" />
+          <ChevronRight className="w-3 h-3 text-text-tertiary transition-transform duration-200" />
         )}
       </button>
       {expanded && toolCall.result && (

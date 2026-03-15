@@ -1,25 +1,53 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Message } from '../../types'
 import MessageBubble from './MessageBubble'
-import { Loader2, Zap } from 'lucide-react'
+import { Loader2, Zap, ArrowDown } from 'lucide-react'
 
 interface Props {
   messages: Message[]
   isRunning: boolean
+  sessionId: string
 }
 
-export default function MessageList({ messages, isRunning }: Props) {
+export default function MessageList({ messages, isRunning, sessionId }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const isAutoScrollRef = useRef(true)
   const previousMessageCountRef = useRef(0)
   const previousLastMessageIdRef = useRef<string | null>(null)
+  const prevSessionIdRef = useRef(sessionId)
+  const [showScrollButton, setShowScrollButton] = useState(false)
 
   const lastMessage = messages[messages.length - 1]
   const lastMessageSignature = lastMessage
     ? `${lastMessage.id}:${lastMessage.content.length}:${lastMessage.thinking?.length || 0}:${lastMessage.toolCalls?.length || 0}:${lastMessage.contentBlocks?.length || 0}:${lastMessage.isStreaming ? 1 : 0}`
     : 'empty'
 
+  // Initial mount — instant scroll to bottom before paint
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    if (container) {
+      container.scrollTop = container.scrollHeight
+    }
+  }, [])
+
+  // Session switch — instant scroll to bottom before paint
+  useLayoutEffect(() => {
+    if (prevSessionIdRef.current !== sessionId) {
+      prevSessionIdRef.current = sessionId
+      isAutoScrollRef.current = true
+      setShowScrollButton(false)
+      previousMessageCountRef.current = messages.length
+      previousLastMessageIdRef.current = lastMessage?.id || null
+      const container = containerRef.current
+      if (container) {
+        container.scrollTop = container.scrollHeight
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
+
+  // Smooth auto-scroll during streaming / new messages
   useEffect(() => {
     const container = containerRef.current
     if (!container || !isAutoScrollRef.current) {
@@ -46,7 +74,17 @@ export default function MessageList({ messages, isRunning }: Props) {
     const container = containerRef.current
     if (!container) return
     const { scrollTop, scrollHeight, clientHeight } = container
-    isAutoScrollRef.current = scrollHeight - scrollTop - clientHeight < 100
+    const isNearBottom = scrollHeight - scrollTop - clientHeight < 100
+    isAutoScrollRef.current = isNearBottom
+    setShowScrollButton(prev => {
+      const shouldShow = !isNearBottom
+      return prev === shouldShow ? prev : shouldShow
+    })
+  }
+
+  const scrollToBottom = () => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+    isAutoScrollRef.current = true
   }
 
   if (messages.length === 0) {
@@ -81,30 +119,45 @@ export default function MessageList({ messages, isRunning }: Props) {
   }
 
   return (
-    <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      className="flex-1 overflow-y-auto pb-4"
-    >
-      <div className="max-w-3xl mx-auto px-6">
-        {messages.map((message, idx) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            isLast={idx === messages.length - 1}
-          />
-        ))}
+    <div className="flex-1 min-h-0 relative">
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        className="h-full overflow-y-auto pb-4"
+      >
+        <div className="max-w-3xl mx-auto px-6">
+          {messages.map((message, idx) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              isLast={idx === messages.length - 1}
+            />
+          ))}
 
-        {isRunning && lastMessage?.isStreaming &&
-          lastMessage.content === '' &&
-          !lastMessage.thinking && (
-          <div className="flex items-center gap-2 py-3 text-text-tertiary animate-fade-in">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            <span className="text-xs">Thinking...</span>
-          </div>
-        )}
+          {isRunning && lastMessage?.isStreaming &&
+            lastMessage.content === '' &&
+            !lastMessage.thinking && (
+            <div className="flex items-center gap-2 py-3 text-text-tertiary animate-fade-in">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span className="text-xs">Thinking...</span>
+            </div>
+          )}
 
-        <div ref={bottomRef} />
+          <div ref={bottomRef} />
+        </div>
+      </div>
+
+      <div className={`absolute bottom-3 left-0 right-0 flex justify-center pointer-events-none transition-all duration-200 ${
+        showScrollButton ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'
+      }`}>
+        <button
+          onClick={scrollToBottom}
+          className="pointer-events-auto bg-white/80 backdrop-blur-sm border border-border-subtle rounded-full p-2 shadow-sm hover:shadow hover:bg-white transition-all duration-200 text-text-secondary hover:text-charcoal"
+          tabIndex={showScrollButton ? 0 : -1}
+          aria-label="Scroll to bottom"
+        >
+          <ArrowDown className="w-4 h-4" />
+        </button>
       </div>
     </div>
   )

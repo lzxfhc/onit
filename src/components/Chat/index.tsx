@@ -257,6 +257,7 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
         <MessageList
           messages={activeSession.messages}
           isRunning={activeSession.status === 'running'}
+          sessionId={activeSession.id}
         />
         <InputBox
           onSend={handleSendMessage}
