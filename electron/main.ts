@@ -86,8 +86,12 @@ function setupIPC() {
   // Dialog: select folder
   ipcMain.handle('dialog:select-folder', async () => {
     if (!mainWindow) return null
+    const properties: Electron.OpenDialogOptions['properties'] = ['openDirectory']
+    if (process.platform === 'darwin') {
+      properties.push('createDirectory')
+    }
     const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory', 'createDirectory'],
+      properties,
       title: 'Select Workspace Folder',
     })
     if (result.canceled) return null

@@ -544,12 +544,20 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): P
     const timeout = setTimeout(() => {
       timedOut = true
       try {
-        child.kill('SIGTERM')
+        if (process.platform === 'win32') {
+          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+        } else {
+          child.kill('SIGTERM')
+        }
       } catch {}
 
       setTimeout(() => {
         try {
-          child.kill('SIGKILL')
+          if (process.platform === 'win32') {
+            spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+          } else {
+            child.kill('SIGKILL')
+          }
         } catch {}
       }, 5000)
     }, COMMAND_TIMEOUT_MS)

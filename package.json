@@ -45,7 +45,7 @@
   "build": {
     "appId": "com.onit.app",
     "productName": "Onit",
-    "electronDist": "node_modules/electron/dist",
+    "afterPack": "./scripts/afterPack.js",
     "mac": {
       "target": [
         {
