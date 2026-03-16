@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { Plus, Search, Calendar, MessageSquare, LogOut, Sparkles } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { isWindows } from '../../utils/platform'
 import SessionList from './SessionList'
 import ActiveTasks from './ActiveTasks'
 import ScheduledTasks from './ScheduledTasks'
@@ -19,7 +18,7 @@ export default function Sidebar() {
   return (
     <aside className="w-72 bg-surface border-r border-border-subtle flex flex-col h-full no-drag relative z-30">
       {/* Header */}
-      <div className={`${isWindows ? 'pt-4' : 'pt-14'} px-4 pb-3 flex items-center justify-between`}>
+      <div className="pt-14 px-4 pb-3 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-charcoal">You say it. Onit.</h2>
         <div className="flex items-center gap-1">
           <button
