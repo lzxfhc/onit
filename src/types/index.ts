@@ -1,4 +1,4 @@
-export type BillingMode = 'coding-plan' | 'api-call'
+export type BillingMode = 'coding-plan' | 'api-call' | 'local-model'
 
 export type CodingPlanProvider = 'qianfan' | 'volcengine' | 'dashscope'
 
@@ -21,6 +21,7 @@ export interface ApiConfig {
   model: string
   customBaseUrl?: string
   codingPlanProvider?: CodingPlanProvider
+  localModelId?: string
   /**
    * Soft limit for prompt (input) tokens that Onit will try to stay under by
    * pruning / compressing history before sending requests.
@@ -201,6 +202,62 @@ export const AVAILABLE_MODELS = [
   { id: 'deepseek-v3', name: 'DeepSeek V3', codingPlan: false },
   { id: 'deepseek-r1', name: 'DeepSeek R1', codingPlan: false },
 ] as const
+
+// Local model types
+export interface LocalModelDef {
+  id: string
+  name: string
+  displayName: string
+  description: string
+  fileName: string
+  downloadUrl: string
+  fileSize: number
+  contextSize: number
+  maxInputTokens: number
+  maxOutputTokens: number
+}
+
+export type LocalModelStatus =
+  | 'not-downloaded'
+  | 'downloading'
+  | 'downloaded'
+  | 'loading'
+  | 'ready'
+  | 'error'
+
+export interface LocalModelState {
+  modelId: string
+  status: LocalModelStatus
+  downloadProgress?: number
+  error?: string
+}
+
+export const AVAILABLE_LOCAL_MODELS: LocalModelDef[] = [
+  {
+    id: 'qwen3.5-4b',
+    name: 'Qwen3.5-4B',
+    displayName: 'Qwen3.5 4B',
+    description: '通义千问3.5 4B 模型，工具调用能力强，适合8GB+内存Mac',
+    fileName: 'Qwen3.5-4B-Q4_K_M.gguf',
+    downloadUrl: 'https://modelscope.cn/models/unsloth/Qwen3.5-4B-GGUF/resolve/master/Qwen3.5-4B-Q4_K_M.gguf',
+    fileSize: 2_860_000_000,
+    contextSize: 262144,
+    maxInputTokens: 24000,
+    maxOutputTokens: 8000,
+  },
+  {
+    id: 'qwen3.5-0.8b',
+    name: 'Qwen3.5-0.8B',
+    displayName: 'Qwen3.5 0.8B',
+    description: '通义千问3.5 0.8B 轻量模型，体积小速度快，适合简单任务',
+    fileName: 'Qwen3.5-0.8B-Q8_0.gguf',
+    downloadUrl: 'https://modelscope.cn/models/unsloth/Qwen3.5-0.8B-GGUF/resolve/master/Qwen3.5-0.8B-Q8_0.gguf',
+    fileSize: 812_000_000,
+    contextSize: 262144,
+    maxInputTokens: 24000,
+    maxOutputTokens: 8000,
+  },
+]
 
 // Skill types
 export interface Skill {

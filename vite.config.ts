@@ -14,7 +14,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['electron', 'electron-store', 'node-schedule']
+              external: ['electron', 'electron-store', 'node-schedule', 'node-llama-cpp']
             }
           }
         }

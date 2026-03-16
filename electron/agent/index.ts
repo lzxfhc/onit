@@ -7,6 +7,7 @@ import { URL } from 'url'
 import { v4 as uuidv4 } from 'uuid'
 import { executeTool, AGENT_TOOLS, getToolRiskLevel } from './tools'
 import { AgentMessage } from './types'
+import type { LocalModelManager } from '../local-model/index'
 
 interface SkillData {
   name: string
@@ -110,6 +111,7 @@ interface AgentSession {
     apiKey: string
     customBaseUrl?: string
     codingPlanProvider?: string
+    localModelId?: string
     maxInputTokens?: number
     maxOutputTokens?: number
   }
@@ -122,13 +124,15 @@ export class AgentManager {
   private sessions: Map<string, AgentSession> = new Map()
   private sendToRenderer: (channel: string, data: any) => void
   private artifactsDir: string | null
+  private localModelManager: LocalModelManager | null
 
   constructor(
     sendToRenderer: (channel: string, data: any) => void,
-    options?: { artifactsDir?: string }
+    options?: { artifactsDir?: string; localModelManager?: LocalModelManager }
   ) {
     this.sendToRenderer = sendToRenderer
     this.artifactsDir = options?.artifactsDir || null
+    this.localModelManager = options?.localModelManager || null
   }
 
   async startAgent(sessionId: string, userMessage: string, runId: string, sessionData: any): Promise<boolean> {
@@ -140,6 +144,21 @@ export class AgentManager {
     }
 
     const apiConfig = sessionData.apiConfig || {}
+
+    // Ensure local model is loaded for local-model mode
+    if (apiConfig.billingMode === 'local-model') {
+      if (!this.localModelManager) {
+        throw new Error('Local model support is not available')
+      }
+      const modelId = apiConfig.localModelId
+      if (!modelId) {
+        throw new Error('No local model selected')
+      }
+      if (!this.localModelManager.isReady()) {
+        await this.localModelManager.loadModel(modelId)
+      }
+    }
+
     const sessionMemory: SessionMemoryData | null = sessionData.sessionMemory && typeof sessionData.sessionMemory.content === 'string'
       ? {
           content: sessionData.sessionMemory.content,
@@ -207,6 +226,7 @@ export class AgentManager {
         apiKey: apiConfig.apiKey || '',
         customBaseUrl: apiConfig.customBaseUrl,
         codingPlanProvider: apiConfig.codingPlanProvider,
+        localModelId: apiConfig.localModelId,
         maxInputTokens: apiConfig.maxInputTokens,
         maxOutputTokens: apiConfig.maxOutputTokens,
       },
@@ -1039,15 +1059,24 @@ When providing final results, format them clearly with markdown. For code, use a
 
     const userContent = `Existing memory (may be empty):\n\n${existing || '(none)'}\n\nNew transcript to merge:\n\n${transcript}\n`
 
-    const { content } = await this.requestCompletion(agentSession, {
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userContent },
-      ],
-      stream: true,
-      temperature: 0.2,
-      max_tokens: SESSION_MEMORY_MAX_OUTPUT_TOKENS,
-    })
+    const { content } = agentSession.apiConfig.billingMode === 'local-model'
+      ? await this.requestCompletionLocal(agentSession, {
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent },
+          ],
+          temperature: 0.2,
+          max_tokens: SESSION_MEMORY_MAX_OUTPUT_TOKENS,
+        })
+      : await this.requestCompletion(agentSession, {
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userContent },
+          ],
+          stream: true,
+          temperature: 0.2,
+          max_tokens: SESSION_MEMORY_MAX_OUTPUT_TOKENS,
+        })
 
     const nextContent = (content || '').trim()
 
@@ -1345,11 +1374,50 @@ When providing final results, format them clearly with markdown. For code, use a
     })
   }
 
+  private async requestCompletionLocal(
+    agentSession: AgentSession,
+    params: {
+      messages: AgentMessage[]
+      tools?: any[]
+      temperature?: number
+      max_tokens?: number
+    },
+    onChunk?: (chunk: any) => void
+  ): Promise<{ content: string; toolCalls: any[] }> {
+    if (!this.localModelManager || !this.localModelManager.isReady()) {
+      throw new Error('Local model not loaded')
+    }
+
+    return this.localModelManager.generateCompletion({
+      messages: params.messages,
+      tools: params.tools,
+      temperature: params.temperature ?? 0.7,
+      maxTokens: params.max_tokens ?? this.getMaxOutputTokens(agentSession),
+      abortSignal: agentSession.abortController?.signal,
+      onToken: (chunk) => {
+        onChunk?.(chunk)
+      },
+    })
+  }
+
   private async callLLM(
     agentSession: AgentSession,
     iteration: number,
     onChunk: (chunk: any) => void
   ): Promise<{ content: string; toolCalls: any[] }> {
+    if (agentSession.apiConfig.billingMode === 'local-model') {
+      return this.requestCompletionLocal(
+        agentSession,
+        {
+          messages: agentSession.messages,
+          tools: AGENT_TOOLS,
+          temperature: 0.7,
+          max_tokens: this.getEffectiveMaxOutputTokens(agentSession),
+        },
+        onChunk,
+      )
+    }
+
     return this.requestCompletionWithFallback(
       agentSession,
       {

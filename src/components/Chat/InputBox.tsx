@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { AVAILABLE_MODELS } from '../../types'
+import { AVAILABLE_MODELS, AVAILABLE_LOCAL_MODELS } from '../../types'
 import type { PermissionMode, Skill } from '../../types'
 
 interface Props {
@@ -220,6 +220,10 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
   }
 
   const getModelName = () => {
+    if (settings.apiConfig.billingMode === 'local-model') {
+      const local = AVAILABLE_LOCAL_MODELS.find(m => m.id === settings.apiConfig.localModelId)
+      return local ? local.displayName : session.model
+    }
     const selected = AVAILABLE_MODELS.find(item => item.id === session.model)
     return selected ? selected.name : session.model
   }
@@ -323,13 +327,21 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
 
               <div className="relative ml-auto" ref={modelPickerRef}>
                 <button
-                  onClick={() => setShowModelPicker(prev => !prev)}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-text-tertiary hover:bg-gray-100 hover:text-text-secondary transition-all"
+                  onClick={() => {
+                    if (settings.apiConfig.billingMode !== 'local-model') {
+                      setShowModelPicker(prev => !prev)
+                    }
+                  }}
+                  className={`flex items-center gap-1 px-2 py-1 rounded text-[10px] text-text-tertiary transition-all ${
+                    settings.apiConfig.billingMode === 'local-model'
+                      ? 'cursor-default'
+                      : 'hover:bg-gray-100 hover:text-text-secondary'
+                  }`}
                 >
                   {getModelName()}
-                  <ChevronDown className="w-3 h-3" />
+                  {settings.apiConfig.billingMode !== 'local-model' && <ChevronDown className="w-3 h-3" />}
                 </button>
-                {showModelPicker && (
+                {showModelPicker && settings.apiConfig.billingMode !== 'local-model' && (
                   <div className="absolute bottom-full right-0 mb-1 bg-surface border border-border-subtle rounded shadow-card-hover py-1 min-w-[180px] z-50 animate-fade-in">
                     {AVAILABLE_MODELS
                       .filter(model => settings.apiConfig.billingMode === 'coding-plan' ? model.codingPlan : !model.codingPlan)

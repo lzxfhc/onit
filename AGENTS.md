@@ -4,7 +4,7 @@
 Onit is an Electron-based desktop AI agent application targeting macOS ARM64. It provides a visual interface for non-technical users to leverage code agent capabilities for daily tasks. The core philosophy is "a reliable assistant sitting beside you" — transparent, interruptible, and human-in-the-loop.
 
 ## Tech Stack
-- **Runtime**: Electron 35 (main process, Node.js 22) + Chromium (renderer)
+- **Runtime**: Electron 28 (main process) + Chromium (renderer)
 - **Frontend**: React 18 + TypeScript + Tailwind CSS 3
 - **Build**: Vite 5 + vite-plugin-electron
 - **State**: Zustand (lightweight, no boilerplate)
@@ -53,9 +53,6 @@ Onit is an Electron-based desktop AI agent application targeting macOS ARM64. It
 | `agent/tools.ts` | 9 built-in tools (read/write/edit/delete files, list dir, search files/content, exec command, task list). Also exports `getToolRiskLevel()` |
 | `agent/scheduler.ts` | `SchedulerManager` — cron-based scheduled tasks using `node-schedule`, persisted as JSON files |
 | `agent/types.ts` | Agent-side type definitions (tool defs, messages, risk levels) |
-| `local-model/index.ts` | `LocalModelManager` — model download (ModelScope), loading (node-llama-cpp), and local inference with LlamaChat |
-| `local-model/hermes.ts` | Hermes tool format conversion — OpenAI→node-llama-cpp chat history/functions, fallback tool_call text parsing |
-| `local-model/node-llama-cpp.d.ts` | Type declarations for node-llama-cpp (ESM package, resolved at runtime via dynamic import) |
 
 ### React Renderer (`src/`)
 | File | Purpose |
@@ -63,7 +60,7 @@ Onit is an Electron-based desktop AI agent application targeting macOS ARM64. It
 | `types/index.ts` | **Shared types** — Session, Message, ToolCall, PermissionRequest, AppSettings, available models list, defaults |
 | `stores/sessionStore.ts` | Zustand store for sessions — CRUD, message management, background task state, workspace/permission/model per session |
 | `stores/settingsStore.ts` | Zustand store for app settings — API config, login state, scheduled tasks, permission request queue |
-| `components/Login.tsx` | API key entry — supports Coding Plan, API Call, and Local Model billing modes |
+| `components/Login.tsx` | API key entry — supports Coding Plan and API Call billing modes |
 | `components/Sidebar/index.tsx` | Sidebar container with 3 tabs: Sessions, Scheduled, Search |
 | `components/Sidebar/SessionList.tsx` | Session list with context menu (delete), time display, status indicators |
 | `components/Sidebar/ActiveTasks.tsx` | Background running / unviewed completed tasks section |
@@ -139,18 +136,6 @@ data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_xxx","function":
 data: [DONE]
 ```
 Note: `tool_calls` arguments stream incrementally — accumulate by index.
-
-### Local Model Mode (v1.3.0+)
-- Framework: node-llama-cpp v3.18+ (native N-API bindings for llama.cpp, Metal GPU acceleration, QwenChatWrapper for Qwen3.5)
-- Models: Qwen3.5-4B Q4_K_M (~2.9GB) and Qwen3.5-0.8B Q4_K_M (~533MB), downloaded from ModelScope
-- Inference: `LlamaChat.generateResponse()` with grammar-enforced function calling
-- Tool calling: OpenAI tools converted to node-llama-cpp `ChatModelFunctions` format via `hermes.ts`
-- Routing: `callLLM()` in agent/index.ts dispatches to `requestCompletionLocal()` when `billingMode === 'local-model'`
-- No API key required; `isLoggedIn` check uses `!!localModelId` for local mode
-- Token budgets: maxInputTokens=24000, maxOutputTokens=8000
-- Model files stored at: `~/Library/Application Support/onit/onit-data/models/`
-- node-llama-cpp is ESM-only; loaded via dynamic `import()` in the main process
-- ASAR: node-llama-cpp is excluded from ASAR via `asarUnpack` in package.json
 
 ## Known Issues & Gotchas
 

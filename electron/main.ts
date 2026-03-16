@@ -4,16 +4,19 @@ import fs from 'fs'
 import { AgentManager } from './agent/index'
 import { SchedulerManager } from './agent/scheduler'
 import { SkillManager } from './agent/skills'
+import { LocalModelManager } from './local-model/index'
 
 let mainWindow: BrowserWindow | null = null
 let agentManager: AgentManager
 let schedulerManager: SchedulerManager
 let skillManager: SkillManager
+let localModelManager: LocalModelManager
 
 const DATA_DIR = path.join(app.getPath('userData'), 'onit-data')
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions')
 const SCHEDULED_DIR = path.join(DATA_DIR, 'scheduled')
 const ARTIFACTS_DIR = path.join(DATA_DIR, 'artifacts')
+const MODELS_DIR = path.join(DATA_DIR, 'models')
 const USER_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'user')
 const IMPORTED_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'imported')
 
@@ -27,7 +30,7 @@ function getPrebuiltSkillsDir(): string {
 }
 
 function ensureDirectories() {
-  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, ARTIFACTS_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR]) {
+  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, ARTIFACTS_DIR, MODELS_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
     }
@@ -245,15 +248,87 @@ function setupIPC() {
     shell.openExternal(url)
   })
 
+  // Local model: status
+  ipcMain.handle('local-model:status', async (_event, data?: { modelId?: string }) => {
+    return localModelManager.checkModelStatus(data?.modelId)
+  })
+
+  // Local model: download
+  ipcMain.handle('local-model:download', async (_event, data: { modelId: string }) => {
+    try {
+      await localModelManager.downloadModel(data.modelId, (progress, speed) => {
+        mainWindow?.webContents.send('local-model:download-progress', {
+          modelId: data.modelId,
+          progress,
+          speed,
+        })
+      })
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'downloaded',
+      })
+      return { success: true }
+    } catch (err: any) {
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'error',
+        error: err.message,
+      })
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Local model: cancel download
+  ipcMain.handle('local-model:cancel-download', async () => {
+    localModelManager.cancelDownload()
+    return { success: true }
+  })
+
+  // Local model: delete
+  ipcMain.handle('local-model:delete', async (_event, data: { modelId: string }) => {
+    await localModelManager.deleteModel(data.modelId)
+    return { success: true }
+  })
+
+  // Local model: load
+  ipcMain.handle('local-model:load', async (_event, data: { modelId: string }) => {
+    try {
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'loading',
+      })
+      await localModelManager.loadModel(data.modelId)
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'ready',
+      })
+      return { success: true }
+    } catch (err: any) {
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'error',
+        error: err.message,
+      })
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Local model: unload
+  ipcMain.handle('local-model:unload', async () => {
+    await localModelManager.unloadModel()
+    return { success: true }
+  })
+
   // Get app data path
   ipcMain.handle('app:get-data-path', () => DATA_DIR)
 }
 
 app.whenReady().then(() => {
   ensureDirectories()
+  localModelManager = new LocalModelManager(MODELS_DIR)
   agentManager = new AgentManager((channel, data) => {
     mainWindow?.webContents.send(channel, data)
-  }, { artifactsDir: ARTIFACTS_DIR })
+  }, { artifactsDir: ARTIFACTS_DIR, localModelManager })
   schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager)
   skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
 

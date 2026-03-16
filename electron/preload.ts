@@ -35,6 +35,14 @@ const api = {
   createSkill: (data: { name: string; description: string; content: string }) => ipcRenderer.invoke('skills:create', data),
   importSkill: () => ipcRenderer.invoke('skills:import'),
 
+  // Local model
+  getLocalModelStatus: (data?: { modelId?: string }) => ipcRenderer.invoke('local-model:status', data),
+  downloadLocalModel: (data: { modelId: string }) => ipcRenderer.invoke('local-model:download', data),
+  cancelLocalModelDownload: () => ipcRenderer.invoke('local-model:cancel-download'),
+  deleteLocalModel: (data: { modelId: string }) => ipcRenderer.invoke('local-model:delete', data),
+  loadLocalModel: (data: { modelId: string }) => ipcRenderer.invoke('local-model:load', data),
+  unloadLocalModel: () => ipcRenderer.invoke('local-model:unload'),
+
   // File system
   listDirectory: (dirPath: string) => ipcRenderer.invoke('fs:list-directory', dirPath),
 
@@ -92,6 +100,16 @@ const api = {
     const listener = (_event: any, data: any) => callback(data)
     ipcRenderer.on('scheduler:session-created', listener)
     return () => ipcRenderer.removeListener('scheduler:session-created', listener)
+  },
+  onLocalModelProgress: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('local-model:download-progress', listener)
+    return () => ipcRenderer.removeListener('local-model:download-progress', listener)
+  },
+  onLocalModelStatusChange: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('local-model:status-change', listener)
+    return () => ipcRenderer.removeListener('local-model:status-change', listener)
   },
 }
 

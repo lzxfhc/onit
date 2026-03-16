@@ -103,19 +103,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             ...(parsed.apiConfig || {}),
           },
         }
-        const isLoggedIn = !!settings.apiConfig.apiKey
-        set({ settings, isLoggedIn })
-        // Sync API config to scheduler on load
-        if (isLoggedIn) {
-          try {
-            window.electronAPI.setSchedulerApiConfig({
-              billingMode: settings.apiConfig.billingMode,
-              apiKey: settings.apiConfig.apiKey,
-              customBaseUrl: settings.apiConfig.customBaseUrl,
-              codingPlanProvider: settings.apiConfig.codingPlanProvider,
-            })
-          } catch {}
-        }
+        // Load settings but don't auto-login — always show mode selection on startup
+        set({ settings, isLoggedIn: false })
       }
     } catch {
       // Use defaults
