@@ -1476,7 +1476,8 @@ When providing final results, format them clearly with markdown. For code, use a
 
   private async sleepWithAbort(agentSession: AgentSession, ms: number): Promise<void> {
     if (ms <= 0) return
-    if (!agentSession.abortController) {
+    const abortController = agentSession.abortController
+    if (!abortController) {
       await new Promise(resolve => setTimeout(resolve, ms))
       return
     }
@@ -1494,10 +1495,10 @@ When providing final results, format them clearly with markdown. For code, use a
 
       const cleanup = () => {
         clearTimeout(timer)
-        agentSession.abortController?.signal.removeEventListener('abort', onAbort)
+        abortController.signal.removeEventListener('abort', onAbort)
       }
 
-      agentSession.abortController.signal.addEventListener('abort', onAbort, { once: true })
+      abortController.signal.addEventListener('abort', onAbort, { once: true })
     })
   }
 

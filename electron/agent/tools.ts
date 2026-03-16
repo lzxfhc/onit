@@ -244,11 +244,13 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
 }
 
 function globMatch(pattern: string, filename: string): boolean {
+  const placeholder = '__GLOBSTAR__'
   const regex = pattern
-    .replace(/\./g, '\.')
-    .replace(/\*\*/g, '{{GLOBSTAR}}')
+    .replace(/\*\*/g, placeholder)
+    // Escape regex special chars except '*', which we handle below.
+    .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
     .replace(/\*/g, '[^/\\\\]*')
-    .replace(/\{\{GLOBSTAR\}\}/g, '.*')
+    .replace(new RegExp(placeholder, 'g'), '.*')
   return new RegExp(`^${regex}$`).test(filename)
 }
 
@@ -662,6 +664,183 @@ function appendOutputChunk(target: string[], state: { length: number; truncated:
   state.length += chunk.length
 }
 
+function splitCommandSegments(command: string): { segments: string[]; operators: string[] } {
+  // Best-effort segmenter for cmd-like operators. We only split on operators
+  // when outside quotes so we can rewrite common unix-like commands per segment.
+  const segments: string[] = []
+  const operators: string[] = []
+
+  let buf = ''
+  let inSingle = false
+  let inDouble = false
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble
+      buf += ch
+      continue
+    }
+
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle
+      buf += ch
+      continue
+    }
+
+    if (!inSingle && !inDouble) {
+      const next2 = command.slice(i, i + 2)
+      if (next2 === '&&' || next2 === '||') {
+        segments.push(buf)
+        operators.push(next2)
+        buf = ''
+        i += 1
+        continue
+      }
+
+      if (ch === '|' || ch === '&' || ch === ';') {
+        segments.push(buf)
+        operators.push(ch)
+        buf = ''
+        continue
+      }
+    }
+
+    buf += ch
+  }
+
+  segments.push(buf)
+  return { segments, operators }
+}
+
+function tokenizeCommandLine(input: string): string[] {
+  // Minimal tokenizer: splits on whitespace outside double quotes, strips quotes.
+  const tokens: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (ch === '"') {
+      inQuotes = !inQuotes
+      continue
+    }
+    if (!inQuotes && /\s/.test(ch)) {
+      if (current.length > 0) tokens.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  if (current.length > 0) tokens.push(current)
+  return tokens
+}
+
+function quoteCmdArg(arg: string): string {
+  if (!arg) return '""'
+  if (arg.startsWith('"') && arg.endsWith('"')) return arg
+  return /[\s"]/g.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg
+}
+
+function hasUnquotedRedirection(segment: string): boolean {
+  let inSingle = false
+  let inDouble = false
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i]
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble
+      continue
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle
+      continue
+    }
+    if (!inSingle && !inDouble && (ch === '>' || ch === '<')) return true
+  }
+  return false
+}
+
+function rewriteWindowsCommandSegment(segment: string): string {
+  // Only rewrite very common unix-like commands that frequently appear in LLM output.
+  // Keep this conservative: avoid rewriting when there is redirection since quoting
+  // rules differ and mistakes are costly.
+  if (process.platform !== 'win32') return segment
+
+  const leading = segment.match(/^\s*/)?.[0] ?? ''
+  const trailing = segment.match(/\s*$/)?.[0] ?? ''
+  const core = segment.trim()
+  if (!core) return segment
+  if (hasUnquotedRedirection(core)) return segment
+
+  const tokens = tokenizeCommandLine(core)
+  if (tokens.length === 0) return segment
+
+  const cmd = tokens[0].toLowerCase()
+  const rest = tokens.slice(1)
+
+  if (cmd === 'pwd') {
+    return `${leading}cd${trailing}`
+  }
+
+  if (cmd === 'clear') {
+    return `${leading}cls${trailing}`
+  }
+
+  if (cmd === 'which' && rest.length >= 1) {
+    return `${leading}where ${rest.map(quoteCmdArg).join(' ')}${trailing}`
+  }
+
+  if (cmd === 'ls') {
+    let showAll = false
+    const paths: string[] = []
+
+    for (const arg of rest) {
+      const lower = arg.toLowerCase()
+      if (lower === '--all' || lower.includes('a') && lower.startsWith('-')) {
+        showAll = true
+        continue
+      }
+      if (lower.startsWith('-')) {
+        // Ignore other unix flags like -l/-h/-t for now.
+        continue
+      }
+      paths.push(arg)
+    }
+
+    const args = ['dir']
+    if (showAll) args.push('/a')
+    if (paths.length > 0) args.push(quoteCmdArg(paths[0]))
+    return `${leading}${args.join(' ')}${trailing}`
+  }
+
+  if (cmd === 'cat') {
+    if (rest.length === 0) {
+      // cat without args is interactive and will hang; fail fast with a helpful message.
+      return `${leading}echo cat requires at least one file path${trailing}`
+    }
+    return `${leading}type ${rest.map(quoteCmdArg).join(' ')}${trailing}`
+  }
+
+  return segment
+}
+
+function rewriteWindowsCommand(command: string): string {
+  if (process.platform !== 'win32') return command
+
+  const { segments, operators } = splitCommandSegments(command)
+  const rewrittenSegments = segments.map(seg => rewriteWindowsCommandSegment(seg))
+
+  let out = ''
+  for (let i = 0; i < rewrittenSegments.length; i++) {
+    out += rewrittenSegments[i]
+    if (i < operators.length) {
+      out += operators[i]
+    }
+  }
+  return out
+}
+
 function spawnCommand(command: string, cwd: string) {
   const env = { ...process.env, FORCE_COLOR: '0' }
 
@@ -923,7 +1102,7 @@ export async function executeTool(
       }
 
       case 'list_directory': {
-        const dirPath = args.path || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
+        const dirPath = args.path || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || os.homedir() || '/'
         if (!fs.existsSync(dirPath)) {
           return { success: false, output: `Directory not found: ${dirPath}`, riskLevel }
         }
@@ -1012,8 +1191,9 @@ export async function executeTool(
       }
 
       case 'execute_command': {
-        const cwd = args.working_directory || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
-        return runCommand(args.command, cwd, riskLevel, options?.signal)
+        const cwd = args.working_directory || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || os.homedir() || '/'
+        const command = typeof args.command === 'string' ? rewriteWindowsCommand(args.command) : ''
+        return runCommand(command, cwd, riskLevel, options?.signal)
       }
 
       case 'web_search': {
