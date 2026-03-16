@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import { AgentManager } from './agent/index'
@@ -37,6 +37,11 @@ function ensureDirectories() {
 const isMac = process.platform === 'darwin'
 const isWin = process.platform === 'win32'
 
+if (isWin) {
+  // Required for notifications and proper taskbar grouping on Windows.
+  app.setAppUserModelId('com.onit.app')
+}
+
 function createWindow() {
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: 1400,
@@ -51,6 +56,7 @@ function createWindow() {
       sandbox: false,
     },
     show: false,
+    autoHideMenuBar: isWin,
   }
 
   if (isMac) {
@@ -66,6 +72,9 @@ function createWindow() {
   }
 
   mainWindow = new BrowserWindow(windowOptions)
+  if (isWin) {
+    mainWindow.setMenuBarVisibility(false)
+  }
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
@@ -255,6 +264,9 @@ function setupIPC() {
 
 app.whenReady().then(() => {
   ensureDirectories()
+  if (isWin) {
+    Menu.setApplicationMenu(null)
+  }
   agentManager = new AgentManager((channel, data) => {
     mainWindow?.webContents.send(channel, data)
   }, { artifactsDir: ARTIFACTS_DIR })

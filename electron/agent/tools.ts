@@ -509,6 +509,141 @@ async function searchContentRecursive(
 const MAX_COMMAND_OUTPUT_LENGTH = 120000
 const COMMAND_TIMEOUT_MS = 60000
 
+function escapeInvalidBackslashesInJson(input: string): string {
+  // LLM tool arguments are strict JSON. Windows paths like "C:\Users\me"
+  // frequently arrive with unescaped backslashes, causing JSON.parse to fail.
+  //
+  // This repair pass only runs after an initial JSON.parse failure. It walks the
+  // JSON text and, inside string literals, escapes any backslash that is not
+  // starting a valid JSON escape sequence.
+  let out = ''
+  let inString = false
+  let escaped = false
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+
+    if (!inString) {
+      out += ch
+      if (ch === '"') inString = true
+      continue
+    }
+
+    if (escaped) {
+      out += ch
+      escaped = false
+      continue
+    }
+
+    if (ch === '\\') {
+      const next = input[i + 1]
+      if (next && /["\\/bfnrtu]/.test(next)) {
+        out += ch
+        escaped = true
+        continue
+      }
+
+      // Invalid escape (e.g. \U in C:\Users). Convert to a literal backslash by escaping it.
+      out += '\\\\'
+      continue
+    }
+
+    out += ch
+    if (ch === '"') inString = false
+  }
+
+  return out
+}
+
+function restoreWindowsBackslashEscapes(value: string): string {
+  // If a Windows path was provided with single backslashes inside JSON, some
+  // sequences will parse into control characters (e.g. \t => tab, \n => newline).
+  // Paths should never contain these, so we convert them back to literal
+  // backslash+letter.
+  return value
+    .replace(/\u0008/g, '\\b')
+    .replace(/\u000c/g, '\\f')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
+}
+
+function normalizeToolArgsForPlatform(toolName: string, args: any): any {
+  if (process.platform !== 'win32') return args
+  if (!args || typeof args !== 'object') return args
+
+  const restoreKey = (key: string) => {
+    if (typeof args[key] === 'string') {
+      args[key] = restoreWindowsBackslashEscapes(args[key])
+    }
+  }
+
+  switch (toolName) {
+    case 'read_file':
+    case 'write_file':
+    case 'edit_file':
+    case 'delete_file':
+    case 'list_directory':
+      restoreKey('path')
+      break
+    case 'search_files':
+    case 'search_content':
+      restoreKey('directory')
+      break
+    case 'execute_command':
+      // Commands often embed Windows paths (e.g. cd C:\temp), so restore escapes here too.
+      restoreKey('working_directory')
+      restoreKey('command')
+      break
+    default:
+      break
+  }
+
+  return args
+}
+
+export function parseToolArgs(argsStr: string, toolName: string): { ok: true; args: any; repaired: boolean } | { ok: false; error: string } {
+  if (typeof argsStr !== 'string' || argsStr.trim().length === 0) {
+    return { ok: false, error: 'Empty tool arguments.' }
+  }
+
+  try {
+    const parsed = normalizeToolArgsForPlatform(toolName, JSON.parse(argsStr))
+    return { ok: true, args: parsed, repaired: false }
+  } catch {
+    // Fall through to repair attempt.
+  }
+
+  try {
+    const repairedStr = escapeInvalidBackslashesInJson(argsStr)
+    const parsed = normalizeToolArgsForPlatform(toolName, JSON.parse(repairedStr))
+    return { ok: true, args: parsed, repaired: repairedStr !== argsStr }
+  } catch (error: any) {
+    return { ok: false, error: error?.message || 'Invalid JSON tool arguments.' }
+  }
+}
+
+export function inferRiskLevelWithoutArgs(toolName: string): RiskLevel {
+  switch (toolName) {
+    case 'read_file':
+    case 'list_directory':
+    case 'search_files':
+    case 'search_content':
+    case 'create_task_list':
+    case 'web_search':
+    case 'web_fetch':
+      return 'safe'
+    case 'delete_file':
+      return 'dangerous'
+    case 'execute_command':
+    case 'write_file':
+    case 'edit_file':
+    default:
+      // Conservative: if we can't parse args, assume at least moderate risk.
+      return 'moderate'
+  }
+}
+
 function appendOutputChunk(target: string[], state: { length: number; truncated: boolean }, chunk: string) {
   if (!chunk || state.length >= MAX_COMMAND_OUTPUT_LENGTH) {
     if (chunk) state.truncated = true
@@ -527,40 +662,76 @@ function appendOutputChunk(target: string[], state: { length: number; truncated:
   state.length += chunk.length
 }
 
-async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): Promise<ToolExecutionResult> {
+function spawnCommand(command: string, cwd: string) {
+  const env = { ...process.env, FORCE_COLOR: '0' }
+
+  if (process.platform === 'win32') {
+    // Use cmd.exe explicitly so command chaining like "a && b" works reliably.
+    // Force UTF-8 output to avoid mojibake on non-English Windows locales.
+    const wrapped = `chcp 65001 >nul & ${command}`
+    return spawn('cmd.exe', ['/d', '/s', '/c', wrapped], {
+      cwd,
+      env,
+      windowsHide: true,
+    })
+  }
+
+  return spawn(command, [], {
+    cwd,
+    shell: true,
+    env,
+  })
+}
+
+function killProcessTree(child: ReturnType<typeof spawn>) {
+  try {
+    if (process.platform === 'win32') {
+      if (child.pid) {
+        spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+      }
+      return
+    }
+
+    child.kill('SIGTERM')
+    setTimeout(() => {
+      try {
+        child.kill('SIGKILL')
+      } catch {}
+    }, 5000)
+  } catch {}
+}
+
+async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, abortSignal?: AbortSignal): Promise<ToolExecutionResult> {
   return new Promise((resolve) => {
     const stdoutChunks: string[] = []
     const stderrChunks: string[] = []
     const outputState = { length: 0, truncated: false }
     let timedOut = false
+    let aborted = false
     let settled = false
+    let killIssued = false
 
-    const child = spawn(command, [], {
-      cwd,
-      shell: true,
-      env: { ...process.env, FORCE_COLOR: '0' },
-    })
+    const child = spawnCommand(command, cwd)
+
+    const issueKill = () => {
+      if (killIssued) return
+      killIssued = true
+      killProcessTree(child)
+    }
 
     const timeout = setTimeout(() => {
       timedOut = true
-      try {
-        if (process.platform === 'win32') {
-          spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-        } else {
-          child.kill('SIGTERM')
-        }
-      } catch {}
-
-      setTimeout(() => {
-        try {
-          if (process.platform === 'win32') {
-            spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
-          } else {
-            child.kill('SIGKILL')
-          }
-        } catch {}
-      }, 5000)
+      issueKill()
     }, COMMAND_TIMEOUT_MS)
+
+    const onAbort = () => {
+      aborted = true
+      issueKill()
+    }
+    if (abortSignal) {
+      if (abortSignal.aborted) onAbort()
+      else abortSignal.addEventListener('abort', onAbort, { once: true })
+    }
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
       appendOutputChunk(stdoutChunks, outputState, chunk.toString())
@@ -574,16 +745,26 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): P
       if (settled) return
       settled = true
       clearTimeout(timeout)
+      if (abortSignal) abortSignal.removeEventListener('abort', onAbort)
       resolve({ success: false, output: `Command failed: ${error.message}`, riskLevel })
     })
 
-    child.on('close', (code, signal) => {
+    child.on('close', (code, closeSignal) => {
       if (settled) return
       settled = true
       clearTimeout(timeout)
+      if (abortSignal) abortSignal.removeEventListener('abort', onAbort)
 
       const combinedOutput = [...stdoutChunks, ...stderrChunks].join('').trim()
       const truncatedSuffix = outputState.truncated ? '\n\n[Output truncated]' : ''
+
+      if (aborted) {
+        const abortMessage = combinedOutput
+          ? `${combinedOutput}${truncatedSuffix}\n\n[Command aborted by user]`
+          : 'Command aborted by user'
+        resolve({ success: false, output: abortMessage, riskLevel })
+        return
+      }
 
       if (timedOut) {
         const timeoutMessage = combinedOutput
@@ -602,8 +783,8 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): P
         return
       }
 
-      const failureDetails = signal
-        ? `Command terminated by signal: ${signal}`
+      const failureDetails = closeSignal
+        ? `Command terminated by signal: ${closeSignal}`
         : `Command failed with exit code ${code}`
       const failureOutput = combinedOutput ? `${combinedOutput}${truncatedSuffix}` : failureDetails
 
@@ -622,13 +803,15 @@ export async function executeTool(
   workspacePath: string | null,
   options?: { signal?: AbortSignal }
 ): Promise<ToolExecutionResult> {
-  let args: any
-  try {
-    args = JSON.parse(argsStr)
-  } catch {
-    return { success: false, output: `Invalid tool arguments: ${argsStr}`, riskLevel: 'safe' }
+  const parsed = parseToolArgs(argsStr, toolName)
+  if (!parsed.ok) {
+    const hint = process.platform === 'win32'
+      ? '\n\n[Hint: On Windows, prefer forward-slash paths like C:/Users/... in tool arguments, or escape backslashes as \\\\ in JSON strings.]'
+      : ''
+    return { success: false, output: `Invalid tool arguments: ${argsStr}\n\n${parsed.error}${hint}`, riskLevel: inferRiskLevelWithoutArgs(toolName) }
   }
 
+  const args = parsed.args
   const riskLevel = getToolRiskLevel(toolName, args)
 
   try {
@@ -830,7 +1013,7 @@ export async function executeTool(
 
       case 'execute_command': {
         const cwd = args.working_directory || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
-        return runCommand(args.command, cwd, riskLevel)
+        return runCommand(args.command, cwd, riskLevel, options?.signal)
       }
 
       case 'web_search': {
