@@ -5,7 +5,7 @@ import path from 'path'
 import os from 'os'
 import { URL } from 'url'
 import { v4 as uuidv4 } from 'uuid'
-import { executeTool, AGENT_TOOLS, getToolRiskLevel } from './tools'
+import { executeTool, AGENT_TOOLS, getToolRiskLevel, inferRiskLevelWithoutArgs, parseToolArgs } from './tools'
 import { AgentMessage } from './types'
 
 interface SkillData {
@@ -600,7 +600,7 @@ export class AgentManager {
     const osName = os.platform() === 'darwin' ? 'macOS' : os.platform() === 'win32' ? 'Windows' : 'Linux'
     const homeDir = os.homedir()
     const platformHint = os.platform() === 'win32'
-      ? '\nThe user is on Windows. Use Windows-compatible commands (cmd.exe or PowerShell). Use backslash paths. Common equivalents: ls->dir, cat->type, rm->del, cp->copy, mv->move, grep->findstr.\n'
+      ? '\nThe user is on Windows. The execute_command tool runs in cmd.exe by default.\nUse cmd-compatible commands, or explicitly invoke PowerShell when needed (e.g. powershell -NoProfile -Command "...").\nWhen passing tool arguments as JSON, prefer forward-slash paths like C:/Users/... or escape backslashes as \\\\.\nCommon equivalents: ls->dir, cat->type, rm->del, cp->copy, mv->move, grep->findstr.\n'
       : ''
 
     // Skills section
@@ -1476,7 +1476,8 @@ When providing final results, format them clearly with markdown. For code, use a
 
   private async sleepWithAbort(agentSession: AgentSession, ms: number): Promise<void> {
     if (ms <= 0) return
-    if (!agentSession.abortController) {
+    const abortController = agentSession.abortController
+    if (!abortController) {
       await new Promise(resolve => setTimeout(resolve, ms))
       return
     }
@@ -1494,10 +1495,10 @@ When providing final results, format them clearly with markdown. For code, use a
 
       const cleanup = () => {
         clearTimeout(timer)
-        agentSession.abortController?.signal.removeEventListener('abort', onAbort)
+        abortController.signal.removeEventListener('abort', onAbort)
       }
 
-      agentSession.abortController.signal.addEventListener('abort', onAbort, { once: true })
+      abortController.signal.addEventListener('abort', onAbort, { once: true })
     })
   }
 
@@ -1778,9 +1779,9 @@ When providing final results, format them clearly with markdown. For code, use a
           })
 
           // Check permissions BEFORE executing
-          let args: any = {}
-          try { args = JSON.parse(toolArgs) } catch {}
-          const riskLevel = getToolRiskLevel(toolName, args)
+          const parsedArgs = parseToolArgs(toolArgs, toolName)
+          const args = parsedArgs.ok ? parsedArgs.args : {}
+          const riskLevel = parsedArgs.ok ? getToolRiskLevel(toolName, args) : inferRiskLevelWithoutArgs(toolName)
 
           if (riskLevel !== 'safe') {
             const description = `${toolName}: ${args.path || args.command || ''}`
