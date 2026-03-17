@@ -167,10 +167,10 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
       return
     }
 
-    await onSend(trimmedInput)
     setInput('')
     setShowSkillMention(false)
     mentionRangeRef.current = null
+    await onSend(trimmedInput)
   }
 
   const handleKeyDown = (event: React.KeyboardEvent) => {

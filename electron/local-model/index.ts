@@ -5,6 +5,39 @@ import * as http from 'http'
 import { v4 as uuidv4 } from 'uuid'
 import { buildChatHistory, buildFunctions, parseToolCallsFromText } from './hermes'
 
+class AsyncMutex {
+  private locked = false
+  private waiters: Array<() => void> = []
+
+  private async acquire(): Promise<void> {
+    if (!this.locked) {
+      this.locked = true
+      return
+    }
+    await new Promise<void>((resolve) => this.waiters.push(resolve))
+    this.locked = true
+  }
+
+  private release(): void {
+    const next = this.waiters.shift()
+    if (next) {
+      // Keep locked=true; ownership transfers to the next waiter.
+      next()
+      return
+    }
+    this.locked = false
+  }
+
+  async runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    await this.acquire()
+    try {
+      return await fn()
+    } finally {
+      this.release()
+    }
+  }
+}
+
 // Types shared with renderer
 interface LocalModelDef {
   id: string
@@ -74,6 +107,7 @@ function getModelDef(modelId: string): LocalModelDef | undefined {
 }
 
 export class LocalModelManager {
+  private readonly opMutex = new AsyncMutex()
   private llama: any = null
   private model: any = null
   private context: any = null
@@ -284,40 +318,48 @@ export class LocalModelManager {
   }
 
   async loadModel(modelId: string): Promise<void> {
-    const modelDef = getModelDef(modelId)
-    if (!modelDef) throw new Error(`Unknown model: ${modelId}`)
+    await this.opMutex.runExclusive(async () => {
+      const modelDef = getModelDef(modelId)
+      if (!modelDef) throw new Error(`Unknown model: ${modelId}`)
 
-    const filePath = this.getModelPath(modelDef)
-    if (!fs.existsSync(filePath)) throw new Error('Model file not found. Please download first.')
+      const filePath = this.getModelPath(modelDef)
+      if (!fs.existsSync(filePath)) throw new Error('Model file not found. Please download first.')
 
-    if (this.currentModelId === modelId && this.llamaChat) return
+      if (this.currentModelId === modelId && this.llamaChat) return
 
-    await this.unloadModel()
-    this.status = 'loading'
-    this.currentModelId = modelId
+      await this.unloadModelUnlocked()
+      this.status = 'loading'
+      this.currentModelId = modelId
 
-    try {
-      const { getLlama } = await import('node-llama-cpp')
-      this.llama = await getLlama()
-      this.model = await this.llama.loadModel({ modelPath: filePath })
-      this.context = await this.model.createContext({
-        contextSize: Math.min(modelDef.contextSize, 32768),
-      })
+      try {
+        const { getLlama } = await import('node-llama-cpp')
+        this.llama = await getLlama()
+        this.model = await this.llama.loadModel({ modelPath: filePath })
+        this.context = await this.model.createContext({
+          contextSize: Math.min(modelDef.contextSize, 32768),
+        })
 
-      const { LlamaChat } = await import('node-llama-cpp')
-      this.llamaChat = new LlamaChat({
-        contextSequence: this.context.getSequence(),
-      })
+        const { LlamaChat } = await import('node-llama-cpp')
+        this.llamaChat = new LlamaChat({
+          contextSequence: this.context.getSequence(),
+        })
 
-      this.status = 'ready'
-    } catch (err: any) {
-      this.status = 'error'
-      this.currentModelId = null
-      throw new Error(`Failed to load model: ${err.message}`)
-    }
+        this.status = 'ready'
+      } catch (err: any) {
+        this.status = 'error'
+        this.currentModelId = null
+        throw new Error(`Failed to load model: ${err.message}`)
+      }
+    })
   }
 
   async unloadModel(): Promise<void> {
+    await this.opMutex.runExclusive(async () => {
+      await this.unloadModelUnlocked()
+    })
+  }
+
+  private async unloadModelUnlocked(): Promise<void> {
     this.llamaChat = null
     if (this.context) {
       await this.context.dispose?.()
@@ -344,58 +386,59 @@ export class LocalModelManager {
     abortSignal?: AbortSignal
     onToken?: (chunk: { type: 'content' | 'thinking'; content: string }) => void
   }): Promise<{ content: string; toolCalls: any[] }> {
-    if (!this.llamaChat || !this.model) {
-      throw new Error('Model not loaded')
-    }
+    return this.opMutex.runExclusive(async () => {
+      if (!this.llamaChat || !this.model) {
+        throw new Error('Model not loaded')
+      }
 
-    const chatHistory = buildChatHistory(params.messages, params.tools)
-    const functions = params.tools ? buildFunctions(params.tools) : undefined
+      const chatHistory = buildChatHistory(params.messages, params.tools)
+      const functions = params.tools ? buildFunctions(params.tools) : undefined
 
-    let fullContent = ''
+      let fullContent = ''
 
-    try {
-      const response = await this.llamaChat.generateResponse(chatHistory, {
-        functions,
-        temperature: params.temperature ?? 0.7,
-        maxTokens: params.maxTokens ?? 8000,
-        signal: params.abortSignal,
-        onTextChunk: (text: string) => {
-          fullContent += text
-          params.onToken?.({ type: 'content', content: text })
-        },
-      })
+      try {
+        const response = await this.llamaChat.generateResponse(chatHistory, {
+          functions,
+          temperature: params.temperature ?? 0.7,
+          maxTokens: params.maxTokens ?? 8000,
+          signal: params.abortSignal,
+          onTextChunk: (text: string) => {
+            fullContent += text
+            params.onToken?.({ type: 'content', content: text })
+          },
+        })
 
-      // Extract function calls from the response
-      // node-llama-cpp v3 returns { response: string, functionCalls?: [...], metadata, lastEvaluation }
-      const toolCalls: any[] = []
+        // Extract function calls from the response
+        // node-llama-cpp v3 returns { response: string, functionCalls?: [...], metadata, lastEvaluation }
+        const toolCalls: any[] = []
 
-      if (response?.functionCalls && Array.isArray(response.functionCalls)) {
-        for (const fc of response.functionCalls) {
-          toolCalls.push({
-            id: `call_${uuidv4().slice(0, 8)}`,
-            type: 'function',
-            function: {
-              name: fc.functionName,
-              arguments: JSON.stringify(fc.params),
-            },
-          })
+        if (response?.functionCalls && Array.isArray(response.functionCalls)) {
+          for (const fc of response.functionCalls) {
+            toolCalls.push({
+              id: `call_${uuidv4().slice(0, 8)}`,
+              type: 'function',
+              function: {
+                name: fc.functionName,
+                arguments: JSON.stringify(fc.params),
+              },
+            })
+          }
         }
-      }
 
-      // Fallback: parse <tool_call> tags from text output (when grammar enforcement is inactive)
-      if (toolCalls.length === 0 && fullContent.includes('<tool_call>')) {
-        const parsed = parseToolCallsFromText(fullContent)
-        fullContent = parsed.content
-        toolCalls.push(...parsed.toolCalls)
-      }
+        // Fallback: parse <tool_call> tags from text output (when grammar enforcement is inactive)
+        if (toolCalls.length === 0 && fullContent.includes('<tool_call>')) {
+          const parsed = parseToolCallsFromText(fullContent)
+          fullContent = parsed.content
+          toolCalls.push(...parsed.toolCalls)
+        }
 
-      return { content: fullContent, toolCalls }
-    } catch (err: any) {
-      if (err.name === 'AbortError' || params.abortSignal?.aborted) {
-        throw new Error('Agent stopped')
+        return { content: fullContent, toolCalls }
+      } catch (err: any) {
+        if (err.name === 'AbortError' || params.abortSignal?.aborted) {
+          throw new Error('Agent stopped')
+        }
+        throw err
       }
-      throw err
-    }
+    })
   }
 }
-

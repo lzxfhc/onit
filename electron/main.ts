@@ -184,7 +184,15 @@ function setupIPC() {
   })
 
   // Scheduler: set API config
-  ipcMain.handle('scheduler:set-api-config', async (_event, config: { billingMode: string; apiKey: string; customBaseUrl?: string }) => {
+  ipcMain.handle('scheduler:set-api-config', async (_event, config: {
+    billingMode: string
+    apiKey: string
+    customBaseUrl?: string
+    codingPlanProvider?: string
+    localModelId?: string
+    maxInputTokens?: number
+    maxOutputTokens?: number
+  }) => {
     schedulerManager.setApiConfig(config)
     return true
   })

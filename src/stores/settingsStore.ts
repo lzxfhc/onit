@@ -81,6 +81,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         apiKey: mergedConfig.apiKey,
         customBaseUrl: mergedConfig.customBaseUrl,
         codingPlanProvider: mergedConfig.codingPlanProvider,
+        localModelId: mergedConfig.localModelId,
+        maxInputTokens: mergedConfig.maxInputTokens,
+        maxOutputTokens: mergedConfig.maxOutputTokens,
       })
     } catch {}
   },

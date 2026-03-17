@@ -154,9 +154,8 @@ export class AgentManager {
       if (!modelId) {
         throw new Error('No local model selected')
       }
-      if (!this.localModelManager.isReady()) {
-        await this.localModelManager.loadModel(modelId)
-      }
+      // loadModel() is idempotent when the same model is already loaded.
+      await this.localModelManager.loadModel(modelId)
     }
 
     const sessionMemory: SessionMemoryData | null = sessionData.sessionMemory && typeof sessionData.sessionMemory.content === 'string'
@@ -1101,7 +1100,10 @@ When providing final results, format them clearly with markdown. For code, use a
       force?: boolean
     }
   ): Promise<void> {
-    if (!agentSession.apiConfig.apiKey) return
+    const billingMode = agentSession.apiConfig.billingMode
+    // Local model mode does not require an API key, but still needs Session
+    // Memory compression to stay within its smaller context window.
+    if (billingMode !== 'local-model' && !agentSession.apiConfig.apiKey) return
     if (agentSession.isMemoryCompressionRunning) return
 
     let systemMessages: AgentMessage[] = []
@@ -1384,9 +1386,17 @@ When providing final results, format them clearly with markdown. For code, use a
     },
     onChunk?: (chunk: any) => void
   ): Promise<{ content: string; toolCalls: any[] }> {
-    if (!this.localModelManager || !this.localModelManager.isReady()) {
-      throw new Error('Local model not loaded')
+    if (!this.localModelManager) {
+      throw new Error('Local model support is not available')
     }
+    const modelId = agentSession.apiConfig.localModelId
+    if (!modelId) {
+      throw new Error('No local model selected')
+    }
+
+    // Ensure we always run the session with its selected local model, even if
+    // another session changed the currently-loaded model.
+    await this.localModelManager.loadModel(modelId)
 
     return this.localModelManager.generateCompletion({
       messages: params.messages,

@@ -27,7 +27,15 @@ export class SchedulerManager {
   private dataDir: string
   private agentManager: AgentManager
   private jobs: Map<string, schedule.Job> = new Map()
-  private apiConfig: { billingMode: string; apiKey: string; customBaseUrl?: string; codingPlanProvider?: string } | null = null
+  private apiConfig: {
+    billingMode: string
+    apiKey: string
+    customBaseUrl?: string
+    codingPlanProvider?: string
+    localModelId?: string
+    maxInputTokens?: number
+    maxOutputTokens?: number
+  } | null = null
 
   constructor(dataDir: string, agentManager: AgentManager) {
     this.dataDir = dataDir
@@ -35,7 +43,15 @@ export class SchedulerManager {
     this.loadAndScheduleAll()
   }
 
-  setApiConfig(config: { billingMode: string; apiKey: string; customBaseUrl?: string; codingPlanProvider?: string }): void {
+  setApiConfig(config: {
+    billingMode: string
+    apiKey: string
+    customBaseUrl?: string
+    codingPlanProvider?: string
+    localModelId?: string
+    maxInputTokens?: number
+    maxOutputTokens?: number
+  }): void {
     this.apiConfig = config
   }
 
@@ -127,8 +143,14 @@ export class SchedulerManager {
     const task = this.loadTask(id)
     if (!task) return false
 
-    if (!this.apiConfig || !this.apiConfig.apiKey) {
-      return false
+    if (!this.apiConfig) return false
+
+    // Local model mode does not require an API key, but it does require a
+    // selected local model id.
+    if (this.apiConfig.billingMode === 'local-model') {
+      if (!this.apiConfig.localModelId) return false
+    } else {
+      if (!this.apiConfig.apiKey) return false
     }
 
     task.lastRun = Date.now()
@@ -149,15 +171,25 @@ export class SchedulerManager {
       })
     }
 
-    await this.agentManager.startAgent(sessionId, task.taskPrompt, runId, {
-      permissionMode: 'full-access',
-      workspacePath: task.workspacePath,
-      model: task.model,
-      messages: [],
-      apiConfig: this.apiConfig,
-    })
-
-    return true
+    try {
+      await this.agentManager.startAgent(sessionId, task.taskPrompt, runId, {
+        permissionMode: 'full-access',
+        workspacePath: task.workspacePath,
+        model: task.model,
+        messages: [],
+        apiConfig: this.apiConfig,
+      })
+      return true
+    } catch (err: any) {
+      if (sendToRenderer) {
+        sendToRenderer('agent:error', {
+          sessionId,
+          runId,
+          error: err?.message || 'Failed to start scheduled task',
+        })
+      }
+      return false
+    }
   }
 
   shutdown(): void {
