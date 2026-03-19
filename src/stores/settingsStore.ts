@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AppSettings, ApiConfig, PermissionMode, ScheduledTask, Skill, EvolutionData } from '../types'
+import type { AppSettings, ApiConfig, PermissionMode, ScheduledTask, Skill, EvolutionData, Language } from '../types'
 import { DEFAULT_SETTINGS } from '../types'
 
 interface SkillNotification {
@@ -21,6 +21,7 @@ interface SettingsState {
   // Settings actions
   updateApiConfig: (config: Partial<ApiConfig>) => void
   setDefaultPermissionMode: (mode: PermissionMode) => void
+  setLanguage: (language: Language) => void
   login: (config: ApiConfig) => void
   logout: () => void
   loadSettings: () => void
@@ -80,6 +81,13 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   setDefaultPermissionMode: (mode) => {
     set(state => ({
       settings: { ...state.settings, defaultPermissionMode: mode },
+    }))
+    get().saveSettings()
+  },
+
+  setLanguage: (language) => {
+    set(state => ({
+      settings: { ...state.settings, language },
     }))
     get().saveSettings()
   },

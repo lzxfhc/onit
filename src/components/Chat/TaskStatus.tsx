@@ -3,6 +3,7 @@ import {
   CheckCircle2, Circle, Loader2, Wrench, FileText,
   FolderOpen, ChevronRight, XCircle
 } from 'lucide-react'
+import { useT } from '../../i18n'
 import type { Session, TaskItem, ToolCall, WorkspaceFile } from '../../types'
 
 interface Props {
@@ -16,6 +17,7 @@ function getToolCallGroups(messages: Session['messages']): ToolCall[][] {
 }
 
 function TaskStatusPanel({ session }: Props) {
+  const t = useT()
   const [expandedPanels, setExpandedPanels] = useState<Record<string, boolean>>({
     tasks: true,
     tools: true,
@@ -35,7 +37,7 @@ function TaskStatusPanel({ session }: Props) {
   return (
     <div className="w-72 border-l border-border-subtle bg-surface flex flex-col h-full pb-2">
       <CollapsiblePanel
-        title="Tasks"
+        title={t.chat.tasks}
         count={session.tasks.length}
         icon={<CheckCircle2 className="w-3.5 h-3.5 text-accent" />}
         expanded={expandedPanels.tasks}
@@ -45,7 +47,7 @@ function TaskStatusPanel({ session }: Props) {
       </CollapsiblePanel>
 
       <CollapsiblePanel
-        title="Tools"
+        title={t.chat.tools}
         count={allToolCalls.length}
         icon={<Wrench className="w-3.5 h-3.5 text-text-tertiary" />}
         expanded={expandedPanels.tools}
@@ -55,7 +57,7 @@ function TaskStatusPanel({ session }: Props) {
       </CollapsiblePanel>
 
       <CollapsiblePanel
-        title="Files"
+        title={t.chat.files}
         count={session.workspaceFiles.length}
         icon={<FolderOpen className="w-3.5 h-3.5 text-text-tertiary" />}
         expanded={expandedPanels.files}
@@ -100,10 +102,11 @@ function CollapsiblePanel({ title, count, icon, expanded, onToggle, children }: 
 }
 
 function TasksTab({ tasks }: { tasks: TaskItem[] }) {
+  const t = useT()
   if (tasks.length === 0) {
     return (
       <p className="text-xs text-text-tertiary text-center py-6">
-        No tasks yet. The agent will create tasks when working on complex operations.
+        {t.chat.noTasks}
       </p>
     )
   }
@@ -131,10 +134,11 @@ function TasksTab({ tasks }: { tasks: TaskItem[] }) {
 }
 
 function ToolsTab({ toolCalls }: { toolCalls: ToolCall[] }) {
+  const t = useT()
   if (toolCalls.length === 0) {
     return (
       <p className="text-xs text-text-tertiary text-center py-6">
-        No tools called yet.
+        {t.chat.noTools}
       </p>
     )
   }
@@ -188,15 +192,16 @@ function ToolCallItem({ toolCall }: { toolCall: ToolCall }) {
 }
 
 function FilesTab({ files, workspacePath }: { files: WorkspaceFile[]; workspacePath: string | null }) {
+  const t = useT()
   if (!workspacePath) {
     return (
       <div className="text-center py-6">
         <FolderOpen className="w-6 h-6 text-text-tertiary mx-auto mb-2" />
         <p className="text-xs text-text-tertiary">
-          No workspace selected.
+          {t.chat.noWorkspace}
         </p>
         <p className="text-[10px] text-text-tertiary mt-1">
-          Select a workspace folder to see files here.
+          {t.chat.selectWorkspace}
         </p>
       </div>
     )
@@ -206,7 +211,7 @@ function FilesTab({ files, workspacePath }: { files: WorkspaceFile[]; workspaceP
     return (
       <div className="text-center py-6">
         <p className="text-xs text-text-tertiary">
-          Workspace is empty.
+          {t.chat.emptyWorkspace}
         </p>
       </div>
     )

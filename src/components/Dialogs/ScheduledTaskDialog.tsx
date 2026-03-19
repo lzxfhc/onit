@@ -3,6 +3,7 @@ import { X, FolderOpen, ChevronDown } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { AVAILABLE_MODELS } from '../../types'
 import type { ScheduledTask, ScheduledFrequency } from '../../types'
+import { useT } from '../../i18n'
 
 interface Props {
   task?: ScheduledTask
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export default function ScheduledTaskDialog({ task, onClose }: Props) {
+  const t = useT()
   const { addScheduledTask, updateScheduledTask, settings } = useSettingsStore()
   const isEditing = !!task
 
@@ -68,16 +70,16 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
   }
 
   const frequencies: { id: ScheduledFrequency; label: string }[] = [
-    { id: 'manual', label: 'Manual' },
-    { id: 'once', label: 'Once' },
-    { id: 'hourly', label: 'Hourly' },
-    { id: 'daily', label: 'Daily' },
-    { id: 'weekly', label: 'Weekly' },
-    { id: 'monthly', label: 'Monthly' },
-    { id: 'weekdays', label: 'Weekdays' },
+    { id: 'manual', label: t.scheduled.manual },
+    { id: 'once', label: t.scheduled.once },
+    { id: 'hourly', label: t.scheduled.hourly },
+    { id: 'daily', label: t.scheduled.daily },
+    { id: 'weekly', label: t.scheduled.weekly },
+    { id: 'monthly', label: t.scheduled.monthly },
+    { id: 'weekdays', label: t.scheduled.weekdays },
   ]
 
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  const days = [t.scheduled.sunday, t.scheduled.monday, t.scheduled.tuesday, t.scheduled.wednesday, t.scheduled.thursday, t.scheduled.friday, t.scheduled.saturday]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center animate-fade-in">
@@ -87,7 +89,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between p-5 pb-3">
           <h3 className="text-sm font-semibold text-charcoal">
-            {isEditing ? 'Edit Scheduled Task' : 'Create Scheduled Task'}
+            {isEditing ? t.scheduled.editTask : t.scheduled.createTask}
           </h3>
           <button onClick={onClose} className="btn-icon">
             <X className="w-4 h-4" />
@@ -98,35 +100,35 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
         <div className="px-5 pb-4 space-y-4">
           {/* Name */}
           <div>
-            <label className="label">Task Name *</label>
+            <label className="label">{t.scheduled.taskName}</label>
             <input
               type="text"
               value={name}
               onChange={(e) => { setName(e.target.value); setError('') }}
-              placeholder="e.g., Daily Report Generator"
+              placeholder={t.scheduled.taskNamePlaceholder}
               className="input"
             />
           </div>
 
           {/* Description */}
           <div>
-            <label className="label">Description *</label>
+            <label className="label">{t.scheduled.description}</label>
             <input
               type="text"
               value={description}
               onChange={(e) => { setDescription(e.target.value); setError('') }}
-              placeholder="Brief description of what this task does"
+              placeholder={t.scheduled.descriptionPlaceholder}
               className="input"
             />
           </div>
 
           {/* Task Prompt */}
           <div>
-            <label className="label">Task Instructions *</label>
+            <label className="label">{t.scheduled.instructions}</label>
             <textarea
               value={taskPrompt}
               onChange={(e) => { setTaskPrompt(e.target.value); setError('') }}
-              placeholder="Detailed instructions for the agent to follow..."
+              placeholder={t.scheduled.instructionsPlaceholder}
               className="input min-h-[100px] resize-y"
               rows={4}
             />
@@ -151,7 +153,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
             </div>
 
             <div>
-              <label className="label">Frequency</label>
+              <label className="label">{t.scheduled.frequency}</label>
               <div className="relative">
                 <select
                   value={frequency}
@@ -170,7 +172,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
           {/* Scheduling options based on frequency */}
           {frequency === 'once' && (
             <div>
-              <label className="label">Date & Time</label>
+              <label className="label">{t.scheduled.dateTime}</label>
               <input
                 type="datetime-local"
                 value={scheduleDateTime}
@@ -183,7 +185,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
 
           {frequency === 'hourly' && (
             <div>
-              <label className="label">At Minute</label>
+              <label className="label">{t.scheduled.atMinute}</label>
               <div className="relative">
                 <select
                   value={scheduleTime.split(':')[1] || '00'}
@@ -201,7 +203,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
 
           {(frequency === 'daily' || frequency === 'weekdays') && (
             <div>
-              <label className="label">Time</label>
+              <label className="label">{t.scheduled.time}</label>
               <input
                 type="time"
                 value={scheduleTime}
@@ -214,7 +216,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
           {frequency === 'weekly' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="label">Day of Week</label>
+                <label className="label">{t.scheduled.dayOfWeek}</label>
                 <div className="relative">
                   <select
                     value={scheduleDayOfWeek}
@@ -229,7 +231,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
                 </div>
               </div>
               <div>
-                <label className="label">Time</label>
+                <label className="label">{t.scheduled.time}</label>
                 <input
                   type="time"
                   value={scheduleTime}
@@ -243,7 +245,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
           {frequency === 'monthly' && (
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="label">Day of Month</label>
+                <label className="label">{t.scheduled.dayOfMonth}</label>
                 <div className="relative">
                   <select
                     value={scheduleDayOfMonth}
@@ -258,7 +260,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
                 </div>
               </div>
               <div>
-                <label className="label">Time</label>
+                <label className="label">{t.scheduled.time}</label>
                 <input
                   type="time"
                   value={scheduleTime}
@@ -271,13 +273,13 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
 
           {/* Workspace */}
           <div>
-            <label className="label">Workspace Folder (optional)</label>
+            <label className="label">{t.scheduled.workspace}</label>
             <div className="flex gap-2">
               <input
                 type="text"
                 value={workspacePath}
                 onChange={(e) => setWorkspacePath(e.target.value)}
-                placeholder="No workspace selected"
+                placeholder={t.scheduled.noWorkspace}
                 className="input flex-1 text-xs"
                 readOnly
               />
@@ -286,7 +288,7 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
                 className="btn-secondary btn-sm shrink-0"
               >
                 <FolderOpen className="w-3.5 h-3.5" />
-                Browse
+                {t.scheduled.browse}
               </button>
             </div>
           </div>
@@ -300,10 +302,10 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
         {/* Actions */}
         <div className="flex justify-end gap-2 p-5 pt-0">
           <button onClick={onClose} className="btn-secondary">
-            Cancel
+            {t.common.cancel}
           </button>
           <button onClick={handleSave} className="btn-primary">
-            {isEditing ? 'Save Changes' : 'Create Task'}
+            {isEditing ? t.scheduled.saveChanges : t.scheduled.createTask}
           </button>
         </div>
       </div>

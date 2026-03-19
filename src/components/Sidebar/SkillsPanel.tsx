@@ -7,10 +7,12 @@ import {
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import type { Skill } from '../../types'
+import { useT } from '../../i18n'
 
 type SkillsTab = 'prebuilt' | 'created' | 'imported'
 
 export default function SkillsPanel() {
+  const t = useT()
   const { skills, toggleSkill, deleteSkill, importSkill } = useSettingsStore((state) => ({
     skills: state.skills,
     toggleSkill: state.toggleSkill,
@@ -53,13 +55,13 @@ export default function SkillsPanel() {
       {/* Header */}
       <div className="flex items-center justify-between px-2 py-1.5">
         <span className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">
-          Skills
+          {t.skills.title}
         </span>
         <div className="relative">
           <button
             onClick={() => setShowAddMenu(!showAddMenu)}
             className="btn-icon w-6 h-6"
-            title="Add Skill"
+            title={t.skills.addSkill}
           >
             <Plus className="w-3.5 h-3.5" />
           </button>
@@ -70,14 +72,14 @@ export default function SkillsPanel() {
                 className="w-full text-left px-3 py-2 text-xs text-text-secondary hover:bg-gray-50 transition-colors flex items-center gap-2"
               >
                 <Sparkles className="w-3.5 h-3.5 text-accent" />
-                Create with Onit
+                {t.skills.createWithOnit}
               </button>
               <button
                 onClick={handleImport}
                 className="w-full text-left px-3 py-2 text-xs text-text-secondary hover:bg-gray-50 transition-colors flex items-center gap-2"
               >
                 <Download className="w-3.5 h-3.5" />
-                Import Skill
+                {t.skills.importSkill}
               </button>
             </div>
           )}
@@ -87,9 +89,9 @@ export default function SkillsPanel() {
       {/* Sub-tabs */}
       <div className="flex gap-0.5 mx-2 mb-2 p-0.5 bg-gray-100 rounded-md">
         {([
-          { id: 'prebuilt' as SkillsTab, label: 'Built-in' },
-          { id: 'created' as SkillsTab, label: 'Created' },
-          { id: 'imported' as SkillsTab, label: 'Imported' },
+          { id: 'prebuilt' as SkillsTab, label: t.skills.builtIn },
+          { id: 'created' as SkillsTab, label: t.skills.created },
+          { id: 'imported' as SkillsTab, label: t.skills.imported },
         ]).map(tab => (
           <button
             key={tab.id}
@@ -110,17 +112,17 @@ export default function SkillsPanel() {
         <div className="px-3 py-8 text-center">
           <p className="text-xs text-text-tertiary">
             {activeTab === 'prebuilt'
-              ? 'No built-in skills found'
+              ? t.skills.noBuiltIn
               : activeTab === 'created'
-              ? 'No custom skills yet'
-              : 'No imported skills'}
+              ? t.skills.noCreated
+              : t.skills.noImported}
           </p>
           {activeTab !== 'prebuilt' && (
             <button
               onClick={activeTab === 'created' ? handleCreateViaOnit : handleImport}
               className="text-xs text-accent hover:underline mt-2"
             >
-              {activeTab === 'created' ? 'Create your first skill' : 'Import a skill'}
+              {activeTab === 'created' ? t.skills.createFirst : t.skills.importFirst}
             </button>
           )}
         </div>
@@ -164,6 +166,7 @@ function SkillItem({ skill, onToggle, onDelete, onViewRecords, onViewEvolution }
   onViewRecords: () => void
   onViewEvolution: () => void
 }) {
+  const t = useT()
   const [showDetails, setShowDetails] = useState(false)
   const { toggleSkillEvolvable } = useSettingsStore((state) => ({
     toggleSkillEvolvable: state.toggleSkillEvolvable,
@@ -181,7 +184,7 @@ function SkillItem({ skill, onToggle, onDelete, onViewRecords, onViewEvolution }
               <span className="text-[9px] text-text-tertiary">v{skill.version}</span>
             )}
             {skill.pendingEvolution && (
-              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse shrink-0" title="Update available" />
+              <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse shrink-0" title={t.skills.updateAvailable} />
             )}
             <ChevronDown className={`w-3 h-3 text-text-tertiary transition-transform duration-200 ${showDetails ? 'rotate-180' : ''}`} />
           </div>
@@ -193,10 +196,10 @@ function SkillItem({ skill, onToggle, onDelete, onViewRecords, onViewEvolution }
             <div className="flex items-center gap-2 mt-1">
               <span className="inline-flex items-center gap-0.5 text-[9px] text-text-tertiary">
                 <Dna className="w-2.5 h-2.5" />
-                {skill.recordCount} records
+                {skill.recordCount} {t.skills.records}
               </span>
               <span className="text-[9px] text-text-tertiary">
-                Used {skill.usageCount}x
+                {t.skills.used} {skill.usageCount}{t.skills.times}
               </span>
             </div>
           )}
@@ -204,7 +207,7 @@ function SkillItem({ skill, onToggle, onDelete, onViewRecords, onViewEvolution }
         <button
           onClick={onToggle}
           className="shrink-0 mt-0.5"
-          title={skill.enabled ? 'Disable' : 'Enable'}
+          title={skill.enabled ? t.scheduled.disable : t.scheduled.enable}
         >
           {skill.enabled ? (
             <ToggleRight className="w-5 h-5 text-accent" />
@@ -221,7 +224,7 @@ function SkillItem({ skill, onToggle, onDelete, onViewRecords, onViewEvolution }
           className="mt-2 w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-md bg-accent-50 text-accent-700 text-[10px] font-medium hover:bg-accent/10 transition-colors"
         >
           <Zap className="w-3 h-3" />
-          Improvements found — Review
+          {t.skills.improvementsFound}
         </button>
       )}
 
@@ -235,7 +238,7 @@ function SkillItem({ skill, onToggle, onDelete, onViewRecords, onViewEvolution }
           <div className="flex items-center justify-between mt-2">
             <label className="flex items-center gap-1.5 text-[10px] text-text-secondary cursor-pointer">
               <Dna className="w-3 h-3" />
-              Enable Evolution
+              {t.skills.enableEvolution}
             </label>
             <button
               onClick={() => toggleSkillEvolvable(skill.id, !skill.evolvable)}
@@ -257,14 +260,14 @@ function SkillItem({ skill, onToggle, onDelete, onViewRecords, onViewEvolution }
                 className="btn-ghost btn-sm text-[10px]"
               >
                 <BookOpen className="w-3 h-3" />
-                Records
+                {t.skills.viewRecords}
               </button>
               <button
                 onClick={onViewEvolution}
                 className="btn-ghost btn-sm text-[10px]"
               >
                 <History className="w-3 h-3" />
-                Evolve
+                {t.skills.evolve}
               </button>
             </div>
           )}
@@ -275,7 +278,7 @@ function SkillItem({ skill, onToggle, onDelete, onViewRecords, onViewEvolution }
               className="btn-ghost btn-sm text-[10px] text-danger mt-1.5"
             >
               <Trash2 className="w-3 h-3" />
-              Delete
+              {t.skills.delete}
             </button>
           )}
         </div>
@@ -299,6 +302,7 @@ function SkillRecordsDialog({ skillId, onClose, onEvolve }: {
     skills: state.skills,
   }), shallow)
 
+  const t = useT()
   const skill = skills.find(s => s.id === skillId)
   const [records, setRecords] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
@@ -323,7 +327,7 @@ function SkillRecordsDialog({ skillId, onClose, onEvolve }: {
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
           <div>
-            <h3 className="text-sm font-semibold text-charcoal">Usage Records</h3>
+            <h3 className="text-sm font-semibold text-charcoal">{t.skills.usageRecords}</h3>
             <p className="text-[10px] text-text-tertiary mt-0.5">{skill?.displayName}</p>
           </div>
           <button onClick={onClose} className="btn-icon w-6 h-6">
@@ -333,10 +337,10 @@ function SkillRecordsDialog({ skillId, onClose, onEvolve }: {
 
         <div className="flex-1 overflow-y-auto px-4 py-3">
           {loading ? (
-            <p className="text-xs text-text-tertiary text-center py-6">Loading...</p>
+            <p className="text-xs text-text-tertiary text-center py-6">{t.skills.loading}</p>
           ) : records.length === 0 ? (
             <p className="text-xs text-text-tertiary text-center py-6">
-              No usage records yet. Use this skill in conversations to start recording.
+              {t.skills.noRecords}
             </p>
           ) : (
             <div className="space-y-3">
@@ -346,8 +350,8 @@ function SkillRecordsDialog({ skillId, onClose, onEvolve }: {
                     <div className="flex-1 min-w-0">
                       <p className="text-[10px] text-text-tertiary">
                         {new Date(record.timestamp).toLocaleDateString()}
-                        {record.context?.iterationCount ? ` · ${record.context.iterationCount} iterations` : ''}
-                        {record.compressed ? ' · compressed' : ''}
+                        {record.context?.iterationCount ? ` · ${record.context.iterationCount} ${t.skills.iterations}` : ''}
+                        {record.compressed ? ` · ${t.skills.compressed}` : ''}
                       </p>
                       {/* Show conversation preview */}
                       {record.conversation && (
@@ -361,7 +365,7 @@ function SkillRecordsDialog({ skillId, onClose, onEvolve }: {
                       onClick={() => handleDelete(record.id)}
                       className="text-[9px] text-danger hover:underline shrink-0"
                     >
-                      Remove
+                      {t.skills.remove}
                     </button>
                   </div>
                 </div>
@@ -377,7 +381,7 @@ function SkillRecordsDialog({ skillId, onClose, onEvolve }: {
               className="w-full btn-primary text-xs py-2"
             >
               <Zap className="w-3.5 h-3.5" />
-              Evolve Now
+              {t.skills.evolveNow}
             </button>
           </div>
         )}
@@ -400,6 +404,7 @@ function SkillEvolutionDialog({ skillId, onClose }: {
     loadSkills: state.loadSkills,
   }), shallow)
 
+  const t = useT()
   const skill = skills.find(s => s.id === skillId)
   const [evoData, setEvoData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -470,7 +475,7 @@ function SkillEvolutionDialog({ skillId, onClose }: {
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-border-subtle">
           <div>
-            <h3 className="text-sm font-semibold text-charcoal">Skill Evolution</h3>
+            <h3 className="text-sm font-semibold text-charcoal">{t.skills.skillEvolution}</h3>
             <p className="text-[10px] text-text-tertiary mt-0.5">{skill?.displayName}</p>
           </div>
           <button onClick={onClose} className="btn-icon w-6 h-6">
@@ -486,7 +491,7 @@ function SkillEvolutionDialog({ skillId, onClose }: {
               activeView === 'pending' ? 'bg-white text-charcoal shadow-sm' : 'text-text-tertiary'
             }`}
           >
-            Proposed Update {pending ? '(1)' : ''}
+            {t.skills.proposedUpdate} {pending ? '(1)' : ''}
           </button>
           <button
             onClick={() => setActiveView('history')}
@@ -494,13 +499,13 @@ function SkillEvolutionDialog({ skillId, onClose }: {
               activeView === 'history' ? 'bg-white text-charcoal shadow-sm' : 'text-text-tertiary'
             }`}
           >
-            History ({history.length})
+            {t.skills.history} ({history.length})
           </button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 py-3">
           {loading ? (
-            <p className="text-xs text-text-tertiary text-center py-6">Loading...</p>
+            <p className="text-xs text-text-tertiary text-center py-6">{t.skills.loading}</p>
           ) : activeView === 'pending' ? (
             pending ? (
               <div>
@@ -511,7 +516,7 @@ function SkillEvolutionDialog({ skillId, onClose }: {
 
                 {/* Proposed memory */}
                 <p className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider mb-1.5">
-                  Proposed Skill Memory
+                  {t.skills.proposedMemory}
                 </p>
 
                 <div className="p-3 rounded bg-gray-50 text-[10px] text-text-secondary leading-relaxed whitespace-pre-wrap max-h-60 overflow-y-auto">
@@ -520,7 +525,7 @@ function SkillEvolutionDialog({ skillId, onClose }: {
 
                 {/* Records used */}
                 <p className="text-[9px] text-text-tertiary mt-2">
-                  Based on {pending.recordsUsed?.length || 0} usage records
+                  {t.skills.basedOn} {pending.recordsUsed?.length || 0} {t.skills.usageRecordsCount}
                 </p>
 
                 {error && (
@@ -532,8 +537,8 @@ function SkillEvolutionDialog({ skillId, onClose }: {
                 <Dna className="w-8 h-8 text-text-tertiary mx-auto mb-2" />
                 <p className="text-xs text-text-tertiary mb-3">
                   {recordCount > 0
-                    ? `${recordCount} usage records available. Analyze for improvements?`
-                    : 'No usage records yet. Use this skill to start recording.'}
+                    ? `${recordCount} ${t.skills.usageRecordsCount}`
+                    : t.skills.noRecordsYet}
                 </p>
                 {recordCount > 0 && (
                   <button
@@ -541,7 +546,7 @@ function SkillEvolutionDialog({ skillId, onClose }: {
                     disabled={synthesizing}
                     className="btn-primary text-xs px-4 py-2 disabled:opacity-50"
                   >
-                    {synthesizing ? 'Analyzing...' : 'Evolve Now'}
+                    {synthesizing ? t.skills.analyzing : t.skills.evolveNow}
                   </button>
                 )}
                 {error && (
@@ -552,7 +557,7 @@ function SkillEvolutionDialog({ skillId, onClose }: {
           ) : (
             /* History view */
             history.length === 0 ? (
-              <p className="text-xs text-text-tertiary text-center py-6">No evolution history yet.</p>
+              <p className="text-xs text-text-tertiary text-center py-6">{t.skills.noHistory}</p>
             ) : (
               <div className="space-y-2">
                 {[...history].reverse().map((entry: any) => (
@@ -566,7 +571,7 @@ function SkillEvolutionDialog({ skillId, onClose }: {
                     {entry.memorySnapshot && (
                       <details className="mt-1.5">
                         <summary className="text-[9px] text-accent cursor-pointer hover:underline">
-                          View memory snapshot
+                          {t.skills.viewSnapshot}
                         </summary>
                         <div className="mt-1 p-2 rounded bg-gray-50 text-[9px] text-text-tertiary whitespace-pre-wrap max-h-32 overflow-y-auto">
                           {entry.memorySnapshot}
@@ -577,7 +582,7 @@ function SkillEvolutionDialog({ skillId, onClose }: {
                       onClick={() => handleRollback(String(entry.timestamp))}
                       className="text-[9px] text-accent hover:underline mt-1.5"
                     >
-                      Rollback to before this
+                      {t.skills.rollback}
                     </button>
                   </div>
                 ))}
@@ -593,13 +598,13 @@ function SkillEvolutionDialog({ skillId, onClose }: {
               onClick={handleApply}
               className="btn-primary flex-1 text-xs py-2"
             >
-              Apply Update
+              {t.skills.applyUpdate}
             </button>
             <button
               onClick={handleReject}
               className="btn-ghost flex-1 text-xs py-2 text-danger"
             >
-              Reject
+              {t.skills.reject}
             </button>
           </div>
         )}

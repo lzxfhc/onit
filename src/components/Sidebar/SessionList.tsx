@@ -1,8 +1,10 @@
 import { MessageSquare, Trash2, MoreHorizontal } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useState, useRef, useEffect } from 'react'
+import { useT } from '../../i18n'
 
 export default function SessionList() {
+  const t = useT()
   const { sessions, activeSessionId, setActiveSession, deleteSession, markSessionViewed } = useSessionStore()
 
   const nonActiveSessions = sessions.filter(s =>
@@ -21,7 +23,7 @@ export default function SessionList() {
     <div className="flex-1 overflow-y-auto px-2 pb-2">
       <div className="px-2 py-1.5">
         <span className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">
-          Sessions
+          {t.sessions.title}
         </span>
       </div>
       <div className="space-y-0.5">
@@ -45,6 +47,7 @@ function SessionItem({ session, isActive, onClick, onDelete }: {
   onClick: () => void
   onDelete: () => void
 }) {
+  const t = useT()
   const [showMenu, setShowMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
 
@@ -69,9 +72,9 @@ function SessionItem({ session, isActive, onClick, onDelete }: {
   }
 
   const getSessionPreview = () => {
-    if (session.messages.length === 0) return 'New session'
+    if (session.messages.length === 0) return t.sessions.newSession
     const lastUserMsg = [...session.messages].reverse().find((m: any) => m.role === 'user')
-    return lastUserMsg ? lastUserMsg.content.substring(0, 50) : 'Session'
+    return lastUserMsg ? lastUserMsg.content.substring(0, 50) : t.sessions.session
   }
 
   const formatTime = (ts: number) => {
@@ -123,7 +126,7 @@ function SessionItem({ session, isActive, onClick, onDelete }: {
               className="flex items-center gap-2 px-3 py-1.5 text-xs text-danger hover:bg-danger-light w-full text-left transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
-              Delete
+              {t.sessions.delete}
             </button>
           </div>
         )}

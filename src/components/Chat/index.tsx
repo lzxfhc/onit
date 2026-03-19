@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
+import { useT } from '../../i18n'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import MessageList from './MessageList'
@@ -24,6 +25,7 @@ interface PendingStreamChunks {
 }
 
 export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }) {
+  const t = useT()
   const activeSession = useSessionStore(state =>
     state.sessions.find(session => session.id === state.activeSessionId) || null,
   )
@@ -246,7 +248,7 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
   if (!activeSession) {
     return (
       <div className="flex-1 flex items-center justify-center text-text-tertiary text-sm">
-        Select or create a session to get started
+        {t.chat.selectSession}
       </div>
     )
   }

@@ -3,8 +3,10 @@ import { Plus, Play, Trash2, ToggleLeft, ToggleRight, Edit3 } from 'lucide-react
 import { useSettingsStore } from '../../stores/settingsStore'
 import ScheduledTaskDialog from '../Dialogs/ScheduledTaskDialog'
 import type { ScheduledTask } from '../../types'
+import { useT } from '../../i18n'
 
 export default function ScheduledTasks() {
+  const t = useT()
   const { scheduledTasks, removeScheduledTask, toggleScheduledTask, runScheduledTaskNow } = useSettingsStore()
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [editingTask, setEditingTask] = useState<ScheduledTask | null>(null)
@@ -12,30 +14,31 @@ export default function ScheduledTasks() {
 
   const formatFrequency = (task: ScheduledTask) => {
     const time = task.scheduleTime || '09:00'
-    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+    const dayKeys = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const
+    const shortDays = dayKeys.map(k => t.scheduled[k].substring(0, 3))
 
     switch (task.frequency) {
       case 'manual':
-        return 'Manual'
+        return t.scheduled.manual
       case 'once': {
         if (task.scheduleDateTime) {
           const d = new Date(task.scheduleDateTime)
-          return `Once at ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
+          return `${t.scheduled.once} ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
         }
-        return 'Once'
+        return t.scheduled.once
       }
       case 'hourly': {
         const minute = time.split(':')[1] || '00'
-        return `Hourly at :${minute}`
+        return `${t.scheduled.hourly} :${minute}`
       }
       case 'daily':
-        return `Daily at ${time}`
+        return `${t.scheduled.daily} ${time}`
       case 'weekly':
-        return `Weekly on ${days[task.scheduleDayOfWeek ?? 1]} at ${time}`
+        return `${t.scheduled.weekly} ${shortDays[task.scheduleDayOfWeek ?? 1]} ${time}`
       case 'monthly':
-        return `Monthly on day ${task.scheduleDayOfMonth ?? 1} at ${time}`
+        return `${t.scheduled.monthly} ${task.scheduleDayOfMonth ?? 1} ${time}`
       case 'weekdays':
-        return `Weekdays at ${time}`
+        return `${t.scheduled.weekdays} ${time}`
       default:
         return task.frequency
     }
@@ -64,12 +67,12 @@ export default function ScheduledTasks() {
       {/* Header */}
       <div className="flex items-center justify-between px-2 py-1.5">
         <span className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">
-          Scheduled Tasks
+          {t.scheduled.title}
         </span>
         <button
           onClick={() => setShowCreateDialog(true)}
           className="btn-icon w-6 h-6"
-          title="Create Scheduled Task"
+          title={t.scheduled.create}
         >
           <Plus className="w-3.5 h-3.5" />
         </button>
@@ -78,12 +81,12 @@ export default function ScheduledTasks() {
       {/* Task List */}
       {scheduledTasks.length === 0 ? (
         <div className="px-3 py-8 text-center">
-          <p className="text-xs text-text-tertiary">No scheduled tasks</p>
+          <p className="text-xs text-text-tertiary">{t.scheduled.noTasks}</p>
           <button
             onClick={() => setShowCreateDialog(true)}
             className="text-xs text-accent hover:underline mt-2"
           >
-            Create your first task
+            {t.scheduled.createFirst}
           </button>
         </div>
       ) : (
@@ -102,7 +105,7 @@ export default function ScheduledTasks() {
                 <button
                   onClick={() => toggleScheduledTask(task.id, !task.enabled)}
                   className="shrink-0"
-                  title={task.enabled ? 'Disable' : 'Enable'}
+                  title={task.enabled ? t.scheduled.disable : t.scheduled.enable}
                 >
                   {task.enabled ? (
                     <ToggleRight className="w-5 h-5 text-accent" />
@@ -113,23 +116,23 @@ export default function ScheduledTasks() {
               </div>
               <div className="flex items-center gap-3 text-[10px] text-text-tertiary">
                 <span>{formatFrequency(task)}</span>
-                {task.lastRun && <span>Last: {formatTime(task.lastRun)}</span>}
+                {task.lastRun && <span>{t.scheduled.last} {formatTime(task.lastRun)}</span>}
               </div>
               <div className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => runScheduledTaskNow(task.id)}
                   className="btn-ghost btn-sm text-[10px]"
-                  title="Run now"
+                  title={t.scheduled.runNow}
                 >
                   <Play className="w-3 h-3" />
-                  Run
+                  {t.scheduled.run}
                 </button>
                 <button
                   onClick={() => setEditingTask(task)}
                   className="btn-ghost btn-sm text-[10px]"
                 >
                   <Edit3 className="w-3 h-3" />
-                  Edit
+                  {t.scheduled.edit}
                 </button>
                 <button
                   onClick={() => handleDelete(task.id)}

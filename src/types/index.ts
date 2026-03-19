@@ -143,11 +143,14 @@ export interface PermissionRequest {
   resolve?: (approved: boolean, alwaysAllow?: boolean) => void
 }
 
+export type Language = 'zh' | 'en'
+
 export interface AppSettings {
   apiConfig: ApiConfig
   defaultPermissionMode: PermissionMode
   maxParallelTasks: number
   theme: 'light'
+  language: Language
 }
 
 // IPC Channel types
@@ -351,4 +354,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultPermissionMode: 'accept-edit',
   maxParallelTasks: 3,
   theme: 'light',
+  language: 'zh',
 }
