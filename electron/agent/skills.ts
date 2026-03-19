@@ -375,7 +375,7 @@ export class SkillManager {
         records: Array.isArray(raw.records) ? raw.records : [],
         memory: typeof raw.memory === 'string' ? raw.memory : null,
         history: Array.isArray(raw.history) ? raw.history : [],
-        pendingEvolution: raw.pendingEvolution || null,
+        pendingEvolution: raw.pendingEvolution ?? null,
         lastAutoAnalyzedAt: typeof raw.lastAutoAnalyzedAt === 'number' ? raw.lastAutoAnalyzedAt : undefined,
       }
     } catch {
@@ -547,7 +547,7 @@ export class SkillManager {
         usageCount: 0,
         lastUsedAt: null,
         recordCount: 0,
-        amendments: [],
+        memory: null,
         pendingEvolution: false,
       }
     } catch {

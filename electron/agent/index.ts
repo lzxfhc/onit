@@ -110,6 +110,7 @@ interface AgentSession {
   apiConfig: {
     billingMode: string
     apiKey: string
+    model?: string
     customBaseUrl?: string
     codingPlanProvider?: string
     localModelId?: string
@@ -241,6 +242,7 @@ export class AgentManager {
       apiConfig: {
         billingMode: apiConfig.billingMode || 'coding-plan',
         apiKey: apiConfig.apiKey || '',
+        model: apiConfig.model || sessionData.model,
         customBaseUrl: apiConfig.customBaseUrl,
         codingPlanProvider: apiConfig.codingPlanProvider,
         localModelId: apiConfig.localModelId,
