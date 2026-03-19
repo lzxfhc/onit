@@ -128,6 +128,8 @@ export const en: Translations = {
     importFirst: 'Import a skill',
     createWithOnit: 'Create with Onit',
     importSkill: 'Import Skill',
+    createSessionName: 'Create a New Skill',
+    createPrompt: '@create-skill I want to create a new skill. Please guide me through the process.',
     updateAvailable: 'Update available',
     records: 'records',
     used: 'Used',

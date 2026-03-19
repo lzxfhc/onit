@@ -35,11 +35,11 @@ export default function SkillsPanel() {
 
   const handleCreateViaOnit = () => {
     setShowAddMenu(false)
-    const session = createSession('Create a New Skill')
+    const session = createSession(t.skills.createSessionName)
     setActiveSession(session.id)
     setTimeout(() => {
       const event = new CustomEvent('onit:auto-input', {
-        detail: { text: '@create-skill I want to create a new skill. Please guide me through the process.' },
+        detail: { text: t.skills.createPrompt },
       })
       window.dispatchEvent(event)
     }, 300)

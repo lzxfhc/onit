@@ -273,6 +273,7 @@ function getToolSummaryLabel(name: string, t: Translations): string {
 }
 
 function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -282,7 +283,7 @@ function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?
         className="flex items-center gap-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
       >
         <Brain className="w-3.5 h-3.5" />
-        <span>Thinking</span>
+        <span>{t.chat.thinking}</span>
         {isStreaming && <Loader2 className="w-3 h-3 animate-spin" />}
         <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
       </button>

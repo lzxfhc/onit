@@ -143,14 +143,13 @@ export default function Login() {
       {/* Title bar drag area */}
       <div className="fixed top-0 left-0 right-0 h-12 drag-region z-40" />
 
-      {/* Language switcher — top right */}
+      {/* Language switcher — bottom left */}
       <button
         onClick={toggleLanguage}
-        className="fixed top-14 right-4 z-50 flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs text-text-secondary hover:bg-gray-100 transition-colors"
-        title={t.sidebar.language}
+        className="fixed bottom-6 left-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded-lg border border-border-subtle bg-white shadow-sm text-sm text-text-secondary hover:bg-gray-50 hover:text-charcoal transition-all"
       >
-        <Languages className="w-3.5 h-3.5" />
-        {settings.language === 'zh' ? 'EN' : '中文'}
+        <Languages className="w-4 h-4" />
+        {settings.language === 'zh' ? 'English' : '中文'}
       </button>
 
       <div className="w-full max-w-md px-8">

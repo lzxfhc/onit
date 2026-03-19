@@ -35,8 +35,8 @@ const AUTO_ANALYZE_COOLDOWN_MS = 24 * 60 * 60 * 1000
 
 export class SkillEvolutionManager {
   private skillManager: SkillManager
-  /** Guard: only one auto-analysis at a time across all skills. */
-  private autoAnalyzing = false
+  /** Guard: only one synthesis at a time across all skills (prevents user + auto conflicts). */
+  private synthesizing = false
 
   constructor(skillManager: SkillManager) {
     this.skillManager = skillManager
@@ -112,6 +112,9 @@ export class SkillEvolutionManager {
     if (apiConfig.billingMode === 'local-model') {
       return { success: false, error: 'Evolution synthesis requires a cloud model' }
     }
+    if (this.synthesizing) {
+      return { success: false, error: '正在分析中，请稍后再试。' }
+    }
 
     const skill = this.skillManager.listSkills().find(s => s.id === skillId)
     if (!skill) return { success: false, error: 'Skill not found' }
@@ -125,11 +128,10 @@ export class SkillEvolutionManager {
       return { success: false, error: '已有一个待审核的进化方案，请先处理。' }
     }
 
+    this.synthesizing = true
     try {
       const pending = await this.doSynthesize(skill, evoData, apiConfig)
       if (!pending) {
-        // LLM analyzed but found nothing useful — update lastAutoAnalyzedAt so we don't
-        // re-trigger until enough new records accumulate
         evoData.lastAutoAnalyzedAt = Date.now()
         await this.skillManager.saveEvolutionData(skillId, evoData)
         return { success: false, error: '分析了使用记录，暂未发现有置信度的可学习信息。继续使用，积累更多有效反馈后再试。' }
@@ -142,6 +144,8 @@ export class SkillEvolutionManager {
     } catch (err: any) {
       console.error(`[SkillEvolution] Synthesis failed for ${skillId}:`, err)
       return { success: false, error: err?.message || 'Unknown error' }
+    } finally {
+      this.synthesizing = false
     }
   }
 
@@ -231,10 +235,9 @@ export class SkillEvolutionManager {
    * The result becomes a pendingEvolution that the UI shows as a badge.
    */
   private maybeAutoAnalyze(skillId: string, evoData: EvolutionData, apiConfig: ApiConfig): void {
-    // Don't auto-analyze if there's already a pending evolution
+    // Don't auto-analyze if there's already a pending evolution or synthesis in progress
     if (evoData.pendingEvolution) return
-    // Don't run multiple auto-analyses concurrently
-    if (this.autoAnalyzing) return
+    if (this.synthesizing) return
     // Cooldown: at most one auto-analysis per skill per cooldown period
     const since = evoData.lastAutoAnalyzedAt || 0
     if (Date.now() - since < AUTO_ANALYZE_COOLDOWN_MS) return
@@ -242,7 +245,7 @@ export class SkillEvolutionManager {
     if (newRecords.length < AUTO_ANALYZE_RECORD_THRESHOLD) return
 
     // Fire-and-forget: run synthesis in background
-    this.autoAnalyzing = true
+    // synthesizing guard is set inside synthesizeEvolution itself
     this.synthesizeEvolution(skillId, apiConfig)
       .then((result) => {
         if (result.success) {
@@ -250,9 +253,6 @@ export class SkillEvolutionManager {
         }
       })
       .catch(() => { /* silent */ })
-      .finally(() => {
-        this.autoAnalyzing = false
-      })
   }
 
   // ---------------------------------------------------------------------------
@@ -362,9 +362,12 @@ export class SkillEvolutionManager {
    */
   private async compressOldRecords(
     skillId: string,
-    evoData: EvolutionData,
+    _evoData: EvolutionData,
     apiConfig: ApiConfig,
   ): Promise<void> {
+    // Re-read from disk to avoid stale data from concurrent writes
+    const evoData = this.skillManager.getEvolutionData(skillId)
+
     // Sort by timestamp, compress oldest uncompressed records
     const uncompressed = evoData.records
       .filter(r => !r.compressed)
@@ -543,6 +546,7 @@ If the records contain no useful signal:
   ): Promise<string | null> {
     const url = this.getApiUrl(apiConfig)
     const model = this.getModel(apiConfig)
+    if (!model) return null
 
     const body = JSON.stringify({
       model,
@@ -574,6 +578,13 @@ If the records contain no useful signal:
           res.on('data', (chunk: Buffer) => { data += chunk.toString() })
           res.on('end', () => {
             try {
+              if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
+                const errJson = JSON.parse(data)
+                const errMsg = errJson?.error?.message || errJson?.error_msg || `HTTP ${res.statusCode}`
+                console.error(`[SkillEvolution] API error: ${errMsg}`)
+                resolve(null)
+                return
+              }
               const json = JSON.parse(data)
               const content = json.choices?.[0]?.message?.content
               resolve(content || null)
@@ -616,6 +627,6 @@ If the records contain no useful signal:
       return models[apiConfig.codingPlanProvider || 'qianfan'] || models.qianfan
     }
     // API Call mode — use the model the user selected
-    return apiConfig.model!
+    return apiConfig.model || ''
   }
 }

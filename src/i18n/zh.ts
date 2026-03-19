@@ -126,6 +126,8 @@ export const zh = {
     importFirst: '导入一个 Skill',
     createWithOnit: '用 Onit 创建',
     importSkill: '导入 Skill',
+    createSessionName: '创建新 Skill',
+    createPrompt: '@create-skill 我想创建一个新的 Skill，请引导我完成。',
     updateAvailable: '有更新可用',
     records: '条记录',
     used: '已使用',

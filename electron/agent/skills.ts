@@ -376,6 +376,7 @@ export class SkillManager {
         memory: typeof raw.memory === 'string' ? raw.memory : null,
         history: Array.isArray(raw.history) ? raw.history : [],
         pendingEvolution: raw.pendingEvolution || null,
+        lastAutoAnalyzedAt: typeof raw.lastAutoAnalyzedAt === 'number' ? raw.lastAutoAnalyzedAt : undefined,
       }
     } catch {
       return empty
