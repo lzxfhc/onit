@@ -43,6 +43,15 @@ const api = {
   createSkill: (data: { name: string; description: string; content: string }) => ipcRenderer.invoke('skills:create', data),
   importSkill: () => ipcRenderer.invoke('skills:import'),
 
+  // Skills Evolution
+  getSkillEvolution: (data: { skillId: string }) => ipcRenderer.invoke('skills:get-evolution', data),
+  toggleSkillEvolvable: (data: { skillId: string; evolvable: boolean }) => ipcRenderer.invoke('skills:toggle-evolvable', data),
+  evolveSkill: (data: { skillId: string; apiConfig: any }) => ipcRenderer.invoke('skills:evolve', data),
+  applySkillEvolution: (data: { skillId: string }) => ipcRenderer.invoke('skills:apply-evolution', data),
+  rejectSkillEvolution: (data: { skillId: string }) => ipcRenderer.invoke('skills:reject-evolution', data),
+  rollbackSkill: (data: { skillId: string; version: string }) => ipcRenderer.invoke('skills:rollback', data),
+  deleteSkillRecord: (data: { skillId: string; recordId: string }) => ipcRenderer.invoke('skills:delete-record', data),
+
   // Local model
   getLocalModelStatus: (data?: { modelId?: string }) => ipcRenderer.invoke('local-model:status', data),
   downloadLocalModel: (data: { modelId: string }) => ipcRenderer.invoke('local-model:download', data),

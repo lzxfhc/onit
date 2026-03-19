@@ -1,6 +1,14 @@
 import { create } from 'zustand'
-import type { AppSettings, ApiConfig, PermissionMode, ScheduledTask, Skill } from '../types'
+import type { AppSettings, ApiConfig, PermissionMode, ScheduledTask, Skill, EvolutionData } from '../types'
 import { DEFAULT_SETTINGS } from '../types'
+
+interface SkillNotification {
+  id: string
+  skillId: string
+  skillName: string
+  message: string
+  timestamp: number
+}
 
 interface SettingsState {
   settings: AppSettings
@@ -8,6 +16,7 @@ interface SettingsState {
   scheduledTasks: ScheduledTask[]
   permissionRequests: any[]
   skills: Skill[]
+  skillNotifications: SkillNotification[]
 
   // Settings actions
   updateApiConfig: (config: Partial<ApiConfig>) => void
@@ -31,6 +40,17 @@ interface SettingsState {
   deleteSkill: (id: string) => Promise<void>
   importSkill: () => Promise<Skill | null>
 
+  // Skills Evolution
+  getSkillEvolution: (skillId: string) => Promise<EvolutionData>
+  toggleSkillEvolvable: (skillId: string, evolvable: boolean) => Promise<void>
+  evolveSkill: (skillId: string) => Promise<{ success: boolean; error?: string }>
+  applySkillEvolution: (skillId: string) => Promise<boolean>
+  rejectSkillEvolution: (skillId: string) => Promise<boolean>
+  rollbackSkill: (skillId: string, version: string) => Promise<boolean>
+  deleteSkillRecord: (skillId: string, recordId: string) => Promise<void>
+  addSkillNotification: (notification: Omit<SkillNotification, 'id' | 'timestamp'>) => void
+  dismissSkillNotification: (id: string) => void
+
   // Permission requests
   addPermissionRequest: (request: any) => void
   removePermissionRequest: (id: string) => void
@@ -45,6 +65,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   scheduledTasks: [],
   permissionRequests: [],
   skills: [],
+  skillNotifications: [],
 
   updateApiConfig: (config) => {
     set(state => ({
@@ -206,6 +227,89 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     } catch {
       return null
     }
+  },
+
+  // Skills Evolution
+  getSkillEvolution: async (skillId) => {
+    return window.electronAPI.getSkillEvolution({ skillId })
+  },
+
+  toggleSkillEvolvable: async (skillId, evolvable) => {
+    try {
+      const updated = await window.electronAPI.toggleSkillEvolvable({ skillId, evolvable })
+      if (updated) {
+        // Reload skills to reflect changes (fork may have created a new skill)
+        await get().loadSkills()
+      }
+    } catch {}
+  },
+
+  evolveSkill: async (skillId) => {
+    try {
+      const apiConfig = get().settings.apiConfig
+      return await window.electronAPI.evolveSkill({ skillId, apiConfig })
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Unknown error' }
+    }
+  },
+
+  applySkillEvolution: async (skillId) => {
+    try {
+      const result = await window.electronAPI.applySkillEvolution({ skillId })
+      if (result) {
+        await get().loadSkills()
+      }
+      return !!result
+    } catch {
+      return false
+    }
+  },
+
+  rejectSkillEvolution: async (skillId) => {
+    try {
+      const result = await window.electronAPI.rejectSkillEvolution({ skillId })
+      if (result) {
+        await get().loadSkills()
+      }
+      return !!result
+    } catch {
+      return false
+    }
+  },
+
+  rollbackSkill: async (skillId, version) => {
+    try {
+      const result = await window.electronAPI.rollbackSkill({ skillId, version })
+      if (result) {
+        await get().loadSkills()
+      }
+      return !!result
+    } catch {
+      return false
+    }
+  },
+
+  deleteSkillRecord: async (skillId, recordId) => {
+    try {
+      await window.electronAPI.deleteSkillRecord({ skillId, recordId })
+    } catch {}
+  },
+
+  addSkillNotification: (notification) => {
+    const id = `sn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    set(state => ({
+      skillNotifications: [...state.skillNotifications, { ...notification, id, timestamp: Date.now() }],
+    }))
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+      get().dismissSkillNotification(id)
+    }, 5000)
+  },
+
+  dismissSkillNotification: (id) => {
+    set(state => ({
+      skillNotifications: state.skillNotifications.filter(n => n.id !== id),
+    }))
   },
 
   addPermissionRequest: (request) => {

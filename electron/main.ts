@@ -4,12 +4,14 @@ import fs from 'fs'
 import { AgentManager } from './agent/index'
 import { SchedulerManager } from './agent/scheduler'
 import { SkillManager } from './agent/skills'
+import { SkillEvolutionManager } from './agent/skill-evolution'
 import { LocalModelManager } from './local-model/index'
 
 let mainWindow: BrowserWindow | null = null
 let agentManager: AgentManager
 let schedulerManager: SchedulerManager
 let skillManager: SkillManager
+let skillEvolutionManager: SkillEvolutionManager
 let localModelManager: LocalModelManager
 
 const DATA_DIR = path.join(app.getPath('userData'), 'onit-data')
@@ -115,6 +117,7 @@ function setupIPC() {
       displayName: s.displayName,
       description: s.description,
       content: s.content,
+      memory: s.memory,
     }))
     return agentManager.startAgent(data.sessionId, data.message, data.runId, {
       ...data.session,
@@ -231,6 +234,41 @@ function setupIPC() {
     return skillManager.importSkill(result.filePaths[0])
   })
 
+  // Skills Evolution: get evolution data
+  ipcMain.handle('skills:get-evolution', async (_event, data: { skillId: string }) => {
+    return skillManager.getEvolutionData(data.skillId)
+  })
+
+  // Skills Evolution: toggle evolvable
+  ipcMain.handle('skills:toggle-evolvable', async (_event, data: { skillId: string; evolvable: boolean }) => {
+    return skillManager.toggleEvolvable(data.skillId, data.evolvable)
+  })
+
+  // Skills Evolution: synthesize evolution
+  ipcMain.handle('skills:evolve', async (_event, data: { skillId: string; apiConfig: any }) => {
+    return skillEvolutionManager.synthesizeEvolution(data.skillId, data.apiConfig)
+  })
+
+  // Skills Evolution: apply pending evolution
+  ipcMain.handle('skills:apply-evolution', async (_event, data: { skillId: string }) => {
+    return skillEvolutionManager.applyEvolution(data.skillId)
+  })
+
+  // Skills Evolution: reject pending evolution
+  ipcMain.handle('skills:reject-evolution', async (_event, data: { skillId: string }) => {
+    return skillEvolutionManager.rejectEvolution(data.skillId)
+  })
+
+  // Skills Evolution: rollback to previous version
+  ipcMain.handle('skills:rollback', async (_event, data: { skillId: string; version: string }) => {
+    return skillEvolutionManager.rollback(data.skillId, data.version)
+  })
+
+  // Skills Evolution: delete a learning entry
+  ipcMain.handle('skills:delete-record', async (_event, data: { skillId: string; recordId: string }) => {
+    return skillManager.deleteRecord(data.skillId, data.recordId)
+  })
+
   // File system: list directory
   ipcMain.handle('fs:list-directory', async (_event, dirPath: string) => {
     try {
@@ -334,11 +372,35 @@ function setupIPC() {
 app.whenReady().then(() => {
   ensureDirectories()
   localModelManager = new LocalModelManager(MODELS_DIR)
+  skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
+  skillEvolutionManager = new SkillEvolutionManager(skillManager)
+
   agentManager = new AgentManager((channel, data) => {
     mainWindow?.webContents.send(channel, data)
-  }, { artifactsDir: ARTIFACTS_DIR, localModelManager })
+  }, {
+    artifactsDir: ARTIFACTS_DIR,
+    localModelManager,
+    onRunComplete: (params) => {
+      // Fire-and-forget: record usage counts and save evolution records
+      const { sessionId, currentRunSkillNames, sessionSkillNames, messages, apiConfig } = params
+
+      // Record usage counts (only for skills @-mentioned in this run)
+      for (const skillName of currentRunSkillNames) {
+        skillManager.recordSkillUsage(skillName)
+      }
+
+      // Record usage for evolution (all session skills within recording window)
+      // Saves formatted conversation log to EVOLUTION.json.
+      // May trigger LLM compression of old records if storage exceeds budget.
+      for (const skillName of sessionSkillNames) {
+        skillEvolutionManager.recordUsage(skillName, sessionId, messages, apiConfig)
+          .catch((err) => {
+            console.error(`[SkillEvolution] Record usage error for ${skillName}:`, err)
+          })
+      }
+    },
+  })
   schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager)
-  skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
 
   createWindow()
   setupIPC()

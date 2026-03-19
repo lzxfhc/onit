@@ -13,17 +13,72 @@ export interface SkillData {
   enabled: boolean
   filePath: string
   createdAt: number
+  // Evolution fields
+  evolvable: boolean
+  evolutionHints?: string[]
+  usageCount: number
+  lastUsedAt: number | null
+  recordCount: number
+  memory: string | null
+  pendingEvolution: boolean
+}
+
+export interface EvolutionData {
+  skillId: string
+  records: UsageRecord[]
+  memory: string | null
+  history: EvolutionHistoryEntry[]
+  pendingEvolution: PendingEvolution | null
+  lastAutoAnalyzedAt?: number
+}
+
+export interface UsageRecord {
+  id: string
+  sessionId: string
+  timestamp: number
+  lastUpdatedAt: number
+  conversation: string
+  context?: {
+    toolsUsed?: string[]
+    iterationCount?: number
+  }
+  compressed?: boolean
+}
+
+export interface EvolutionHistoryEntry {
+  timestamp: number
+  memorySnapshot: string
+  recordIds: string[]
+  summary: string
+}
+
+export interface PendingEvolution {
+  proposedMemory: string
+  previousMemory: string
+  summary: string
+  recordsUsed: string[]
+  generatedAt: number
 }
 
 interface SkillPreferences {
-  [skillId: string]: { enabled: boolean }
+  [skillId: string]: {
+    enabled: boolean
+    evolvable?: boolean
+    usageCount?: number
+    lastUsedAt?: number | null
+  }
 }
+
+const MAX_RECORDS_PER_SKILL = 20
+const MAX_HISTORY_ENTRIES = 10
 
 export class SkillManager {
   private prebuiltDir: string
   private userDir: string
   private importedDir: string
   private prefsPath: string
+  /** Serializes concurrent writes to EVOLUTION.json per skill. */
+  private writeLocks: Map<string, Promise<void>> = new Map()
 
   constructor(prebuiltDir: string, userDir: string, importedDir: string) {
     this.prebuiltDir = prebuiltDir
@@ -38,6 +93,10 @@ export class SkillManager {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Public: Skill listing & CRUD
+  // ---------------------------------------------------------------------------
+
   listSkills(): SkillData[] {
     const prefs = this.loadPreferences()
     const skills: SkillData[] = []
@@ -46,6 +105,7 @@ export class SkillManager {
     if (fs.existsSync(this.prebuiltDir)) {
       for (const skill of this.loadSkillsFromDir(this.prebuiltDir, 'prebuilt')) {
         skill.enabled = prefs[skill.id]?.enabled ?? true
+        this.applyEvolutionMeta(skill, prefs)
         skills.push(skill)
       }
     }
@@ -53,12 +113,14 @@ export class SkillManager {
     // User-created skills
     for (const skill of this.loadSkillsFromDir(this.userDir, 'user-created')) {
       skill.enabled = prefs[skill.id]?.enabled ?? true
+      this.applyEvolutionMeta(skill, prefs)
       skills.push(skill)
     }
 
     // Imported skills
     for (const skill of this.loadSkillsFromDir(this.importedDir, 'imported')) {
       skill.enabled = prefs[skill.id]?.enabled ?? true
+      this.applyEvolutionMeta(skill, prefs)
       skills.push(skill)
     }
 
@@ -71,7 +133,7 @@ export class SkillManager {
 
   toggleSkill(id: string, enabled: boolean): SkillData | null {
     const prefs = this.loadPreferences()
-    prefs[id] = { enabled }
+    prefs[id] = { ...prefs[id], enabled }
     this.savePreferences(prefs)
 
     const skills = this.listSkills()
@@ -98,7 +160,7 @@ export class SkillManager {
     const skill = this.parseSkillFile(skillPath, 'user-created')
     if (skill) {
       const prefs = this.loadPreferences()
-      prefs[skill.id] = { enabled: true }
+      prefs[skill.id] = { ...prefs[skill.id], enabled: true }
       this.savePreferences(prefs)
       return skill
     }
@@ -114,6 +176,12 @@ export class SkillManager {
       enabled: true,
       filePath: skillPath,
       createdAt: Date.now(),
+      evolvable: false,
+      usageCount: 0,
+      lastUsedAt: null,
+      recordCount: 0,
+      memory: null,
+      pendingEvolution: false,
     }
   }
 
@@ -147,6 +215,195 @@ export class SkillManager {
     return false
   }
 
+  // ---------------------------------------------------------------------------
+  // Public: Evolution management
+  // ---------------------------------------------------------------------------
+
+  /** Record that a skill was used in a session. */
+  recordSkillUsage(skillId: string): void {
+    const prefs = this.loadPreferences()
+    const existing = prefs[skillId] || { enabled: true }
+    prefs[skillId] = {
+      ...existing,
+      usageCount: (existing.usageCount || 0) + 1,
+      lastUsedAt: Date.now(),
+    }
+    this.savePreferences(prefs)
+  }
+
+  /** Toggle the evolvable flag. For prebuilt skills, forks to user dir first. */
+  toggleEvolvable(skillId: string, evolvable: boolean): SkillData | null {
+    const skill = this.listSkills().find(s => s.id === skillId)
+    if (!skill) return null
+
+    // Prebuilt skills must be forked before enabling evolution
+    if (evolvable && skill.source === 'prebuilt') {
+      const forked = this.forkPrebuiltSkill(skillId)
+      if (!forked) return null
+      // Update prefs for the forked copy
+      const prefs = this.loadPreferences()
+      prefs[forked.id] = { ...prefs[forked.id], enabled: true, evolvable: true }
+      this.savePreferences(prefs)
+      return this.listSkills().find(s => s.id === forked.id) || forked
+    }
+
+    const prefs = this.loadPreferences()
+    prefs[skillId] = { ...prefs[skillId], evolvable }
+    this.savePreferences(prefs)
+
+    return this.listSkills().find(s => s.id === skillId) || null
+  }
+
+  /** Read EVOLUTION.json for a skill. */
+  getEvolutionData(skillId: string): EvolutionData {
+    const skill = this.listSkills().find(s => s.id === skillId)
+    if (!skill) {
+      return { skillId, records: [], memory: null, history: [], pendingEvolution: null }
+    }
+
+    const evoPath = path.join(path.dirname(skill.filePath), 'EVOLUTION.json')
+    return this.readEvolutionFile(evoPath, skillId)
+  }
+
+  /** Write EVOLUTION.json for a skill (serialized via write lock). */
+  async saveEvolutionData(skillId: string, data: EvolutionData): Promise<void> {
+    // Serialize writes per skill
+    const prev = this.writeLocks.get(skillId) || Promise.resolve()
+    const next = prev.then(() => this.doSaveEvolution(skillId, data)).catch(() => {})
+    this.writeLocks.set(skillId, next)
+    await next
+  }
+
+  /** Update the SKILL.md file content for a given skill. */
+  updateSkillContent(skillId: string, newFullContent: string): boolean {
+    const skill = this.listSkills().find(s => s.id === skillId)
+    if (!skill) return false
+    // Protect prebuilt skills from direct modification
+    if (skill.source === 'prebuilt') return false
+
+    try {
+      fs.writeFileSync(skill.filePath, newFullContent, 'utf-8')
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  /** Delete a single usage record from a skill's EVOLUTION.json. */
+  async deleteRecord(skillId: string, recordId: string): Promise<EvolutionData> {
+    const data = this.getEvolutionData(skillId)
+    data.records = data.records.filter(r => r.id !== recordId)
+    await this.saveEvolutionData(skillId, data)
+    return data
+  }
+
+  /**
+   * Fork a prebuilt skill into the user directory so it can be evolved
+   * without modifying the original.
+   */
+  forkPrebuiltSkill(skillId: string): SkillData | null {
+    const skill = this.listSkills().find(s => s.id === skillId && s.source === 'prebuilt')
+    if (!skill) return null
+
+    const destDir = path.join(this.userDir, skill.name)
+    if (fs.existsSync(destDir)) {
+      // Already forked
+      return this.parseSkillFile(path.join(destDir, 'SKILL.md'), 'user-created')
+    }
+
+    try {
+      fs.mkdirSync(destDir, { recursive: true })
+      // Copy SKILL.md
+      fs.copyFileSync(skill.filePath, path.join(destDir, 'SKILL.md'))
+      // Copy EVOLUTION.json if it exists
+      const srcEvo = path.join(path.dirname(skill.filePath), 'EVOLUTION.json')
+      if (fs.existsSync(srcEvo)) {
+        fs.copyFileSync(srcEvo, path.join(destDir, 'EVOLUTION.json'))
+      }
+
+      const forked = this.parseSkillFile(path.join(destDir, 'SKILL.md'), 'user-created')
+      if (forked) {
+        // Disable the original prebuilt version to avoid duplicate
+        const prefs = this.loadPreferences()
+        prefs[skillId] = { ...prefs[skillId], enabled: false }
+        prefs[forked.id] = { ...prefs[forked.id], enabled: true, evolvable: true }
+        this.savePreferences(prefs)
+      }
+      return forked
+    } catch {
+      return null
+    }
+  }
+
+  /** Get the skill directory path for a skill ID. */
+  getSkillDir(skillId: string): string | null {
+    const skill = this.listSkills().find(s => s.id === skillId)
+    if (!skill) return null
+    return path.dirname(skill.filePath)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: Evolution helpers
+  // ---------------------------------------------------------------------------
+
+  /** Populate evolution metadata on a SkillData from prefs + EVOLUTION.json. */
+  private applyEvolutionMeta(skill: SkillData, prefs: SkillPreferences): void {
+    const pref = prefs[skill.id]
+    skill.evolvable = pref?.evolvable ?? skill.evolvable
+    skill.usageCount = pref?.usageCount ?? 0
+    skill.lastUsedAt = pref?.lastUsedAt ?? null
+
+    // Read lightweight info from EVOLUTION.json
+    const evoPath = path.join(path.dirname(skill.filePath), 'EVOLUTION.json')
+    try {
+      if (fs.existsSync(evoPath)) {
+        const raw = JSON.parse(fs.readFileSync(evoPath, 'utf-8')) as Partial<EvolutionData>
+        skill.recordCount = Array.isArray(raw.records) ? raw.records.length : 0
+        skill.memory = typeof raw.memory === 'string' ? raw.memory : null
+        skill.pendingEvolution = raw.pendingEvolution != null
+      }
+    } catch { /* ignore corrupt file */ }
+  }
+
+  private readEvolutionFile(filePath: string, skillId: string): EvolutionData {
+    const empty: EvolutionData = { skillId, records: [], memory: null, history: [], pendingEvolution: null }
+    try {
+      if (!fs.existsSync(filePath)) return empty
+      const raw = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+      return {
+        skillId: raw.skillId || skillId,
+        records: Array.isArray(raw.records) ? raw.records : [],
+        memory: typeof raw.memory === 'string' ? raw.memory : null,
+        history: Array.isArray(raw.history) ? raw.history : [],
+        pendingEvolution: raw.pendingEvolution || null,
+      }
+    } catch {
+      return empty
+    }
+  }
+
+  private doSaveEvolution(skillId: string, data: EvolutionData): void {
+    const skill = this.listSkills().find(s => s.id === skillId)
+    if (!skill) return
+    const evoPath = path.join(path.dirname(skill.filePath), 'EVOLUTION.json')
+
+    // Enforce limits
+    if (data.records.length > MAX_RECORDS_PER_SKILL) {
+      // Keep most recent records
+      data.records.sort((a, b) => a.timestamp - b.timestamp)
+      data.records = data.records.slice(-MAX_RECORDS_PER_SKILL)
+    }
+    if (data.history.length > MAX_HISTORY_ENTRIES) {
+      data.history = data.history.slice(-MAX_HISTORY_ENTRIES)
+    }
+
+    fs.writeFileSync(evoPath, JSON.stringify(data, null, 2), 'utf-8')
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: Import helpers
+  // ---------------------------------------------------------------------------
+
   private importMarkdownSkill(filePath: string): SkillData | null {
     const content = fs.readFileSync(filePath, 'utf-8')
     const { metadata } = this.parseFrontmatter(content)
@@ -168,15 +425,13 @@ export class SkillManager {
     const skill = this.parseSkillFile(destPath, 'imported')
     if (skill) {
       const prefs = this.loadPreferences()
-      prefs[skill.id] = { enabled: true }
+      prefs[skill.id] = { ...prefs[skill.id], enabled: true }
       this.savePreferences(prefs)
     }
     return skill
   }
 
   private importZipSkill(filePath: string): SkillData | null {
-    // For .zip/.skill files, we expect a SKILL.md inside
-    // Use Node.js built-in to extract - for now, handle simple case
     try {
       const { execSync } = require('child_process')
       const tempDir = path.join(this.importedDir, `_temp_${Date.now()}`)
@@ -184,7 +439,6 @@ export class SkillManager {
 
       execSync(`unzip -o "${filePath}" -d "${tempDir}"`, { stdio: 'pipe' })
 
-      // Find SKILL.md in extracted contents
       const skillMd = this.findSkillMd(tempDir)
       if (!skillMd) {
         fs.rmSync(tempDir, { recursive: true, force: true })
@@ -195,13 +449,11 @@ export class SkillManager {
       const { metadata } = this.parseFrontmatter(content)
       const skillName = this.sanitizeName(metadata.name || path.basename(filePath, path.extname(filePath)))
 
-      // Move to final location
       const finalDir = path.join(this.importedDir, skillName)
       if (fs.existsSync(finalDir)) {
         fs.rmSync(finalDir, { recursive: true, force: true })
       }
 
-      // If SKILL.md is in a subdirectory, move that directory
       const skillMdDir = path.dirname(skillMd)
       if (skillMdDir !== tempDir) {
         fs.renameSync(skillMdDir, finalDir)
@@ -213,7 +465,7 @@ export class SkillManager {
       const skill = this.parseSkillFile(path.join(finalDir, 'SKILL.md'), 'imported')
       if (skill) {
         const prefs = this.loadPreferences()
-        prefs[skill.id] = { enabled: true }
+        prefs[skill.id] = { ...prefs[skill.id], enabled: true }
         this.savePreferences(prefs)
       }
       return skill
@@ -238,6 +490,10 @@ export class SkillManager {
 
     return null
   }
+
+  // ---------------------------------------------------------------------------
+  // Private: Parsing
+  // ---------------------------------------------------------------------------
 
   private loadSkillsFromDir(dir: string, source: 'prebuilt' | 'user-created' | 'imported'): SkillData[] {
     const skills: SkillData[] = []
@@ -270,6 +526,10 @@ export class SkillManager {
         .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
         .join(' ')
 
+      // Parse evolution-hints (YAML list under the key)
+      const evolutionHints = this.parseEvolutionHints(content)
+      const evolvable = metadata.evolvable === 'true'
+
       return {
         id: name,
         name,
@@ -281,10 +541,53 @@ export class SkillManager {
         enabled: true,
         filePath,
         createdAt: fs.statSync(filePath).birthtimeMs || Date.now(),
+        evolvable,
+        evolutionHints: evolutionHints.length > 0 ? evolutionHints : undefined,
+        usageCount: 0,
+        lastUsedAt: null,
+        recordCount: 0,
+        amendments: [],
+        pendingEvolution: false,
       }
     } catch {
       return null
     }
+  }
+
+  /**
+   * Parse evolution-hints from YAML frontmatter.
+   * Supports the list format:
+   * ```
+   * evolution-hints:
+   *   - hint one
+   *   - hint two
+   * ```
+   */
+  private parseEvolutionHints(content: string): string[] {
+    const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/)
+    if (!fmMatch) return []
+
+    const hints: string[] = []
+    const lines = fmMatch[1].split('\n')
+    let inHints = false
+
+    for (const line of lines) {
+      if (/^evolution-hints\s*:/.test(line)) {
+        inHints = true
+        continue
+      }
+      if (inHints) {
+        const itemMatch = line.match(/^\s+-\s+(.+)/)
+        if (itemMatch) {
+          hints.push(itemMatch[1].trim())
+        } else if (/^\S/.test(line)) {
+          // New top-level key — stop parsing hints
+          break
+        }
+      }
+    }
+
+    return hints
   }
 
   private parseFrontmatter(content: string): { metadata: Record<string, string>; body: string } {
@@ -298,6 +601,8 @@ export class SkillManager {
       if (colonIdx === -1) continue
       const key = line.substring(0, colonIdx).trim()
       const value = line.substring(colonIdx + 1).trim()
+      // Skip list items (evolution-hints children)
+      if (line.match(/^\s+-/)) continue
       if (key && value) metadata[key] = value
     }
 

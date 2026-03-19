@@ -14,6 +14,7 @@ interface SkillData {
   displayName: string
   description: string
   content: string
+  memory?: string | null
 }
 
 interface SessionToolCallData {
@@ -118,6 +119,8 @@ interface AgentSession {
   alwaysAllowedTools: Set<string>
   pendingPermissions: Map<string, { resolve: (approved: boolean) => void }>
   enabledSkills?: SkillData[]
+  /** Maps skill name → how many runs ago it was last @-mentioned (0 = this run). */
+  usedSkillNames: Map<string, number>
 }
 
 export class AgentManager {
@@ -125,14 +128,29 @@ export class AgentManager {
   private sendToRenderer: (channel: string, data: any) => void
   private artifactsDir: string | null
   private localModelManager: LocalModelManager | null
+  private onRunComplete: ((params: {
+    sessionId: string
+    runId: string
+    /** Skills @-mentioned in this run's user message (for usage count). */
+    currentRunSkillNames: string[]
+    /** All skills @-mentioned within the recording window (for evolution recording). */
+    sessionSkillNames: string[]
+    messages: AgentMessage[]
+    apiConfig: AgentSession['apiConfig']
+  }) => void) | null = null
 
   constructor(
     sendToRenderer: (channel: string, data: any) => void,
-    options?: { artifactsDir?: string; localModelManager?: LocalModelManager }
+    options?: {
+      artifactsDir?: string
+      localModelManager?: LocalModelManager
+      onRunComplete?: AgentManager['onRunComplete']
+    }
   ) {
     this.sendToRenderer = sendToRenderer
     this.artifactsDir = options?.artifactsDir || null
     this.localModelManager = options?.localModelManager || null
+    this.onRunComplete = options?.onRunComplete || null
   }
 
   async startAgent(sessionId: string, userMessage: string, runId: string, sessionData: any): Promise<boolean> {
@@ -169,7 +187,7 @@ export class AgentManager {
     const attachedFileMessages = this.buildAttachedFileMessages(sessionData.attachedFiles || [])
 
     // Parse @skill-name mentions from user message and inject skill content
-    const mentionedSkillContents = this.extractMentionedSkills(userMessage, enabledSkills)
+    const { contents: mentionedSkillContents, names: mentionedSkillNames } = this.extractMentionedSkills(userMessage, enabledSkills)
 
     // Build the system prompt
     const systemPrompt = this.buildSystemPrompt(
@@ -232,6 +250,38 @@ export class AgentManager {
       alwaysAllowedTools: agentSession?.alwaysAllowedTools || new Set(),
       pendingPermissions: new Map(),
       enabledSkills,
+      usedSkillNames: new Map<string, number>(),
+    }
+
+    // Current @-mentions in this message → distance 0 (this run)
+    for (const name of mentionedSkillNames) {
+      agentSession.usedSkillNames.set(name, 0)
+    }
+
+    // Scan conversation history for previously @-mentioned skills.
+    // Older @-mentions get a higher distance (number of runs since mention).
+    // We count runs backwards: each user message in history = 1 prior run.
+    if (sessionData.messages) {
+      const userMessages: SessionMessageData[] = (sessionData.messages as SessionMessageData[])
+        .filter((m: SessionMessageData) => m.role === 'user')
+      const totalPriorRuns = userMessages.length
+
+      for (let i = 0; i < userMessages.length; i++) {
+        const msg = userMessages[i]
+        if (!msg.content) continue
+        const runsAgo = totalPriorRuns - i // most recent prior run = 1, oldest = totalPriorRuns
+        const histPattern = /@([\w-]+)/g
+        let histMatch: RegExpExecArray | null
+        while ((histMatch = histPattern.exec(msg.content)) !== null) {
+          const skillName = histMatch[1]
+          if (!enabledSkills.some(s => s.name === skillName)) continue
+          // Keep the smallest distance (most recent mention)
+          const existing = agentSession.usedSkillNames.get(skillName)
+          if (existing === undefined || runsAgo < existing) {
+            agentSession.usedSkillNames.set(skillName, runsAgo)
+          }
+        }
+      }
     }
 
     // Compress older history into Session Memory (if needed) and then ensure
@@ -296,8 +346,9 @@ export class AgentManager {
     }
   }
 
-  private extractMentionedSkills(message: string, enabledSkills: SkillData[]): string[] {
+  private extractMentionedSkills(message: string, enabledSkills: SkillData[]): { contents: string[]; names: string[] } {
     const contents: string[] = []
+    const names: string[] = []
     const mentionPattern = /@([\w-]+)/g
     let match: RegExpExecArray | null
 
@@ -305,15 +356,20 @@ export class AgentManager {
       const skillName = match[1]
       const skill = enabledSkills.find(s => s.name === skillName)
       if (skill && skill.content) {
-        // Inject full skill content, capped at 5000 chars
-        const injected = skill.content.length > 5000
-          ? skill.content.substring(0, 5000) + '\n\n[Skill content truncated]'
-          : skill.content
+        // Compose skill content with memory overlay
+        let fullContent = skill.content
+        if (skill.memory) {
+          fullContent += '\n\n## Skill Memory\n\n' + skill.memory
+        }
+        const injected = fullContent.length > 5000
+          ? fullContent.substring(0, 5000) + '\n\n[Skill content truncated]'
+          : fullContent
         contents.push(`[Skill: ${skill.displayName}]\n\n${injected}`)
+        names.push(skill.name)
       }
     }
 
-    return contents
+    return { contents, names }
   }
 
   private buildAttachedFileMessages(attachedFiles: string[]): AgentMessage[] {
@@ -1979,6 +2035,29 @@ When providing final results, format them clearly with markdown. For code, use a
           runId: agentSession.runId,
           status: agentSession.completionStatus,
         })
+      }
+
+      // Fire-and-forget: notify evolution system about used skills.
+      // currentRunSkillNames: skills @-mentioned in THIS run (distance=0) → for usage count
+      // sessionSkillNames: skills within recording window (distance≤2) → for evolution recording
+      const EVOLUTION_RECORD_MAX_RUN_DISTANCE = 2
+      const currentRunSkillNames: string[] = []
+      const sessionSkillNames: string[] = []
+      for (const [name, runsAgo] of agentSession.usedSkillNames) {
+        if (runsAgo === 0) currentRunSkillNames.push(name)
+        if (runsAgo <= EVOLUTION_RECORD_MAX_RUN_DISTANCE) sessionSkillNames.push(name)
+      }
+      if (this.onRunComplete && sessionSkillNames.length > 0) {
+        try {
+          this.onRunComplete({
+            sessionId: agentSession.sessionId,
+            runId: agentSession.runId,
+            currentRunSkillNames,
+            sessionSkillNames,
+            messages: agentSession.messages,
+            apiConfig: agentSession.apiConfig,
+          })
+        } catch { /* never let evolution tracking break the main flow */ }
       }
     }
   }

@@ -253,7 +253,7 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
 
   return (
     <div className="flex-1 flex min-h-0">
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 relative">
         <MessageList
           messages={activeSession.messages}
           isRunning={activeSession.status === 'running'}
@@ -284,3 +284,4 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
     </div>
   )
 }
+
