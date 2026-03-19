@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import path from 'path'
 import fs from 'fs'
+import os from 'os'
 import { AgentManager } from './agent/index'
 import { SchedulerManager } from './agent/scheduler'
 import { SkillManager } from './agent/skills'
@@ -53,7 +54,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
     show: false,
   }
@@ -137,8 +138,12 @@ function setupIPC() {
 
   // Sessions: save
   ipcMain.handle('sessions:save', async (_event, session: any) => {
-    const filePath = path.join(SESSIONS_DIR, `${session.id}.json`)
-    fs.writeFileSync(filePath, JSON.stringify(session, null, 2), 'utf-8')
+    if (!/^[a-zA-Z0-9_-]+$/.test(session.id)) return false
+    const filePath = path.resolve(SESSIONS_DIR, `${session.id}.json`)
+    if (!filePath.startsWith(SESSIONS_DIR + path.sep)) return false
+    const tmpPath = filePath + '.tmp'
+    fs.writeFileSync(tmpPath, JSON.stringify(session, null, 2), 'utf-8')
+    fs.renameSync(tmpPath, filePath)
     return true
   })
 
@@ -147,14 +152,20 @@ function setupIPC() {
     if (!fs.existsSync(SESSIONS_DIR)) return []
     const files = fs.readdirSync(SESSIONS_DIR).filter(f => f.endsWith('.json'))
     return files.map(f => {
-      const content = fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf-8')
-      return JSON.parse(content)
-    }).sort((a, b) => b.updatedAt - a.updatedAt)
+      try {
+        const content = fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf-8')
+        return JSON.parse(content)
+      } catch {
+        return null
+      }
+    }).filter(Boolean).sort((a: any, b: any) => b.updatedAt - a.updatedAt)
   })
 
   // Sessions: delete
   ipcMain.handle('sessions:delete', async (_event, data: { id: string }) => {
-    const filePath = path.join(SESSIONS_DIR, `${data.id}.json`)
+    if (!/^[a-zA-Z0-9_-]+$/.test(data.id)) return false
+    const filePath = path.resolve(SESSIONS_DIR, `${data.id}.json`)
+    if (!filePath.startsWith(SESSIONS_DIR + path.sep)) return false
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
     return true
   })
@@ -272,12 +283,18 @@ function setupIPC() {
   // File system: list directory
   ipcMain.handle('fs:list-directory', async (_event, dirPath: string) => {
     try {
-      const items = fs.readdirSync(dirPath, { withFileTypes: true })
+      const resolvedDir = path.resolve(dirPath)
+      const homeDir = os.homedir()
+      if (!resolvedDir.startsWith(homeDir + path.sep) && resolvedDir !== homeDir &&
+          !resolvedDir.startsWith(DATA_DIR + path.sep) && resolvedDir !== DATA_DIR) {
+        return []
+      }
+      const items = fs.readdirSync(resolvedDir, { withFileTypes: true })
       return items
         .filter(item => !item.name.startsWith('.'))
         .map(item => ({
           name: item.name,
-          path: path.join(dirPath, item.name),
+          path: path.join(resolvedDir, item.name),
           type: item.isDirectory() ? 'directory' : 'file',
         }))
         .sort((a, b) => {
@@ -291,7 +308,14 @@ function setupIPC() {
 
   // Open external links
   ipcMain.on('shell:open-external', (_event, url: string) => {
-    shell.openExternal(url)
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        shell.openExternal(url)
+      }
+    } catch {
+      // Ignore malformed URLs
+    }
   })
 
   // Local model: status

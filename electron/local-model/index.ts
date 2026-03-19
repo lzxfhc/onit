@@ -189,6 +189,8 @@ export class LocalModelManager {
     modelId: string,
     onProgress: (progress: number, speed?: number) => void
   ): Promise<void> {
+    if (this.status === 'downloading') throw new Error('Download already in progress')
+
     const modelDef = getModelDef(modelId)
     if (!modelDef) throw new Error(`Unknown model: ${modelId}`)
 
@@ -236,10 +238,20 @@ export class LocalModelManager {
 
           const totalSize = modelDef.fileSize
           let downloadedSize = existingSize
+          let writeFlags: 'a' | 'w' = existingSize > 0 ? 'a' : 'w'
+
+          // H8: Verify resume is actually working
+          if (existingSize > 0 && res.statusCode === 200) {
+            // Server ignored Range header, restart from beginning
+            downloadedSize = 0
+            writeFlags = 'w'
+          }
+          // statusCode 206 means partial content — resume is working, append as expected
+
           let lastSpeedTime = Date.now()
           let lastSpeedBytes = downloadedSize
           let currentSpeed = 0
-          const writeStream = fs.createWriteStream(tempPath, { flags: existingSize > 0 ? 'a' : 'w' })
+          const writeStream = fs.createWriteStream(tempPath, { flags: writeFlags })
 
           res.on('data', (chunk: Buffer) => {
             if (this.downloadAbortController?.signal.aborted) {
@@ -266,6 +278,16 @@ export class LocalModelManager {
           res.on('end', () => {
             writeStream.close(() => {
               if (this.downloadAbortController?.signal.aborted) return
+
+              // M18: Validate file size before finalizing
+              const actualSize = fs.statSync(tempPath).size
+              if (actualSize < modelDef.fileSize * 0.95) {
+                fs.unlinkSync(tempPath)
+                this.status = 'error'
+                reject(new Error('Download incomplete'))
+                return
+              }
+
               fs.renameSync(tempPath, filePath)
               this.status = 'downloaded'
               onProgress(100)
@@ -303,18 +325,20 @@ export class LocalModelManager {
   }
 
   async deleteModel(modelId: string): Promise<void> {
-    const modelDef = getModelDef(modelId)
-    if (!modelDef) return
+    await this.opMutex.runExclusive(async () => {
+      const modelDef = getModelDef(modelId)
+      if (!modelDef) return
 
-    if (this.currentModelId === modelId) {
-      await this.unloadModel()
-    }
+      if (this.currentModelId === modelId) {
+        await this.unloadModelUnlocked()
+      }
 
-    const filePath = this.getModelPath(modelDef)
-    const tempPath = this.getTempPath(modelDef)
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
-    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
-    this.status = 'not-downloaded'
+      const filePath = this.getModelPath(modelDef)
+      const tempPath = this.getTempPath(modelDef)
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+      if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+      this.status = 'not-downloaded'
+    })
   }
 
   async loadModel(modelId: string): Promise<void> {
@@ -371,7 +395,8 @@ export class LocalModelManager {
     }
     this.llama = null
     this.currentModelId = null
-    this.status = 'not-downloaded'
+    // M20: Don't set status here — let checkModelStatus derive it from filesystem state.
+    // Setting 'not-downloaded' was wrong when the model file still exists on disk.
   }
 
   isReady(): boolean {
@@ -385,8 +410,13 @@ export class LocalModelManager {
     maxTokens?: number
     abortSignal?: AbortSignal
     onToken?: (chunk: { type: 'content' | 'thinking'; content: string }) => void
+    expectedModelId?: string
   }): Promise<{ content: string; toolCalls: any[] }> {
+    const expectedModelId = params.expectedModelId
     return this.opMutex.runExclusive(async () => {
+      if (expectedModelId && this.currentModelId !== expectedModelId) {
+        throw new Error('Model was changed by another session')
+      }
       if (!this.llamaChat || !this.model) {
         throw new Error('Model not loaded')
       }

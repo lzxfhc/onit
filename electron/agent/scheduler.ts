@@ -21,6 +21,7 @@ interface ScheduledTaskData {
   scheduleDayOfWeek?: number     // 0-6 (Sun-Sat) for weekly
   scheduleDayOfMonth?: number    // 1-31 for monthly
   scheduleDateTime?: string      // ISO datetime for once
+  permissionMode?: string        // 'plan' | 'accept-edit' | 'full-access'
 }
 
 export class SchedulerManager {
@@ -60,7 +61,10 @@ export class SchedulerManager {
   }
 
   private saveTask(task: ScheduledTaskData): void {
-    fs.writeFileSync(this.getFilePath(task.id), JSON.stringify(task, null, 2), 'utf-8')
+    const filePath = this.getFilePath(task.id)
+    const tmpPath = filePath + '.tmp'
+    fs.writeFileSync(tmpPath, JSON.stringify(task, null, 2), 'utf-8')
+    fs.renameSync(tmpPath, filePath)
   }
 
   private loadTask(id: string): ScheduledTaskData | null {
@@ -73,9 +77,11 @@ export class SchedulerManager {
     if (!fs.existsSync(this.dataDir)) return []
     const files = fs.readdirSync(this.dataDir).filter(f => f.endsWith('.json'))
     return files.map(f => {
-      const content = fs.readFileSync(path.join(this.dataDir, f), 'utf-8')
-      return JSON.parse(content)
-    }).sort((a, b) => b.createdAt - a.createdAt)
+      try {
+        const content = fs.readFileSync(path.join(this.dataDir, f), 'utf-8')
+        return JSON.parse(content)
+      } catch { return null }
+    }).filter(Boolean).sort((a: any, b: any) => b.createdAt - a.createdAt)
   }
 
   createTask(taskData: Partial<ScheduledTaskData>): ScheduledTaskData {
@@ -173,7 +179,7 @@ export class SchedulerManager {
 
     try {
       await this.agentManager.startAgent(sessionId, task.taskPrompt, runId, {
-        permissionMode: 'full-access',
+        permissionMode: task.permissionMode || 'accept-edit',
         workspacePath: task.workspacePath,
         model: task.model,
         messages: [],
@@ -202,8 +208,10 @@ export class SchedulerManager {
   private frequencyToCron(task: ScheduledTaskData): string | null {
     const time = task.scheduleTime || '09:00'
     const [hourStr, minuteStr] = time.split(':')
-    const hour = parseInt(hourStr, 10) || 9
-    const minute = parseInt(minuteStr, 10) || 0
+    const parsedHour = parseInt(hourStr, 10)
+    const hour = Number.isNaN(parsedHour) ? 9 : parsedHour
+    const parsedMinute = parseInt(minuteStr, 10)
+    const minute = Number.isNaN(parsedMinute) ? 0 : parsedMinute
 
     switch (task.frequency) {
       case 'hourly':
@@ -260,12 +268,14 @@ export class SchedulerManager {
     }
 
     const job = schedule.scheduleJob(targetDate, () => {
-      this.runTaskNow(task.id)
+      const freshTask = this.loadTask(task.id)
+      if (!freshTask) return
+      this.runTaskNow(freshTask.id)
       // Auto-disable after one-time execution
-      task.enabled = false
-      task.lastRun = Date.now()
-      task.nextRun = null
-      this.saveTask(task)
+      freshTask.enabled = false
+      freshTask.lastRun = Date.now()
+      freshTask.nextRun = null
+      this.saveTask(freshTask)
       this.jobs.delete(task.id)
     })
 

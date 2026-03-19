@@ -104,14 +104,22 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
       sessionStore.completeRun(sessionId, runId, 'error')
       useSettingsStore.getState().removePermissionRequestsForSession(sessionId, runId)
 
-      const errorMsg: Message = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: `Error: ${error}`,
-        timestamp: Date.now(),
-        runId,
+      // If the last assistant message for this run is empty, update it in place
+      if (lastMessage?.role === 'assistant' && lastMessage.runId === runId && !lastMessage.content?.trim()) {
+        sessionStore.updateLastMessage(sessionId, {
+          content: `Error: ${error}`,
+          isStreaming: false,
+        })
+      } else {
+        const errorMsg: Message = {
+          id: uuidv4(),
+          role: 'assistant',
+          content: `Error: ${error}`,
+          timestamp: Date.now(),
+          runId,
+        }
+        sessionStore.addMessage(sessionId, errorMsg)
       }
-      sessionStore.addMessage(sessionId, errorMsg)
       sessionStore.saveSession(sessionId)
     })
 

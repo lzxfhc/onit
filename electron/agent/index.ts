@@ -122,6 +122,7 @@ interface AgentSession {
   enabledSkills?: SkillData[]
   /** Maps skill name → how many runs ago it was last @-mentioned (0 = this run). */
   usedSkillNames: Map<string, number>
+  runPromise?: Promise<void>
 }
 
 export class AgentManager {
@@ -159,7 +160,9 @@ export class AgentManager {
 
     if (agentSession?.isRunning) {
       this.stopAgent(sessionId)
-      await new Promise(resolve => setTimeout(resolve, 100))
+      if (agentSession.runPromise) {
+        await agentSession.runPromise.catch(() => {})
+      }
     }
 
     const apiConfig = sessionData.apiConfig || {}
@@ -299,7 +302,7 @@ export class AgentManager {
     this.sessions.set(sessionId, agentSession)
 
     // Run the agent loop asynchronously
-    this.runAgentLoop(agentSession).catch(error => {
+    agentSession.runPromise = this.runAgentLoop(agentSession).catch(error => {
       this.sendToRenderer('agent:error', {
         sessionId,
         runId,
@@ -316,7 +319,6 @@ export class AgentManager {
       session.isRunning = false
       session.completionStatus = 'stopped'
       session.abortController?.abort()
-      session.abortController = null
       for (const [, pending] of session.pendingPermissions) {
         pending.resolve(false)
       }
@@ -1367,7 +1369,7 @@ When providing final results, format them clearly with markdown. For code, use a
 
               if (delta.tool_calls) {
                 for (const tc of delta.tool_calls) {
-                  const idx = tc.index || 0
+                  const idx = tc.index ?? 0
                   if (!toolCalls[idx]) {
                     toolCalls[idx] = {
                       id: tc.id || `call_${uuidv4().slice(0, 8)}`,
@@ -1376,7 +1378,9 @@ When providing final results, format them clearly with markdown. For code, use a
                     }
                   }
                   if (tc.id) toolCalls[idx].id = tc.id
-                  if (tc.function?.name) toolCalls[idx].function.name += tc.function.name
+                  if (tc.function?.name && !toolCalls[idx].function.name) {
+                    toolCalls[idx].function.name = tc.function.name
+                  }
                   if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments
                 }
               }
@@ -1398,6 +1402,26 @@ When providing final results, format them clearly with markdown. For code, use a
                   if (delta?.content) {
                     fullContent += delta.content
                     onChunk?.({ type: 'content', content: delta.content })
+                  }
+                  if (delta?.reasoning_content) {
+                    onChunk?.({ type: 'thinking', content: delta.reasoning_content })
+                  }
+                  if (delta?.tool_calls) {
+                    for (const tc of delta.tool_calls) {
+                      const idx = tc.index ?? 0
+                      if (!toolCalls[idx]) {
+                        toolCalls[idx] = {
+                          id: tc.id || `call_${uuidv4().slice(0, 8)}`,
+                          type: 'function',
+                          function: { name: '', arguments: '' },
+                        }
+                      }
+                      if (tc.id) toolCalls[idx].id = tc.id
+                      if (tc.function?.name && !toolCalls[idx].function.name) {
+                        toolCalls[idx].function.name = tc.function.name
+                      }
+                      if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments
+                    }
                   }
                 } catch {}
               }
@@ -1462,6 +1486,7 @@ When providing final results, format them clearly with markdown. For code, use a
       temperature: params.temperature ?? 0.7,
       maxTokens: params.max_tokens ?? this.getMaxOutputTokens(agentSession),
       abortSignal: agentSession.abortController?.signal,
+      expectedModelId: modelId,
       onToken: (chunk) => {
         onChunk?.(chunk)
       },
