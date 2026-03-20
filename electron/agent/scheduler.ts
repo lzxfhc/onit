@@ -175,6 +175,12 @@ export class SchedulerManager {
         workspacePath: task.workspacePath,
         model: task.model,
       })
+
+      // Wait for the renderer to process the session-created event and register
+      // the session in the store. Without this delay the agent starts streaming
+      // before the session exists in the renderer, causing all stream events to
+      // be silently dropped.
+      await new Promise(resolve => setTimeout(resolve, 300))
     }
 
     try {

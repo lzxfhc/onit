@@ -49,6 +49,7 @@ export default function App() {
         model: data.model || 'qianfan-code-latest',
         tasks: [],
         workspaceFiles: [],
+        sessionMemory: null,
         createdAt: Date.now(),
         updatedAt: Date.now(),
         isBackgroundRunning: true,

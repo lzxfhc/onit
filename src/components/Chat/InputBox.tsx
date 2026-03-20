@@ -37,6 +37,7 @@ function getMentionMatch(value: string, caretPosition: number) {
 function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
   const t = useT()
   const [input, setInput] = useState('')
+  const [mentions, setMentions] = useState<{ name: string; displayName: string }[]>([])
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [showPermissionPicker, setShowPermissionPicker] = useState(false)
   const [showSkillMention, setShowSkillMention] = useState(false)
@@ -73,9 +74,12 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
   const enabledSkills = skills.filter(skill => skill.enabled)
 
   const filteredMentionSkills = enabledSkills.filter(skill =>
-    !mentionFilter ||
+    // Exclude skills already mentioned
+    !mentions.some(m => m.name === skill.name) &&
+    // Apply text filter
+    (!mentionFilter ||
     skill.name.toLowerCase().includes(mentionFilter.toLowerCase()) ||
-    skill.displayName.toLowerCase().includes(mentionFilter.toLowerCase()),
+    skill.displayName.toLowerCase().includes(mentionFilter.toLowerCase())),
   )
 
   useEffect(() => {
@@ -137,14 +141,32 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
     updateMentionState(value, caretPosition)
   }
 
+  const removeMention = useCallback((index: number) => {
+    setMentions(prev => prev.filter((_, i) => i !== index))
+    textareaRef.current?.focus()
+  }, [])
+
   const insertMention = useCallback((skill: Skill) => {
     const mentionRange = mentionRangeRef.current
     if (!mentionRange) return
 
+    // Prevent duplicate mentions
+    setMentions(prev => {
+      if (prev.some(m => m.name === skill.name)) return prev
+      return [...prev, { name: skill.name, displayName: skill.displayName }]
+    })
+
+    // Remove the @query text from the textarea
     const before = input.slice(0, mentionRange.start)
     const after = input.slice(mentionRange.end)
-    const needsSpace = after.length > 0 && !after.startsWith(' ') ? ' ' : ''
-    const nextValue = `${before}@${skill.name}${needsSpace}${after}`
+    // Trim trailing space from 'before' if the @ was preceded by a space
+    const cleanBefore = before.endsWith(' ') ? before.slice(0, -1) : before
+    // Trim leading space from 'after' if present
+    const cleanAfter = after.startsWith(' ') ? after.slice(1) : after
+    // Combine, but add space between parts if both exist
+    const nextValue = cleanBefore && cleanAfter
+      ? `${cleanBefore} ${cleanAfter}`
+      : `${cleanBefore}${cleanAfter}`
 
     setInput(nextValue)
     setShowSkillMention(false)
@@ -153,26 +175,36 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
     requestAnimationFrame(() => {
       const textarea = textareaRef.current
       if (!textarea) return
-      const cursor = before.length + skill.name.length + 1 + needsSpace.length
       textarea.focus()
+      const cursor = nextValue.length
       textarea.setSelectionRange(cursor, cursor)
     })
   }, [input])
 
   const handleSend = async () => {
     const trimmedInput = input.trim()
+    const hasMentions = mentions.length > 0
 
     if (isRunning) {
       await onStop()
-      if (!trimmedInput) return
-    } else if (!trimmedInput) {
+      if (!trimmedInput && !hasMentions) return
+    } else if (!trimmedInput && !hasMentions) {
       return
     }
 
+    // Prepend @mentions to the message text so the agent can parse them
+    const mentionPrefix = hasMentions
+      ? mentions.map(m => `@${m.name}`).join(' ')
+      : ''
+    const fullMessage = mentionPrefix && trimmedInput
+      ? `${mentionPrefix} ${trimmedInput}`
+      : mentionPrefix || trimmedInput
+
     setInput('')
+    setMentions([])
     setShowSkillMention(false)
     mentionRangeRef.current = null
-    await onSend(trimmedInput)
+    await onSend(fullMessage)
   }
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
@@ -201,6 +233,13 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
         setShowSkillMention(false)
         return
       }
+    }
+
+    // Remove last mention chip when backspace is pressed on empty input
+    if (event.key === 'Backspace' && !input && mentions.length > 0) {
+      event.preventDefault()
+      setMentions(prev => prev.slice(0, -1))
+      return
     }
 
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -285,6 +324,26 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
                     </button>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {mentions.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2.5 pb-0">
+                {mentions.map((mention, idx) => (
+                  <span
+                    key={`${mention.name}-${idx}`}
+                    className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-accent/10 text-accent text-xs font-medium leading-5 select-none"
+                  >
+                    <Sparkles className="w-3 h-3 shrink-0" />
+                    @{mention.displayName}
+                    <button
+                      onClick={() => removeMention(idx)}
+                      className="ml-0.5 rounded-full p-0.5 hover:bg-accent/20 transition-colors"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                ))}
               </div>
             )}
 
@@ -409,11 +468,11 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
 
           <button
             onClick={() => { void handleSend() }}
-            disabled={!isRunning && !input.trim()}
+            disabled={!isRunning && !input.trim() && mentions.length === 0}
             className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
               isRunning
                 ? 'bg-danger text-white hover:bg-red-600'
-                : input.trim()
+                : (input.trim() || mentions.length > 0)
                 ? 'bg-accent text-white hover:bg-accent-hover'
                 : 'bg-gray-100 text-text-tertiary cursor-not-allowed'
             }`}

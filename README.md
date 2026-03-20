@@ -166,7 +166,7 @@ src/                         # React 渲染进程
 ## 备注
 
 - **未签名** — 安装时需绕过系统安全提示
-- **macOS 仅支持 Apple Silicon**（M1/M2/M3/M4）
+- **macOS 仅支持 Apple Silicon**（M1 及以上全系列，含 Pro/Max/Ultra）
 - **定时任务需保持应用运行** — 无后台守护进程
 - **本地模型可离线使用** — 云端 API 需要网络 + API Key
 
@@ -281,7 +281,7 @@ npm run build:win
 ## Notes
 
 - **Not code-signed** — Bypass OS security prompts during installation
-- **macOS Apple Silicon only** (M1/M2/M3/M4)
+- **macOS Apple Silicon only** (M1 and above, including Pro/Max/Ultra)
 - **Scheduled tasks require the app to be running** — No background daemon
 - **Local model works offline** — Cloud APIs require network + API Key
 
