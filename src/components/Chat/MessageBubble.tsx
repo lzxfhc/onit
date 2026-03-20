@@ -1,6 +1,8 @@
 import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { User, Bot, ChevronRight, Terminal, CheckCircle2, XCircle, Loader2, Brain, FileText, Search, Globe, ListTodo } from 'lucide-react'
 import type { Message, ToolCall, ContentBlock } from '../../types'
+import { useT } from '../../i18n'
+import type { Translations } from '../../i18n/zh'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -55,6 +57,7 @@ function segmentBlocks(blocks: ContentBlock[]): RenderSegment[] {
 }
 
 const MessageBubble = memo(function MessageBubble({ message }: Props) {
+  const t = useT()
   const isUser = message.role === 'user'
 
   return (
@@ -72,7 +75,7 @@ const MessageBubble = memo(function MessageBubble({ message }: Props) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-semibold text-charcoal">
-              {isUser ? 'You' : 'Agent'}
+              {isUser ? t.chat.you : t.chat.agent}
             </span>
             <span className="text-[10px] text-text-tertiary">
               {new Date(message.timestamp).toLocaleTimeString('en-US', {
@@ -160,6 +163,7 @@ function ChronologicalContent({ blocks, toolCalls, isStreaming }: {
 }
 
 function ToolGroup({ toolCalls, isActive }: { toolCalls: ToolCall[]; isActive: boolean }) {
+  const t = useT()
   const [manualOverride, setManualOverride] = useState<boolean | null>(null)
   const hasRunning = toolCalls.some(toolCall => toolCall.status === 'running' || toolCall.status === 'pending')
   const hasError = !hasRunning && toolCalls.some(toolCall => toolCall.status === 'error')
@@ -180,13 +184,13 @@ function ToolGroup({ toolCalls, isActive }: { toolCalls: ToolCall[]; isActive: b
   const summary = useMemo(() => {
     const counts: Record<string, number> = {}
     for (const toolCall of toolCalls) {
-      const label = getToolSummaryLabel(toolCall.name)
+      const label = getToolSummaryLabel(toolCall.name, t)
       counts[label] = (counts[label] || 0) + 1
     }
     return Object.entries(counts)
       .map(([label, count]) => count > 1 ? `${label} (${count})` : label)
       .join(', ')
-  }, [toolCalls])
+  }, [toolCalls, t])
 
   if (!summary || toolCalls.length === 0) return null
 
@@ -206,10 +210,10 @@ function ToolGroup({ toolCalls, isActive }: { toolCalls: ToolCall[]; isActive: b
         <span className={`text-xs truncate ${
           hasRunning ? 'text-text-secondary' : hasError ? 'text-danger' : 'text-text-tertiary'
         }`}>
-          {hasRunning ? 'Running...' : summary}
+          {hasRunning ? t.chat.running : summary}
         </span>
         {hasRunning && (
-          <span className="text-[10px] text-accent bg-accent/10 px-1.5 py-0.5 rounded-full shrink-0">In Progress</span>
+          <span className="text-[10px] text-accent bg-accent/10 px-1.5 py-0.5 rounded-full shrink-0">{t.chat.inProgress}</span>
         )}
         <ChevronRight className={`w-3 h-3 text-text-tertiary shrink-0 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
       </button>
@@ -251,24 +255,25 @@ function LegacyContent({ message }: { message: Message }) {
   )
 }
 
-function getToolSummaryLabel(name: string): string {
+function getToolSummaryLabel(name: string, t: Translations): string {
   const labels: Record<string, string> = {
-    read_file: 'Read file',
-    write_file: 'Created file',
-    edit_file: 'Edited file',
-    delete_file: 'Deleted file',
-    list_directory: 'Listed directory',
-    search_files: 'Searched files',
-    search_content: 'Searched content',
-    execute_command: 'Ran command',
-    create_task_list: 'Updated tasks',
-    web_search: 'Searched the web',
-    web_fetch: 'Fetched web page',
+    read_file: t.chat.toolReadFile,
+    write_file: t.chat.toolWriteFile,
+    edit_file: t.chat.toolEditFile,
+    delete_file: t.chat.toolDeleteFile,
+    list_directory: t.chat.toolListDir,
+    search_files: t.chat.toolSearchFiles,
+    search_content: t.chat.toolSearchContent,
+    execute_command: t.chat.toolExecCommand,
+    create_task_list: t.chat.toolTaskList,
+    web_search: t.chat.toolWebSearch,
+    web_fetch: t.chat.toolFetchPage,
   }
   return labels[name] || name
 }
 
 function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -278,7 +283,7 @@ function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?
         className="flex items-center gap-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
       >
         <Brain className="w-3.5 h-3.5" />
-        <span>Thinking</span>
+        <span>{t.chat.thinking}</span>
         {isStreaming && <Loader2 className="w-3 h-3 animate-spin" />}
         <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
       </button>
@@ -296,6 +301,7 @@ function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?
 }
 
 const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: ToolCall }) {
+  const t = useT()
   const [expanded, setExpanded] = useState(false)
 
   const toolPath = useMemo(() => {
@@ -332,7 +338,7 @@ const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: Tool
       >
         {statusIcon}
         <span className="text-xs font-medium text-charcoal">
-          {getToolLabel(toolCall.name)}
+          {getToolLabel(toolCall.name, t)}
         </span>
         <span className="text-[10px] text-text-tertiary truncate flex-1">
           {toolPath}
@@ -343,14 +349,14 @@ const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: Tool
         <div className="overflow-hidden min-h-0">
           <div className="px-3 pb-2.5">
             <div className="mb-2">
-              <span className="text-[10px] text-text-tertiary font-medium">Input:</span>
+              <span className="text-[10px] text-text-tertiary font-medium">{t.chat.input}</span>
               <pre className="mt-1 text-[11px] text-charcoal bg-white/60 rounded p-2 overflow-x-auto font-mono">
                 {formatJSON(toolCall.arguments)}
               </pre>
             </div>
             {toolCall.result && (
               <div>
-                <span className="text-[10px] text-text-tertiary font-medium">Output:</span>
+                <span className="text-[10px] text-text-tertiary font-medium">{t.chat.output}</span>
                 <pre className="mt-1 text-[11px] bg-terminal text-gray-200 rounded p-2 overflow-x-auto font-mono max-h-48 overflow-y-auto">
                   {toolCall.result}
                 </pre>
@@ -358,7 +364,7 @@ const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: Tool
             )}
             {toolCall.error && (
               <div>
-                <span className="text-[10px] text-danger font-medium">Error:</span>
+                <span className="text-[10px] text-danger font-medium">{t.chat.error}</span>
                 <pre className="mt-1 text-[11px] text-danger bg-danger-light rounded p-2 overflow-x-auto font-mono">
                   {toolCall.error}
                 </pre>
@@ -371,19 +377,19 @@ const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: Tool
   )
 })
 
-function getToolLabel(name: string) {
+function getToolLabel(name: string, t: Translations) {
   const labels: Record<string, string> = {
-    read_file: 'Read File',
-    write_file: 'Write File',
-    edit_file: 'Edit File',
-    delete_file: 'Delete File',
-    list_directory: 'List Directory',
-    search_files: 'Search Files',
-    search_content: 'Search Content',
-    execute_command: 'Execute Command',
-    create_task_list: 'Task List',
-    web_search: 'Web Search',
-    web_fetch: 'Fetch Page',
+    read_file: t.chat.toolReadFile,
+    write_file: t.chat.toolWriteFile,
+    edit_file: t.chat.toolEditFile,
+    delete_file: t.chat.toolDeleteFile,
+    list_directory: t.chat.toolListDir,
+    search_files: t.chat.toolSearchFiles,
+    search_content: t.chat.toolSearchContent,
+    execute_command: t.chat.toolExecCommand,
+    create_task_list: t.chat.toolTaskList,
+    web_search: t.chat.toolWebSearch,
+    web_fetch: t.chat.toolFetchPage,
   }
   return labels[name] || name
 }

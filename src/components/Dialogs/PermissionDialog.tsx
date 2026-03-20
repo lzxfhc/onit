@@ -1,4 +1,5 @@
 import { AlertTriangle, Shield, FileWarning, Terminal, X } from 'lucide-react'
+import { useT } from '../../i18n'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 interface Props {
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export default function PermissionDialog({ request }: Props) {
+  const t = useT()
   const { removePermissionRequest } = useSettingsStore()
 
   const handleResponse = (approved: boolean, alwaysAllow?: boolean) => {
@@ -41,12 +43,12 @@ export default function PermissionDialog({ request }: Props) {
 
   const getTitle = () => {
     switch (request.type) {
-      case 'file-delete': return 'File Deletion'
-      case 'file-write': return 'File Write'
-      case 'file-overwrite': return 'File Overwrite'
-      case 'command-execute': return 'Command Execution'
-      case 'system-config': return 'System Configuration'
-      default: return 'Permission Required'
+      case 'file-delete': return t.permission.fileDelete
+      case 'file-write': return t.permission.fileWrite
+      case 'file-overwrite': return t.permission.fileOverwrite
+      case 'command-execute': return t.permission.commandExec
+      case 'system-config': return t.permission.systemConfig
+      default: return t.permission.title
     }
   }
 
@@ -85,7 +87,7 @@ export default function PermissionDialog({ request }: Props) {
             <div>
               <h3 className="text-sm font-semibold text-charcoal">{getTitle()}</h3>
               <p className="text-xs text-text-secondary mt-0.5">
-                The agent wants to perform this operation
+                {t.permission.description}
               </p>
             </div>
           </div>
@@ -107,7 +109,7 @@ export default function PermissionDialog({ request }: Props) {
           {/* Details */}
           {request.details && (
             <div className="mb-4">
-              <span className="text-[10px] text-text-tertiary font-medium">Details:</span>
+              <span className="text-[10px] text-text-tertiary font-medium">{t.permission.details}</span>
               <pre className="mt-1 text-[11px] bg-terminal text-gray-200 rounded p-3 overflow-x-auto font-mono max-h-48 overflow-y-auto">
                 {formatDetails(request.details)}
               </pre>
@@ -121,21 +123,21 @@ export default function PermissionDialog({ request }: Props) {
             onClick={() => handleResponse(false)}
             className="btn-secondary flex-1"
           >
-            Deny
+            {t.permission.deny}
           </button>
           {request.showAlwaysAllow && (
             <button
               onClick={() => handleResponse(true, true)}
               className="btn-secondary flex-1 text-accent border-accent/30"
             >
-              Always Allow
+              {t.permission.alwaysAllow}
             </button>
           )}
           <button
             onClick={() => handleResponse(true)}
             className="btn-primary flex-1"
           >
-            Allow
+            {t.permission.allow}
           </button>
         </div>
       </div>

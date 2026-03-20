@@ -1,8 +1,10 @@
 import { useState, useMemo } from 'react'
 import { Search, MessageSquare } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useT } from '../../i18n'
 
 export default function HistorySearch() {
+  const t = useT()
   const { sessions, setActiveSession } = useSessionStore()
   const [query, setQuery] = useState('')
 
@@ -40,7 +42,7 @@ export default function HistorySearch() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search conversations..."
+            placeholder={t.search.placeholder}
             className="input pl-8 text-xs"
             autoFocus
           />
@@ -69,12 +71,12 @@ export default function HistorySearch() {
           </div>
         ) : (
           <p className="text-xs text-text-tertiary text-center py-8">
-            No results found
+            {t.search.noResults}
           </p>
         )
       ) : (
         <p className="text-xs text-text-tertiary text-center py-8">
-          Type to search conversations
+          {t.search.typeToSearch}
         </p>
       )}
     </div>

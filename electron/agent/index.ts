@@ -14,6 +14,7 @@ interface SkillData {
   displayName: string
   description: string
   content: string
+  memory?: string | null
 }
 
 interface SessionToolCallData {
@@ -109,6 +110,7 @@ interface AgentSession {
   apiConfig: {
     billingMode: string
     apiKey: string
+    model?: string
     customBaseUrl?: string
     codingPlanProvider?: string
     localModelId?: string
@@ -118,6 +120,9 @@ interface AgentSession {
   alwaysAllowedTools: Set<string>
   pendingPermissions: Map<string, { resolve: (approved: boolean) => void }>
   enabledSkills?: SkillData[]
+  /** Maps skill name → how many runs ago it was last @-mentioned (0 = this run). */
+  usedSkillNames: Map<string, number>
+  runPromise?: Promise<void>
 }
 
 export class AgentManager {
@@ -125,14 +130,29 @@ export class AgentManager {
   private sendToRenderer: (channel: string, data: any) => void
   private artifactsDir: string | null
   private localModelManager: LocalModelManager | null
+  private onRunComplete: ((params: {
+    sessionId: string
+    runId: string
+    /** Skills @-mentioned in this run's user message (for usage count). */
+    currentRunSkillNames: string[]
+    /** All skills @-mentioned within the recording window (for evolution recording). */
+    sessionSkillNames: string[]
+    messages: AgentMessage[]
+    apiConfig: AgentSession['apiConfig']
+  }) => void) | null = null
 
   constructor(
     sendToRenderer: (channel: string, data: any) => void,
-    options?: { artifactsDir?: string; localModelManager?: LocalModelManager }
+    options?: {
+      artifactsDir?: string
+      localModelManager?: LocalModelManager
+      onRunComplete?: AgentManager['onRunComplete']
+    }
   ) {
     this.sendToRenderer = sendToRenderer
     this.artifactsDir = options?.artifactsDir || null
     this.localModelManager = options?.localModelManager || null
+    this.onRunComplete = options?.onRunComplete || null
   }
 
   async startAgent(sessionId: string, userMessage: string, runId: string, sessionData: any): Promise<boolean> {
@@ -140,7 +160,9 @@ export class AgentManager {
 
     if (agentSession?.isRunning) {
       this.stopAgent(sessionId)
-      await new Promise(resolve => setTimeout(resolve, 100))
+      if (agentSession.runPromise) {
+        await agentSession.runPromise.catch(() => {})
+      }
     }
 
     const apiConfig = sessionData.apiConfig || {}
@@ -169,7 +191,7 @@ export class AgentManager {
     const attachedFileMessages = this.buildAttachedFileMessages(sessionData.attachedFiles || [])
 
     // Parse @skill-name mentions from user message and inject skill content
-    const mentionedSkillContents = this.extractMentionedSkills(userMessage, enabledSkills)
+    const { contents: mentionedSkillContents, names: mentionedSkillNames } = this.extractMentionedSkills(userMessage, enabledSkills)
 
     // Build the system prompt
     const systemPrompt = this.buildSystemPrompt(
@@ -223,6 +245,7 @@ export class AgentManager {
       apiConfig: {
         billingMode: apiConfig.billingMode || 'coding-plan',
         apiKey: apiConfig.apiKey || '',
+        model: apiConfig.model || sessionData.model,
         customBaseUrl: apiConfig.customBaseUrl,
         codingPlanProvider: apiConfig.codingPlanProvider,
         localModelId: apiConfig.localModelId,
@@ -232,6 +255,38 @@ export class AgentManager {
       alwaysAllowedTools: agentSession?.alwaysAllowedTools || new Set(),
       pendingPermissions: new Map(),
       enabledSkills,
+      usedSkillNames: new Map<string, number>(),
+    }
+
+    // Current @-mentions in this message → distance 0 (this run)
+    for (const name of mentionedSkillNames) {
+      agentSession.usedSkillNames.set(name, 0)
+    }
+
+    // Scan conversation history for previously @-mentioned skills.
+    // Older @-mentions get a higher distance (number of runs since mention).
+    // We count runs backwards: each user message in history = 1 prior run.
+    if (sessionData.messages) {
+      const userMessages: SessionMessageData[] = (sessionData.messages as SessionMessageData[])
+        .filter((m: SessionMessageData) => m.role === 'user')
+      const totalPriorRuns = userMessages.length
+
+      for (let i = 0; i < userMessages.length; i++) {
+        const msg = userMessages[i]
+        if (!msg.content) continue
+        const runsAgo = totalPriorRuns - i // most recent prior run = 1, oldest = totalPriorRuns
+        const histPattern = /@([\w-]+)/g
+        let histMatch: RegExpExecArray | null
+        while ((histMatch = histPattern.exec(msg.content)) !== null) {
+          const skillName = histMatch[1]
+          if (!enabledSkills.some(s => s.name === skillName)) continue
+          // Keep the smallest distance (most recent mention)
+          const existing = agentSession.usedSkillNames.get(skillName)
+          if (existing === undefined || runsAgo < existing) {
+            agentSession.usedSkillNames.set(skillName, runsAgo)
+          }
+        }
+      }
     }
 
     // Compress older history into Session Memory (if needed) and then ensure
@@ -247,7 +302,7 @@ export class AgentManager {
     this.sessions.set(sessionId, agentSession)
 
     // Run the agent loop asynchronously
-    this.runAgentLoop(agentSession).catch(error => {
+    agentSession.runPromise = this.runAgentLoop(agentSession).catch(error => {
       this.sendToRenderer('agent:error', {
         sessionId,
         runId,
@@ -264,7 +319,6 @@ export class AgentManager {
       session.isRunning = false
       session.completionStatus = 'stopped'
       session.abortController?.abort()
-      session.abortController = null
       for (const [, pending] of session.pendingPermissions) {
         pending.resolve(false)
       }
@@ -296,8 +350,9 @@ export class AgentManager {
     }
   }
 
-  private extractMentionedSkills(message: string, enabledSkills: SkillData[]): string[] {
+  private extractMentionedSkills(message: string, enabledSkills: SkillData[]): { contents: string[]; names: string[] } {
     const contents: string[] = []
+    const names: string[] = []
     const mentionPattern = /@([\w-]+)/g
     let match: RegExpExecArray | null
 
@@ -305,15 +360,20 @@ export class AgentManager {
       const skillName = match[1]
       const skill = enabledSkills.find(s => s.name === skillName)
       if (skill && skill.content) {
-        // Inject full skill content, capped at 5000 chars
-        const injected = skill.content.length > 5000
-          ? skill.content.substring(0, 5000) + '\n\n[Skill content truncated]'
-          : skill.content
+        // Compose skill content with memory overlay
+        let fullContent = skill.content
+        if (skill.memory) {
+          fullContent += '\n\n## Skill Memory\n\n' + skill.memory
+        }
+        const injected = fullContent.length > 5000
+          ? fullContent.substring(0, 5000) + '\n\n[Skill content truncated]'
+          : fullContent
         contents.push(`[Skill: ${skill.displayName}]\n\n${injected}`)
+        names.push(skill.name)
       }
     }
 
-    return contents
+    return { contents, names }
   }
 
   private buildAttachedFileMessages(attachedFiles: string[]): AgentMessage[] {
@@ -1309,7 +1369,7 @@ When providing final results, format them clearly with markdown. For code, use a
 
               if (delta.tool_calls) {
                 for (const tc of delta.tool_calls) {
-                  const idx = tc.index || 0
+                  const idx = tc.index ?? 0
                   if (!toolCalls[idx]) {
                     toolCalls[idx] = {
                       id: tc.id || `call_${uuidv4().slice(0, 8)}`,
@@ -1318,7 +1378,9 @@ When providing final results, format them clearly with markdown. For code, use a
                     }
                   }
                   if (tc.id) toolCalls[idx].id = tc.id
-                  if (tc.function?.name) toolCalls[idx].function.name += tc.function.name
+                  if (tc.function?.name && !toolCalls[idx].function.name) {
+                    toolCalls[idx].function.name = tc.function.name
+                  }
                   if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments
                 }
               }
@@ -1340,6 +1402,26 @@ When providing final results, format them clearly with markdown. For code, use a
                   if (delta?.content) {
                     fullContent += delta.content
                     onChunk?.({ type: 'content', content: delta.content })
+                  }
+                  if (delta?.reasoning_content) {
+                    onChunk?.({ type: 'thinking', content: delta.reasoning_content })
+                  }
+                  if (delta?.tool_calls) {
+                    for (const tc of delta.tool_calls) {
+                      const idx = tc.index ?? 0
+                      if (!toolCalls[idx]) {
+                        toolCalls[idx] = {
+                          id: tc.id || `call_${uuidv4().slice(0, 8)}`,
+                          type: 'function',
+                          function: { name: '', arguments: '' },
+                        }
+                      }
+                      if (tc.id) toolCalls[idx].id = tc.id
+                      if (tc.function?.name && !toolCalls[idx].function.name) {
+                        toolCalls[idx].function.name = tc.function.name
+                      }
+                      if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments
+                    }
                   }
                 } catch {}
               }
@@ -1404,6 +1486,7 @@ When providing final results, format them clearly with markdown. For code, use a
       temperature: params.temperature ?? 0.7,
       maxTokens: params.max_tokens ?? this.getMaxOutputTokens(agentSession),
       abortSignal: agentSession.abortController?.signal,
+      expectedModelId: modelId,
       onToken: (chunk) => {
         onChunk?.(chunk)
       },
@@ -1979,6 +2062,29 @@ When providing final results, format them clearly with markdown. For code, use a
           runId: agentSession.runId,
           status: agentSession.completionStatus,
         })
+      }
+
+      // Fire-and-forget: notify evolution system about used skills.
+      // currentRunSkillNames: skills @-mentioned in THIS run (distance=0) → for usage count
+      // sessionSkillNames: skills within recording window (distance≤2) → for evolution recording
+      const EVOLUTION_RECORD_MAX_RUN_DISTANCE = 2
+      const currentRunSkillNames: string[] = []
+      const sessionSkillNames: string[] = []
+      for (const [name, runsAgo] of agentSession.usedSkillNames) {
+        if (runsAgo === 0) currentRunSkillNames.push(name)
+        if (runsAgo <= EVOLUTION_RECORD_MAX_RUN_DISTANCE) sessionSkillNames.push(name)
+      }
+      if (this.onRunComplete && sessionSkillNames.length > 0) {
+        try {
+          this.onRunComplete({
+            sessionId: agentSession.sessionId,
+            runId: agentSession.runId,
+            currentRunSkillNames,
+            sessionSkillNames,
+            messages: agentSession.messages,
+            apiConfig: agentSession.apiConfig,
+          })
+        } catch { /* never let evolution tracking break the main flow */ }
       }
     }
   }

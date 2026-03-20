@@ -1,5 +1,6 @@
 import { PanelRight, PanelRightClose } from 'lucide-react'
 import { shallow } from 'zustand/shallow'
+import { useT } from '../i18n'
 import { useSessionStore } from '../stores/sessionStore'
 import { isWindows } from '../utils/platform'
 
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function TopBar({ rightPanelOpen, onToggleRightPanel }: Props) {
+  const t = useT()
   const activeSession = useSessionStore(state => {
     const session = state.sessions.find(s => s.id === state.activeSessionId)
     return {
@@ -45,7 +47,7 @@ export default function TopBar({ rightPanelOpen, onToggleRightPanel }: Props) {
           <button
             onClick={onToggleRightPanel}
             className="btn-icon no-drag"
-            title={rightPanelOpen ? 'Hide panel' : 'Show panel'}
+            title={rightPanelOpen ? t.topBar.hidePanel : t.topBar.showPanel}
           >
             {rightPanelOpen ? (
               <PanelRightClose className="w-4 h-4" />

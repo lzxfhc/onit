@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Message } from '../../types'
+import { useT } from '../../i18n'
 import MessageBubble from './MessageBubble'
 import { Loader2, Zap, ArrowDown } from 'lucide-react'
 
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export default function MessageList({ messages, isRunning, sessionId }: Props) {
+  const t = useT()
   const bottomRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const isAutoScrollRef = useRef(true)
@@ -95,18 +97,17 @@ export default function MessageList({ messages, isRunning, sessionId }: Props) {
             <Zap className="w-7 h-7 text-accent/40" strokeWidth={1.5} />
           </div>
           <h3 className="text-base font-medium text-charcoal mb-2">
-            What can I help you with?
+            {t.chat.whatCanIHelp}
           </h3>
           <p className="text-sm text-text-tertiary leading-relaxed">
-            I can help you with file management, code tasks, data analysis, and more.
-            Just describe what you need.
+            {t.chat.helpDescription}
           </p>
           <div className="flex flex-wrap gap-2 justify-center mt-5">
             {[
-              'Organize my downloads folder',
-              'Help me write a Python script',
-              'Summarize this document',
-              'Find large files on disk',
+              t.chat.suggestion1,
+              t.chat.suggestion2,
+              t.chat.suggestion3,
+              t.chat.suggestion4,
             ].map((suggestion) => (
               <span key={suggestion} className="badge-blue text-[10px] cursor-pointer hover:bg-accent-100 transition-colors duration-200 select-none">
                 {suggestion}
@@ -139,7 +140,7 @@ export default function MessageList({ messages, isRunning, sessionId }: Props) {
             !lastMessage.thinking && (
             <div className="flex items-center gap-2 py-3 text-text-tertiary animate-fade-in">
               <Loader2 className="w-4 h-4 animate-spin" />
-              <span className="text-xs">Thinking...</span>
+              <span className="text-xs">{t.chat.thinking}</span>
             </div>
           )}
 
@@ -154,7 +155,7 @@ export default function MessageList({ messages, isRunning, sessionId }: Props) {
           onClick={scrollToBottom}
           className="pointer-events-auto bg-white/80 backdrop-blur-sm border border-border-subtle rounded-full p-2 shadow-sm hover:shadow hover:bg-white transition-all duration-200 text-text-secondary hover:text-charcoal"
           tabIndex={showScrollButton ? 0 : -1}
-          aria-label="Scroll to bottom"
+          aria-label={t.chat.scrollToBottom}
         >
           <ArrowDown className="w-4 h-4" />
         </button>

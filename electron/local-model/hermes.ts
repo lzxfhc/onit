@@ -41,11 +41,18 @@ export function buildFunctions(tools: any[]): Record<string, any> {
 export function buildChatHistory(messages: AgentMessage[], tools?: any[]): any[] {
   const history: any[] = []
 
-  // Collect tool results indexed by tool_call_id for folding into model responses
+  // Collect tool results indexed by tool_call_id for folding into model responses.
+  // M22: Also index by fallback IDs so results are not dropped when tool_call_id is undefined.
   const toolResults = new Map<string, string>()
+  let toolResultFallbackIdx = 0
   for (const msg of messages) {
-    if (msg.role === 'tool' && msg.tool_call_id) {
-      toolResults.set(msg.tool_call_id, msg.content)
+    if (msg.role === 'assistant') {
+      // Reset fallback counter for each assistant message's tool_calls group
+      toolResultFallbackIdx = 0
+    } else if (msg.role === 'tool') {
+      const resultId = msg.tool_call_id || `fallback_${toolResultFallbackIdx}`
+      toolResults.set(resultId, msg.content)
+      toolResultFallbackIdx++
     }
   }
 
@@ -67,8 +74,9 @@ export function buildChatHistory(messages: AgentMessage[], tools?: any[]): any[]
         }
 
         if (msg.tool_calls && msg.tool_calls.length > 0) {
-          for (const tc of msg.tool_calls) {
-            const callId = tc.id
+          for (let tcIndex = 0; tcIndex < msg.tool_calls.length; tcIndex++) {
+            const tc = msg.tool_calls[tcIndex]
+            const callId = tc.id || `fallback_${tcIndex}`
             let params: any = {}
             try {
               params = typeof tc.function.arguments === 'string'

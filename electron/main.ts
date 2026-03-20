@@ -1,15 +1,18 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import path from 'path'
 import fs from 'fs'
+import os from 'os'
 import { AgentManager } from './agent/index'
 import { SchedulerManager } from './agent/scheduler'
 import { SkillManager } from './agent/skills'
+import { SkillEvolutionManager } from './agent/skill-evolution'
 import { LocalModelManager } from './local-model/index'
 
 let mainWindow: BrowserWindow | null = null
 let agentManager: AgentManager
 let schedulerManager: SchedulerManager
 let skillManager: SkillManager
+let skillEvolutionManager: SkillEvolutionManager
 let localModelManager: LocalModelManager
 
 const DATA_DIR = path.join(app.getPath('userData'), 'onit-data')
@@ -51,7 +54,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
     show: false,
   }
@@ -115,6 +118,7 @@ function setupIPC() {
       displayName: s.displayName,
       description: s.description,
       content: s.content,
+      memory: s.memory,
     }))
     return agentManager.startAgent(data.sessionId, data.message, data.runId, {
       ...data.session,
@@ -134,8 +138,12 @@ function setupIPC() {
 
   // Sessions: save
   ipcMain.handle('sessions:save', async (_event, session: any) => {
-    const filePath = path.join(SESSIONS_DIR, `${session.id}.json`)
-    fs.writeFileSync(filePath, JSON.stringify(session, null, 2), 'utf-8')
+    if (!/^[a-zA-Z0-9_-]+$/.test(session.id)) return false
+    const filePath = path.resolve(SESSIONS_DIR, `${session.id}.json`)
+    if (!filePath.startsWith(SESSIONS_DIR + path.sep)) return false
+    const tmpPath = filePath + '.tmp'
+    fs.writeFileSync(tmpPath, JSON.stringify(session, null, 2), 'utf-8')
+    fs.renameSync(tmpPath, filePath)
     return true
   })
 
@@ -144,14 +152,20 @@ function setupIPC() {
     if (!fs.existsSync(SESSIONS_DIR)) return []
     const files = fs.readdirSync(SESSIONS_DIR).filter(f => f.endsWith('.json'))
     return files.map(f => {
-      const content = fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf-8')
-      return JSON.parse(content)
-    }).sort((a, b) => b.updatedAt - a.updatedAt)
+      try {
+        const content = fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf-8')
+        return JSON.parse(content)
+      } catch {
+        return null
+      }
+    }).filter(Boolean).sort((a: any, b: any) => b.updatedAt - a.updatedAt)
   })
 
   // Sessions: delete
   ipcMain.handle('sessions:delete', async (_event, data: { id: string }) => {
-    const filePath = path.join(SESSIONS_DIR, `${data.id}.json`)
+    if (!/^[a-zA-Z0-9_-]+$/.test(data.id)) return false
+    const filePath = path.resolve(SESSIONS_DIR, `${data.id}.json`)
+    if (!filePath.startsWith(SESSIONS_DIR + path.sep)) return false
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
     return true
   })
@@ -231,15 +245,56 @@ function setupIPC() {
     return skillManager.importSkill(result.filePaths[0])
   })
 
+  // Skills Evolution: get evolution data
+  ipcMain.handle('skills:get-evolution', async (_event, data: { skillId: string }) => {
+    return skillManager.getEvolutionData(data.skillId)
+  })
+
+  // Skills Evolution: toggle evolvable
+  ipcMain.handle('skills:toggle-evolvable', async (_event, data: { skillId: string; evolvable: boolean }) => {
+    return skillManager.toggleEvolvable(data.skillId, data.evolvable)
+  })
+
+  // Skills Evolution: synthesize evolution
+  ipcMain.handle('skills:evolve', async (_event, data: { skillId: string; apiConfig: any }) => {
+    return skillEvolutionManager.synthesizeEvolution(data.skillId, data.apiConfig)
+  })
+
+  // Skills Evolution: apply pending evolution
+  ipcMain.handle('skills:apply-evolution', async (_event, data: { skillId: string }) => {
+    return skillEvolutionManager.applyEvolution(data.skillId)
+  })
+
+  // Skills Evolution: reject pending evolution
+  ipcMain.handle('skills:reject-evolution', async (_event, data: { skillId: string }) => {
+    return skillEvolutionManager.rejectEvolution(data.skillId)
+  })
+
+  // Skills Evolution: rollback to previous version
+  ipcMain.handle('skills:rollback', async (_event, data: { skillId: string; version: string }) => {
+    return skillEvolutionManager.rollback(data.skillId, data.version)
+  })
+
+  // Skills Evolution: delete a learning entry
+  ipcMain.handle('skills:delete-record', async (_event, data: { skillId: string; recordId: string }) => {
+    return skillManager.deleteRecord(data.skillId, data.recordId)
+  })
+
   // File system: list directory
   ipcMain.handle('fs:list-directory', async (_event, dirPath: string) => {
     try {
-      const items = fs.readdirSync(dirPath, { withFileTypes: true })
+      const resolvedDir = path.resolve(dirPath)
+      const homeDir = os.homedir()
+      if (!resolvedDir.startsWith(homeDir + path.sep) && resolvedDir !== homeDir &&
+          !resolvedDir.startsWith(DATA_DIR + path.sep) && resolvedDir !== DATA_DIR) {
+        return []
+      }
+      const items = fs.readdirSync(resolvedDir, { withFileTypes: true })
       return items
         .filter(item => !item.name.startsWith('.'))
         .map(item => ({
           name: item.name,
-          path: path.join(dirPath, item.name),
+          path: path.join(resolvedDir, item.name),
           type: item.isDirectory() ? 'directory' : 'file',
         }))
         .sort((a, b) => {
@@ -253,7 +308,14 @@ function setupIPC() {
 
   // Open external links
   ipcMain.on('shell:open-external', (_event, url: string) => {
-    shell.openExternal(url)
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        shell.openExternal(url)
+      }
+    } catch {
+      // Ignore malformed URLs
+    }
   })
 
   // Local model: status
@@ -334,11 +396,35 @@ function setupIPC() {
 app.whenReady().then(() => {
   ensureDirectories()
   localModelManager = new LocalModelManager(MODELS_DIR)
+  skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
+  skillEvolutionManager = new SkillEvolutionManager(skillManager)
+
   agentManager = new AgentManager((channel, data) => {
     mainWindow?.webContents.send(channel, data)
-  }, { artifactsDir: ARTIFACTS_DIR, localModelManager })
+  }, {
+    artifactsDir: ARTIFACTS_DIR,
+    localModelManager,
+    onRunComplete: (params) => {
+      // Fire-and-forget: record usage counts and save evolution records
+      const { sessionId, currentRunSkillNames, sessionSkillNames, messages, apiConfig } = params
+
+      // Record usage counts (only for skills @-mentioned in this run)
+      for (const skillName of currentRunSkillNames) {
+        skillManager.recordSkillUsage(skillName)
+      }
+
+      // Record usage for evolution (all session skills within recording window)
+      // Saves formatted conversation log to EVOLUTION.json.
+      // May trigger LLM compression of old records if storage exceeds budget.
+      for (const skillName of sessionSkillNames) {
+        skillEvolutionManager.recordUsage(skillName, sessionId, messages, apiConfig)
+          .catch((err) => {
+            console.error(`[SkillEvolution] Record usage error for ${skillName}:`, err)
+          })
+      }
+    },
+  })
   schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager)
-  skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
 
   createWindow()
   setupIPC()

@@ -252,6 +252,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   deleteSession: async (id: string) => {
+    // Stop agent if running for this session
+    const session = get().sessions.find(s => s.id === id)
+    if (session && (session.status === 'running' || session.isBackgroundRunning)) {
+      try {
+        await window.electronAPI.stopAgent({ sessionId: id })
+      } catch { /* ignore if already stopped */ }
+    }
     await window.electronAPI.deleteSession({ id })
     set(state => {
       const filtered = state.sessions.filter(s => s.id !== id)
@@ -279,34 +286,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   setActiveSession: (id: string) => {
-    const state = get()
-    const currentActive = state.activeSessionId
-    const currentSession = state.sessions.find(s => s.id === currentActive)
+    set(state => {
+      const currentActive = state.activeSessionId
+      if (currentActive === id) return { activeSessionId: id }
 
-    // If the current session is running, mark it as background
-    if (currentSession && currentSession.status === 'running' && currentActive !== id) {
-      set(state => ({
-        sessions: state.sessions.map(s =>
-          s.id === currentActive ? { ...s, isBackgroundRunning: true } : s
-        ),
-      }))
-    }
-
-    // Clear unviewed flags on the session we're switching TO
-    const targetSession = state.sessions.find(s => s.id === id)
-    if (targetSession && (targetSession.isBackgroundRunning || targetSession.hasUnviewedResult || targetSession.backgroundCompleted)) {
-      set(state => ({
-        sessions: state.sessions.map(s =>
-          s.id === id
-            ? { ...s, isBackgroundRunning: false, hasUnviewedResult: false, backgroundCompleted: false }
-            : s
-        ),
-      }))
-      // Persist so flags don't come back on restart
-      get().saveSession(id)
-    }
-
-    set({ activeSessionId: id })
+      const sessions = state.sessions.map(s => {
+        // Mark current running session as background
+        if (s.id === currentActive && s.status === 'running') {
+          return { ...s, isBackgroundRunning: true }
+        }
+        // Clear background flags on target session
+        if (s.id === id && (s.isBackgroundRunning || s.hasUnviewedResult || s.backgroundCompleted)) {
+          return { ...s, isBackgroundRunning: false, hasUnviewedResult: false, backgroundCompleted: false }
+        }
+        return s
+      })
+      return { sessions, activeSessionId: id }
+    })
+    // Save the target session to persist the cleared flags
+    get().saveSession(id)
   },
 
   updateSession: (id, updates) => {

@@ -143,11 +143,14 @@ export interface PermissionRequest {
   resolve?: (approved: boolean, alwaysAllow?: boolean) => void
 }
 
+export type Language = 'zh' | 'en'
+
 export interface AppSettings {
   apiConfig: ApiConfig
   defaultPermissionMode: PermissionMode
   maxParallelTasks: number
   theme: 'light'
+  language: Language
 }
 
 // IPC Channel types
@@ -174,6 +177,14 @@ export interface IpcChannels {
   'sessions:save': Session
   'sessions:load': void
   'sessions:delete': { id: string }
+  // Skill Evolution
+  'skills:get-evolution': { skillId: string }
+  'skills:toggle-evolvable': { skillId: string; evolvable: boolean }
+  'skills:evolve': { skillId: string }
+  'skills:apply-evolution': { skillId: string }
+  'skills:reject-evolution': { skillId: string }
+  'skills:rollback': { skillId: string; version: string }
+  'skills:delete-record': { skillId: string; recordId: string }
 }
 
 export type StreamChunkType =
@@ -271,6 +282,64 @@ export interface Skill {
   enabled: boolean
   filePath: string
   createdAt: number
+  // Evolution fields
+  evolvable: boolean
+  evolutionHints?: string[]
+  usageCount: number
+  lastUsedAt: number | null
+  recordCount: number
+  /** Skill memory — structured knowledge injected at runtime alongside the skill content. */
+  memory: string | null
+  pendingEvolution: boolean
+}
+
+// Skill Evolution types
+
+/** Usage record — stores a formatted conversation log from a session where the skill was used. */
+export interface UsageRecord {
+  id: string
+  sessionId: string
+  timestamp: number
+  lastUpdatedAt: number
+  /** Formatted conversation log: user messages, tool call summaries, agent response summaries. */
+  conversation: string
+  /** Background context for this usage session. */
+  context?: {
+    toolsUsed?: string[]
+    iterationCount?: number
+  }
+  /** Whether this record has been compressed via LLM summarization. */
+  compressed?: boolean
+}
+
+export interface EvolutionHistoryEntry {
+  timestamp: number
+  /** Full memory snapshot at the time of this evolution. */
+  memorySnapshot: string
+  /** UsageRecord IDs consumed by this evolution. */
+  recordIds: string[]
+  summary: string
+}
+
+export interface PendingEvolution {
+  /** The proposed new memory content (replaces current memory entirely). */
+  proposedMemory: string
+  /** The previous memory content (for diff display). */
+  previousMemory: string
+  summary: string
+  recordsUsed: string[]
+  generatedAt: number
+}
+
+export interface EvolutionData {
+  skillId: string
+  records: UsageRecord[]
+  /** Skill memory — structured knowledge injected at runtime. */
+  memory: string | null
+  history: EvolutionHistoryEntry[]
+  pendingEvolution: PendingEvolution | null
+  /** Timestamp of last auto-analysis (to avoid repeated triggers). */
+  lastAutoAnalyzedAt?: number
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -285,4 +354,5 @@ export const DEFAULT_SETTINGS: AppSettings = {
   defaultPermissionMode: 'accept-edit',
   maxParallelTasks: 3,
   theme: 'light',
+  language: 'zh',
 }

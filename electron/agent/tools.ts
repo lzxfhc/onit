@@ -209,6 +209,7 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
     case 'web_fetch':
       return 'safe'
     case 'write_file':
+      return 'moderate'
     case 'edit_file':
       if (args.path && fs.existsSync(args.path)) return 'moderate'
       return 'safe'
@@ -216,16 +217,26 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
       return 'dangerous'
     case 'execute_command': {
       const cmd = (args.command || '').toLowerCase()
-      const dangerousPatterns = [
-        'rm -rf', 'rm -r', 'rmdir', 'format', 'mkfs', 'dd if=',
-        'chmod -R', 'chown -R', 'kill -9', 'pkill', 'shutdown', 'reboot',
+      const dangerousKeywords = [
+        'rmdir', 'format', 'pkill', 'shutdown', 'reboot',
         // Windows dangerous
         'del /f /s /q', 'del /s /q', 'rd /s /q', 'rmdir /s /q',
         'remove-item -recurse -force', 'format-volume',
         'diskpart', 'shutdown /s', 'shutdown /r',
         'stop-process -force', 'taskkill /f',
       ]
-      if (dangerousPatterns.some(p => cmd.includes(p))) return 'dangerous'
+      const dangerousRegexes = [
+        /\brm\s+(-\w*[rf]|--recursive|--force)/i,
+        /\bchmod\s+(-\w*R|--recursive)/i,
+        /\bchown\s+(-\w*R|--recursive)/i,
+        /\bmkfs\b/i,
+        /\bdd\s+/i,
+        /\bkill\s+-9\b/i,
+        /\b(python|ruby|perl|node)\s+-(e|c)\b/i,
+        /\b(bash|sh|zsh)\s+-c\b/i,
+      ]
+      if (dangerousKeywords.some(p => cmd.includes(p))) return 'dangerous'
+      if (dangerousRegexes.some(r => r.test(cmd))) return 'dangerous'
       const moderatePatterns = [
         'rm ', 'mv ', 'cp ', 'install', 'uninstall',
         'pip', 'npm', 'brew', 'curl', 'wget',
@@ -244,12 +255,18 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
 }
 
 function globMatch(pattern: string, filename: string): boolean {
-  const regex = pattern
-    .replace(/\./g, '\.')
-    .replace(/\*\*/g, '{{GLOBSTAR}}')
-    .replace(/\*/g, '[^/\\\\]*')
-    .replace(/\{\{GLOBSTAR\}\}/g, '.*')
-  return new RegExp(`^${regex}$`).test(filename)
+  try {
+    const regex = pattern
+      // Escape regex-special characters (except * and . which are handled below)
+      .replace(/[(){}+?\[\]|^$]/g, '\\$&')
+      .replace(/\./g, '\\.')
+      .replace(/\*\*/g, '{{GLOBSTAR}}')
+      .replace(/\*/g, '[^/\\\\]*')
+      .replace(/\{\{GLOBSTAR\}\}/g, '.*')
+    return new RegExp(`^${regex}$`).test(filename)
+  } catch {
+    return false
+  }
 }
 
 const SEARCH_MAX_FILE_RESULTS = 200
@@ -697,6 +714,12 @@ export async function executeTool(
       }
 
       case 'write_file': {
+        if (workspacePath) {
+          const resolvedTarget = path.resolve(args.path)
+          if (!resolvedTarget.startsWith(path.resolve(workspacePath) + path.sep) && resolvedTarget !== path.resolve(workspacePath)) {
+            return { success: false, output: `Path "${args.path}" is outside the workspace. File operations are restricted to: ${workspacePath}`, riskLevel }
+          }
+        }
         const dir = path.dirname(args.path)
         if (!fs.existsSync(dir)) {
           fs.mkdirSync(dir, { recursive: true })
@@ -706,6 +729,12 @@ export async function executeTool(
       }
 
       case 'edit_file': {
+        if (workspacePath) {
+          const resolvedTarget = path.resolve(args.path)
+          if (!resolvedTarget.startsWith(path.resolve(workspacePath) + path.sep) && resolvedTarget !== path.resolve(workspacePath)) {
+            return { success: false, output: `Path "${args.path}" is outside the workspace. File operations are restricted to: ${workspacePath}`, riskLevel }
+          }
+        }
         if (!fs.existsSync(args.path)) {
           return { success: false, output: `File not found: ${args.path}`, riskLevel }
         }
@@ -713,12 +742,18 @@ export async function executeTool(
         if (!content.includes(args.old_string)) {
           return { success: false, output: `String not found in file: "${args.old_string.substring(0, 100)}"`, riskLevel }
         }
-        content = content.replace(args.old_string, args.new_string)
+        content = content.replace(args.old_string, () => args.new_string)
         fs.writeFileSync(args.path, content, 'utf-8')
         return { success: true, output: `File edited successfully: ${args.path}`, riskLevel }
       }
 
       case 'delete_file': {
+        if (workspacePath) {
+          const resolvedTarget = path.resolve(args.path)
+          if (!resolvedTarget.startsWith(path.resolve(workspacePath) + path.sep) && resolvedTarget !== path.resolve(workspacePath)) {
+            return { success: false, output: `Path "${args.path}" is outside the workspace. File operations are restricted to: ${workspacePath}`, riskLevel }
+          }
+        }
         if (!fs.existsSync(args.path)) {
           return { success: false, output: `Path not found: ${args.path}`, riskLevel }
         }
@@ -1001,6 +1036,13 @@ function fetchUrl(
     },
   }
 
+  let callbackFired = false
+  const safeCallback = (err: string | null, body: string | null) => {
+    if (callbackFired) return
+    callbackFired = true
+    callback(err, body)
+  }
+
   const req = httpModule.get(options, (res) => {
     // Handle redirects
     if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
@@ -1017,7 +1059,7 @@ function fetchUrl(
 
     if (res.statusCode && res.statusCode >= 400) {
       res.resume()
-      callback(`HTTP ${res.statusCode}`, null)
+      safeCallback(`HTTP ${res.statusCode}`, null)
       return
     }
 
@@ -1036,20 +1078,20 @@ function fetchUrl(
 
     res.on('end', () => {
       const body = Buffer.concat(chunks).toString('utf-8')
-      callback(null, body)
+      safeCallback(null, body)
     })
 
     res.on('error', (err) => {
-      callback(err.message, null)
+      safeCallback(err.message, null)
     })
   })
 
   req.on('error', (err) => {
-    callback(err.message, null)
+    safeCallback(err.message, null)
   })
 
   req.setTimeout(15000, () => {
     req.destroy()
-    callback('Request timed out after 15 seconds', null)
+    safeCallback('Request timed out after 15 seconds', null)
   })
 }

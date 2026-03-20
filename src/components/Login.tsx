@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
 import { useSettingsStore } from '../stores/settingsStore'
-import type { ApiConfig, BillingMode, CodingPlanProvider, LocalModelState } from '../types'
+import { useT } from '../i18n'
+import type { ApiConfig, BillingMode, CodingPlanProvider, LocalModelState, Language } from '../types'
 import { AVAILABLE_MODELS, CODING_PLAN_PROVIDERS, AVAILABLE_LOCAL_MODELS } from '../types'
-import { Zap, Key, Globe, ChevronDown, ArrowRight, Download, CheckCircle2, Loader2, X, Cpu, HardDrive } from 'lucide-react'
+import { Zap, Key, Globe, ChevronDown, ArrowRight, Download, CheckCircle2, Loader2, X, Cpu, HardDrive, Languages } from 'lucide-react'
 
 function formatFileSize(bytes: number): string {
   const gb = bytes / (1024 * 1024 * 1024)
@@ -16,7 +17,8 @@ function formatSpeed(bytesPerSec: number): string {
 }
 
 export default function Login() {
-  const { login, settings } = useSettingsStore()
+  const { login, settings, setLanguage } = useSettingsStore()
+  const t = useT()
   const saved = settings.apiConfig
   const [billingMode, setBillingMode] = useState<BillingMode>(saved.billingMode || 'coding-plan')
   const [provider, setProvider] = useState<CodingPlanProvider>(saved.codingPlanProvider || 'qianfan')
@@ -70,11 +72,11 @@ export default function Login() {
     try {
       const result = await window.electronAPI.downloadLocalModel({ modelId: selectedLocalModel.id })
       if (!result.success) {
-        setError(result.error || '下载失败')
+        setError(result.error || t.login.downloadFailed)
         setIsDownloading(false)
       }
     } catch (err: any) {
-      setError(err.message || '下载失败')
+      setError(err.message || t.login.downloadFailed)
       setIsDownloading(false)
     }
   }
@@ -88,11 +90,11 @@ export default function Login() {
   const handleLogin = () => {
     if (billingMode === 'local-model') {
       if (!selectedLocalModel) {
-        setError('请选择一个模型')
+        setError(t.login.selectModel)
         return
       }
       if (!localModelStatus || (localModelStatus.status !== 'downloaded' && localModelStatus.status !== 'ready')) {
-        setError('请先下载模型')
+        setError(t.login.downloadFirst)
         return
       }
       const config: ApiConfig = {
@@ -108,7 +110,7 @@ export default function Login() {
     }
 
     if (!apiKey.trim()) {
-      setError('Please enter your API Key')
+      setError(t.login.enterApiKey)
       return
     }
 
@@ -130,12 +132,25 @@ export default function Login() {
     }
   }
 
+  const toggleLanguage = () => {
+    setLanguage(settings.language === 'zh' ? 'en' : 'zh')
+  }
+
   const isModelReady = localModelStatus?.status === 'downloaded' || localModelStatus?.status === 'ready'
 
   return (
     <div className="h-screen flex items-center justify-center bg-canvas">
       {/* Title bar drag area */}
       <div className="fixed top-0 left-0 right-0 h-12 drag-region z-40" />
+
+      {/* Language switcher — bottom left */}
+      <button
+        onClick={toggleLanguage}
+        className="fixed bottom-6 left-6 z-50 flex items-center gap-2 px-4 py-2.5 rounded-lg border border-border-subtle bg-white shadow-sm text-sm text-text-secondary hover:bg-gray-50 hover:text-charcoal transition-all"
+      >
+        <Languages className="w-4 h-4" />
+        {settings.language === 'zh' ? 'English' : '中文'}
+      </button>
 
       <div className="w-full max-w-md px-8">
         {/* Logo & Title */}
@@ -147,9 +162,9 @@ export default function Login() {
             Onit
           </h1>
           <p className="text-sm text-text-secondary mt-3 leading-relaxed">
-            你的桌面搭档，随时待命。
+            {t.login.subtitle1}
             <br />
-            把琐碎的小任务交给 Onit，你专注重要的事。
+            {t.login.subtitle2}
           </p>
         </div>
 
@@ -157,7 +172,7 @@ export default function Login() {
         <div className="card p-6 space-y-5">
           {/* Billing Mode */}
           <div>
-            <label className="label">Mode</label>
+            <label className="label">{t.login.mode}</label>
             <div className="flex gap-2">
               <button
                 onClick={() => {
@@ -172,7 +187,7 @@ export default function Login() {
                     : 'bg-white border-border-subtle text-text-secondary hover:border-gray-300'
                 }`}
               >
-                Coding Plan
+                {t.login.codingPlan}
               </button>
               <button
                 onClick={() => {
@@ -186,7 +201,7 @@ export default function Login() {
                     : 'bg-white border-border-subtle text-text-secondary hover:border-gray-300'
                 }`}
               >
-                API Call
+                {t.login.apiCall}
               </button>
               <button
                 onClick={() => {
@@ -199,7 +214,7 @@ export default function Login() {
                     : 'bg-white border-border-subtle text-text-secondary hover:border-gray-300'
                 }`}
               >
-                本地模型
+                {t.login.localModel}
               </button>
             </div>
           </div>
@@ -207,32 +222,29 @@ export default function Login() {
           {/* ===== Local Model Tab Content ===== */}
           {billingMode === 'local-model' && (
             <div className="space-y-4 animate-fade-in">
-              {/* Description */}
               <div className="bg-accent/5 rounded-sm p-3.5">
                 <p className="text-xs text-text-secondary leading-relaxed">
-                  无需 API Key，模型在您的设备上本地运行。完全离线可用，数据不出设备。适合日常任务，效果接近小型云端模型。
+                  {t.login.localModelDesc}
                 </p>
               </div>
 
-              {/* Framework Info */}
               <div>
                 <label className="label">
                   <span className="flex items-center gap-1.5">
                     <Cpu className="w-3.5 h-3.5" />
-                    推理引擎
+                    {t.login.inferenceEngine}
                   </span>
                 </label>
                 <div className="input bg-gray-50 text-text-secondary text-xs cursor-default">
-                  llama.cpp (Metal GPU 加速)
+                  {t.login.llamaCpp}
                 </div>
               </div>
 
-              {/* Model Selection */}
               <div>
                 <label className="label">
                   <span className="flex items-center gap-1.5">
                     <HardDrive className="w-3.5 h-3.5" />
-                    模型
+                    {t.login.model}
                   </span>
                 </label>
                 <div className="relative">
@@ -252,39 +264,33 @@ export default function Login() {
                 </div>
                 {selectedLocalModel && (
                   <p className="text-[10px] text-text-tertiary mt-1.5">
-                    {formatFileSize(selectedLocalModel.fileSize)} · 支持工具调用 · 中英双语
+                    {formatFileSize(selectedLocalModel.fileSize)} · {t.login.toolCallSupport}
                   </p>
                 )}
               </div>
 
-              {/* Download Status & Actions */}
               {selectedLocalModel && (
                 <div>
-                  {/* Not downloaded */}
                   {(!localModelStatus || localModelStatus.status === 'not-downloaded') && !isDownloading && (
-                    <button
-                      onClick={handleDownloadModel}
-                      className="btn-secondary w-full"
-                    >
+                    <button onClick={handleDownloadModel} className="btn-secondary w-full">
                       <Download className="w-4 h-4" />
-                      下载模型 ({formatFileSize(selectedLocalModel.fileSize)})
+                      {t.login.downloadModel} ({formatFileSize(selectedLocalModel.fileSize)})
                     </button>
                   )}
 
-                  {/* Downloading */}
                   {isDownloading && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between text-xs text-text-secondary">
                         <span className="flex items-center gap-1.5">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          下载中 {downloadProgress}%
+                          {t.login.downloading} {downloadProgress}%
                         </span>
                         <button
                           onClick={handleCancelDownload}
                           className="flex items-center gap-1 text-text-tertiary hover:text-danger transition-colors"
                         >
                           <X className="w-3.5 h-3.5" />
-                          取消
+                          {t.login.cancel}
                         </button>
                       </div>
                       <div className="w-full bg-gray-200 rounded-full h-1.5">
@@ -300,31 +306,25 @@ export default function Login() {
                     </div>
                   )}
 
-                  {/* Downloaded / Ready */}
                   {isModelReady && !isDownloading && (
                     <div className="flex items-center gap-2 text-xs text-green-600 bg-success-light px-3 py-2 rounded-sm">
                       <CheckCircle2 className="w-4 h-4" />
-                      模型已就绪
+                      {t.login.modelReady}
                     </div>
                   )}
 
-                  {/* Loading */}
                   {localModelStatus?.status === 'loading' && (
                     <div className="flex items-center gap-2 text-xs text-accent px-3 py-2">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      正在加载模型...
+                      {t.login.loadingModel}
                     </div>
                   )}
 
-                  {/* Error */}
                   {localModelStatus?.status === 'error' && !isDownloading && (
                     <div className="space-y-2">
-                      <p className="text-xs text-danger">{localModelStatus.error || '发生错误'}</p>
-                      <button
-                        onClick={handleDownloadModel}
-                        className="btn-secondary w-full btn-sm"
-                      >
-                        重试下载
+                      <p className="text-xs text-danger">{localModelStatus.error || t.login.errorOccurred}</p>
+                      <button onClick={handleDownloadModel} className="btn-secondary w-full btn-sm">
+                        {t.login.retryDownload}
                       </button>
                     </div>
                   )}
@@ -336,10 +336,9 @@ export default function Login() {
           {/* ===== Cloud API Tab Content (Coding Plan / API Call) ===== */}
           {billingMode !== 'local-model' && (
             <>
-              {/* Provider Selection (only for Coding Plan mode) */}
               {billingMode === 'coding-plan' && (
                 <div>
-                  <label className="label">Provider</label>
+                  <label className="label">{t.login.provider}</label>
                   <div className="relative">
                     <select
                       value={provider}
@@ -360,12 +359,11 @@ export default function Login() {
                 </div>
               )}
 
-              {/* API Key */}
               <div>
                 <label className="label">
                   <span className="flex items-center gap-1.5">
                     <Key className="w-3.5 h-3.5" />
-                    API Key
+                    {t.login.apiKey}
                   </span>
                 </label>
                 <input
@@ -373,16 +371,15 @@ export default function Login() {
                   value={apiKey}
                   onChange={(e) => { setApiKey(e.target.value); setError('') }}
                   onKeyDown={handleKeyDown}
-                  placeholder="Enter your API key..."
+                  placeholder={t.login.apiKeyPlaceholder}
                   className="input"
                   autoFocus
                 />
               </div>
 
-              {/* Model Selection (only for API mode) */}
               {billingMode === 'api-call' && (
                 <div>
-                  <label className="label">Model</label>
+                  <label className="label">{t.login.model}</label>
                   <div className="relative">
                     <select
                       value={model}
@@ -398,21 +395,20 @@ export default function Login() {
                 </div>
               )}
 
-              {/* Advanced Settings */}
               <div>
                 <button
                   onClick={() => setShowAdvanced(!showAdvanced)}
                   className="text-xs text-text-secondary hover:text-charcoal transition-colors flex items-center gap-1"
                 >
                   <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAdvanced ? 'rotate-180' : ''}`} />
-                  Advanced Settings
+                  {t.login.advancedSettings}
                 </button>
                 {showAdvanced && (
                   <div className="mt-3 animate-fade-in">
                     <label className="label">
                       <span className="flex items-center gap-1.5">
                         <Globe className="w-3.5 h-3.5" />
-                        Custom Base URL (optional)
+                        {t.login.customBaseUrl}
                       </span>
                     </label>
                     <input
@@ -430,28 +426,22 @@ export default function Login() {
             </>
           )}
 
-          {/* Error */}
           {error && (
             <p className="text-xs text-danger animate-fade-in">{error}</p>
           )}
 
-          {/* Login Button */}
           <button
             onClick={handleLogin}
             disabled={billingMode === 'local-model' && !isModelReady}
             className={`w-full ${billingMode === 'local-model' && !isModelReady ? 'btn bg-gray-200 text-text-tertiary cursor-not-allowed' : 'btn-primary'}`}
           >
-            {billingMode === 'local-model' ? '开始使用' : 'Get Started'}
+            {t.login.getStarted}
             <ArrowRight className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Footer */}
         <p className="text-center text-xs text-text-tertiary mt-6">
-          {billingMode === 'local-model'
-            ? '模型在本地运行，数据完全保留在您的设备上'
-            : 'Your API key is stored locally on your device'
-          }
+          {billingMode === 'local-model' ? t.login.localModelFooter : t.login.apiKeyFooter}
         </p>
       </div>
     </div>

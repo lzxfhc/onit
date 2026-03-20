@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { v4 as uuidv4 } from 'uuid'
+import { useT } from '../../i18n'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import MessageList from './MessageList'
@@ -24,6 +25,7 @@ interface PendingStreamChunks {
 }
 
 export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }) {
+  const t = useT()
   const activeSession = useSessionStore(state =>
     state.sessions.find(session => session.id === state.activeSessionId) || null,
   )
@@ -102,14 +104,22 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
       sessionStore.completeRun(sessionId, runId, 'error')
       useSettingsStore.getState().removePermissionRequestsForSession(sessionId, runId)
 
-      const errorMsg: Message = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: `Error: ${error}`,
-        timestamp: Date.now(),
-        runId,
+      // If the last assistant message for this run is empty, update it in place
+      if (lastMessage?.role === 'assistant' && lastMessage.runId === runId && !lastMessage.content?.trim()) {
+        sessionStore.updateLastMessage(sessionId, {
+          content: `Error: ${error}`,
+          isStreaming: false,
+        })
+      } else {
+        const errorMsg: Message = {
+          id: uuidv4(),
+          role: 'assistant',
+          content: `Error: ${error}`,
+          timestamp: Date.now(),
+          runId,
+        }
+        sessionStore.addMessage(sessionId, errorMsg)
       }
-      sessionStore.addMessage(sessionId, errorMsg)
       sessionStore.saveSession(sessionId)
     })
 
@@ -246,14 +256,14 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
   if (!activeSession) {
     return (
       <div className="flex-1 flex items-center justify-center text-text-tertiary text-sm">
-        Select or create a session to get started
+        {t.chat.selectSession}
       </div>
     )
   }
 
   return (
     <div className="flex-1 flex min-h-0">
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 relative">
         <MessageList
           messages={activeSession.messages}
           isRunning={activeSession.status === 'running'}
@@ -284,3 +294,4 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
     </div>
   )
 }
+

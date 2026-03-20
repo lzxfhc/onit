@@ -1,5 +1,6 @@
 import { memo, useState, useRef, useEffect, useCallback } from 'react'
 import { shallow } from 'zustand/shallow'
+import { useT } from '../../i18n'
 import { pathBasename } from '../../utils/platform'
 import {
   Send, Square, FolderOpen, Paperclip, ChevronDown,
@@ -34,6 +35,7 @@ function getMentionMatch(value: string, caretPosition: number) {
 }
 
 function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
+  const t = useT()
   const [input, setInput] = useState('')
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [showPermissionPicker, setShowPermissionPicker] = useState(false)
@@ -229,9 +231,9 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
   }
 
   const permissionModes: { id: PermissionMode; label: string; desc: string; icon: React.ReactNode }[] = [
-    { id: 'plan', label: 'Plan Mode', desc: 'Confirm all operations', icon: <Shield className="w-3.5 h-3.5" /> },
-    { id: 'accept-edit', label: 'AcceptEdit', desc: 'Smart confirmations', icon: <ShieldCheck className="w-3.5 h-3.5" /> },
-    { id: 'full-access', label: 'Full Access', desc: 'Auto-execute all', icon: <ShieldOff className="w-3.5 h-3.5" /> },
+    { id: 'plan', label: t.chat.planMode, desc: t.chat.planModeDesc, icon: <Shield className="w-3.5 h-3.5" /> },
+    { id: 'accept-edit', label: t.chat.acceptEdit, desc: t.chat.acceptEditDesc, icon: <ShieldCheck className="w-3.5 h-3.5" /> },
+    { id: 'full-access', label: t.chat.fullAccess, desc: t.chat.fullAccessDesc, icon: <ShieldOff className="w-3.5 h-3.5" /> },
   ]
 
   const currentPerm = permissionModes.find(item => item.id === session.permissionMode) || permissionModes[1]
@@ -296,7 +298,7 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
                 isComposingRef.current = false
                 updateMentionState(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)
               }}
-              placeholder={isRunning ? 'Type to interrupt and send new instruction...' : 'Ask me anything... (type @ to invoke skills)'}
+              placeholder={isRunning ? t.chat.interruptPlaceholder : t.chat.inputPlaceholder}
               className="w-full resize-none bg-transparent px-4 py-3 text-sm text-charcoal placeholder:text-text-tertiary focus:outline-none"
               rows={1}
               style={{ minHeight: '44px', maxHeight: '200px' }}
@@ -313,7 +315,7 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
                 title={session.workspacePath || 'Select workspace folder'}
               >
                 <FolderOpen className="w-3 h-3" />
-                {session.workspacePath ? pathBasename(session.workspacePath) : 'Workspace'}
+                {session.workspacePath ? pathBasename(session.workspacePath) : t.chat.workspace}
               </button>
 
               <button
@@ -322,7 +324,7 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
                 title="Attach files"
               >
                 <Paperclip className="w-3 h-3" />
-                Attach
+                {t.chat.attach}
               </button>
 
               <div className="relative ml-auto" ref={modelPickerRef}>
@@ -431,6 +433,7 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
 }
 
 function ActiveTasksBar({ currentSessionId }: { currentSessionId: string }) {
+  const t = useT()
   const { sessions, setActiveSession, markSessionViewed } = useSessionStore((state) => ({
     sessions: state.sessions,
     setActiveSession: state.setActiveSession,
@@ -445,7 +448,7 @@ function ActiveTasksBar({ currentSessionId }: { currentSessionId: string }) {
 
   return (
     <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border-light overflow-x-auto">
-      <span className="text-[10px] text-text-tertiary font-medium shrink-0">Active:</span>
+      <span className="text-[10px] text-text-tertiary font-medium shrink-0">{t.chat.active}</span>
       {activeTasks.map(session => (
         <button
           key={session.id}
