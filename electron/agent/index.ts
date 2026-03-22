@@ -327,6 +327,14 @@ export class AgentManager {
     return true
   }
 
+  getRunningSessionIds(): string[] {
+    const ids: string[] = []
+    for (const [id, session] of this.sessions) {
+      if (session.isRunning) ids.push(id)
+    }
+    return ids
+  }
+
   stopAll(): void {
     for (const [sessionId] of this.sessions) {
       this.stopAgent(sessionId)

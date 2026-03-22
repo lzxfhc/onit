@@ -186,6 +186,8 @@ export class SkillManager {
   }
 
   importSkill(filePath: string): SkillData | null {
+    if (!fs.existsSync(filePath)) return null
+
     const ext = path.extname(filePath).toLowerCase()
 
     if (ext === '.md') {
@@ -406,7 +408,12 @@ export class SkillManager {
   // ---------------------------------------------------------------------------
 
   private importMarkdownSkill(filePath: string): SkillData | null {
-    const content = fs.readFileSync(filePath, 'utf-8')
+    let content: string
+    try {
+      content = fs.readFileSync(filePath, 'utf-8')
+    } catch {
+      return null
+    }
     const { metadata } = this.parseFrontmatter(content)
 
     if (!metadata.name || !metadata.description) {
