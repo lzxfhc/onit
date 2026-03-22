@@ -245,6 +245,29 @@ export const zh = {
     error: '错误',
     loading: '加载中...',
   },
+
+  // Copilot
+  copilot: {
+    tabOnit: 'Onit',
+    tabCopilot: 'Copilot',
+    greeting: '你好！我是你的智能助理 Jarvis。告诉我你需要什么，我会帮你安排。',
+    inputPlaceholder: '跟 Jarvis 说点什么...',
+    voiceListening: '正在聆听...',
+    voiceProcessing: '识别中...',
+    voiceUnavailable: '语音输入暂不可用',
+    taskPanel: '任务',
+    noTasks: '暂无任务。跟 Jarvis 说点什么开始吧。',
+    taskQueued: '排队中',
+    taskRunning: '执行中',
+    taskCompleted: '已完成',
+    taskFailed: '失败',
+    taskCancelled: '已取消',
+    taskDetail: '任务详情',
+    viewDetail: '查看详情',
+    closeDetail: '关闭详情',
+    dispatching: '正在派发任务...',
+    noTaskSelected: '选择左侧任务查看执行详情',
+  },
 }
 
 export type Translations = typeof zh

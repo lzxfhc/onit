@@ -247,4 +247,27 @@ export const en: Translations = {
     error: 'Error',
     loading: 'Loading...',
   },
+
+  // Copilot
+  copilot: {
+    tabOnit: 'Onit',
+    tabCopilot: 'Copilot',
+    greeting: 'Hi! I\'m Jarvis, your intelligent assistant. Tell me what you need and I\'ll take care of it.',
+    inputPlaceholder: 'Say something to Jarvis...',
+    voiceListening: 'Listening...',
+    voiceProcessing: 'Processing...',
+    voiceUnavailable: 'Voice input unavailable',
+    taskPanel: 'Tasks',
+    noTasks: 'No tasks yet. Start by talking to Jarvis.',
+    taskQueued: 'Queued',
+    taskRunning: 'Running',
+    taskCompleted: 'Completed',
+    taskFailed: 'Failed',
+    taskCancelled: 'Cancelled',
+    taskDetail: 'Task Detail',
+    viewDetail: 'View Detail',
+    closeDetail: 'Close Detail',
+    dispatching: 'Dispatching task...',
+    noTaskSelected: 'Select a task to view execution details',
+  },
 }

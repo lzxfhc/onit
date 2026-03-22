@@ -1,14 +1,21 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { shallow } from 'zustand/shallow'
 import { useSettingsStore } from './stores/settingsStore'
 import { useSessionStore } from './stores/sessionStore'
+import { useCopilotStore } from './stores/copilotStore'
 import Login from './components/Login'
 import Sidebar from './components/Sidebar'
 import TopBar from './components/TopBar'
 import ChatView from './components/Chat'
+import CopilotView from './components/CopilotView'
 import PermissionDialog from './components/Dialogs/PermissionDialog'
-import type { Message, ScheduledSessionCreatedEvent, Session } from './types'
+import type { Message, ScheduledSessionCreatedEvent, Session, StreamChunk } from './types'
+
+interface PendingCopilotChunks {
+  runId: string
+  chunks: StreamChunk[]
+}
 
 export default function App() {
   const { isLoggedIn, loadSettings, loadScheduledTasks, loadSkills, permissionRequests } = useSettingsStore((state) => ({
@@ -21,8 +28,40 @@ export default function App() {
   const { loadSessions } = useSessionStore((state) => ({
     loadSessions: state.loadSessions,
   }), shallow)
+  const appMode = useCopilotStore(s => s.appMode)
 
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
+
+  // --- Copilot stream buffering (mirrors Chat/index.tsx pattern) ---
+  const pendingCopilotChunksRef = useRef<Map<string, PendingCopilotChunks>>(new Map())
+  const pendingCopilotAnimFrameRef = useRef<number | null>(null)
+
+  const flushCopilotChunks = useCallback((targetRunId?: string) => {
+    const pending = pendingCopilotChunksRef.current
+    const copilotStore = useCopilotStore.getState()
+    const targets = targetRunId
+      ? (() => {
+          const entry = pending.get(targetRunId)
+          return entry ? [[targetRunId, entry] as const] : []
+        })()
+      : Array.from(pending.entries())
+
+    for (const [key, payload] of targets) {
+      pending.delete(key)
+      if (payload.chunks.length > 0) {
+        copilotStore.applyStreamChunks(payload.runId, payload.chunks)
+      }
+    }
+  }, [])
+
+  const scheduleCopilotFlush = useCallback(() => {
+    if (pendingCopilotAnimFrameRef.current !== null) return
+
+    pendingCopilotAnimFrameRef.current = window.requestAnimationFrame(() => {
+      pendingCopilotAnimFrameRef.current = null
+      flushCopilotChunks()
+    })
+  }, [flushCopilotChunks])
 
   useEffect(() => {
     loadSettings()
@@ -35,7 +74,8 @@ export default function App() {
     loadScheduledTasks()
     loadSkills()
 
-    const unsubscribe = window.electronAPI.onSchedulerSessionCreated((data: ScheduledSessionCreatedEvent) => {
+    // --- Scheduler session created listener (existing) ---
+    const unsubScheduler = window.electronAPI.onSchedulerSessionCreated((data: ScheduledSessionCreatedEvent) => {
       const now = Date.now()
       const userMessage: Message = {
         id: uuidv4(),
@@ -81,14 +121,74 @@ export default function App() {
       sessionStore.saveSession(session.id)
     })
 
+    // --- Copilot IPC listeners ---
+    const unsubCopilotStream = window.electronAPI.onCopilotStream?.((data: any) => {
+      const { runId, chunk } = data
+      const existing = pendingCopilotChunksRef.current.get(runId)
+
+      if (existing) {
+        existing.chunks.push(chunk)
+      } else {
+        pendingCopilotChunksRef.current.set(runId, {
+          runId,
+          chunks: [chunk],
+        })
+      }
+
+      scheduleCopilotFlush()
+    })
+
+    const unsubCopilotComplete = window.electronAPI.onCopilotComplete?.((data: any) => {
+      const { runId, status } = data
+      flushCopilotChunks(runId)
+      useCopilotStore.getState().completeRun(runId, status || 'completed')
+    })
+
+    const unsubCopilotError = window.electronAPI.onCopilotError?.((data: any) => {
+      const { runId, error } = data
+      flushCopilotChunks(runId)
+
+      const copilotStore = useCopilotStore.getState()
+      copilotStore.completeRun(runId, 'error')
+      copilotStore.addMessage({
+        id: uuidv4(),
+        role: 'assistant',
+        content: `Error: ${error}`,
+        timestamp: Date.now(),
+        runId,
+      })
+    })
+
+    const unsubCopilotTaskEvent = window.electronAPI.onCopilotTaskEvent?.((data: any) => {
+      const copilotStore = useCopilotStore.getState()
+      if (data.type === 'add') {
+        copilotStore.addTask(data.task)
+      } else if (data.type === 'update') {
+        copilotStore.updateTask(data.taskId, data.updates)
+      }
+    })
+
     return () => {
-      unsubscribe()
+      // Cancel pending animation frame
+      if (pendingCopilotAnimFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingCopilotAnimFrameRef.current)
+        pendingCopilotAnimFrameRef.current = null
+      }
+      flushCopilotChunks()
+
+      unsubScheduler()
+      unsubCopilotStream?.()
+      unsubCopilotComplete?.()
+      unsubCopilotError?.()
+      unsubCopilotTaskEvent?.()
     }
-  }, [isLoggedIn, loadSessions, loadScheduledTasks, loadSkills])
+  }, [isLoggedIn, loadSessions, loadScheduledTasks, loadSkills, flushCopilotChunks, scheduleCopilotFlush])
 
   if (!isLoggedIn) {
     return <Login />
   }
+
+  const isCopilot = appMode === 'copilot'
 
   return (
     <div className="flex h-screen bg-canvas overflow-hidden">
@@ -98,12 +198,16 @@ export default function App() {
         onToggleRightPanel={() => setRightPanelOpen(prev => !prev)}
       />
 
-      {/* Sidebar */}
-      <Sidebar />
+      {/* Onit mode: Sidebar + ChatView */}
+      {!isCopilot && <Sidebar />}
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 pt-12">
-        <ChatView rightPanelOpen={rightPanelOpen} />
+        {isCopilot ? (
+          <CopilotView />
+        ) : (
+          <ChatView rightPanelOpen={rightPanelOpen} />
+        )}
       </main>
 
       {/* Permission dialogs */}

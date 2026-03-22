@@ -7,6 +7,7 @@ import { SchedulerManager } from './agent/scheduler'
 import { SkillManager } from './agent/skills'
 import { SkillEvolutionManager } from './agent/skill-evolution'
 import { LocalModelManager } from './local-model/index'
+import { CopilotManager } from './copilot/index'
 
 let mainWindow: BrowserWindow | null = null
 let agentManager: AgentManager
@@ -14,6 +15,7 @@ let schedulerManager: SchedulerManager
 let skillManager: SkillManager
 let skillEvolutionManager: SkillEvolutionManager
 let localModelManager: LocalModelManager
+let copilotManager: CopilotManager
 
 const DATA_DIR = path.join(app.getPath('userData'), 'onit-data')
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions')
@@ -22,6 +24,8 @@ const ARTIFACTS_DIR = path.join(DATA_DIR, 'artifacts')
 const MODELS_DIR = path.join(DATA_DIR, 'models')
 const USER_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'user')
 const IMPORTED_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'imported')
+const COPILOT_DIR = path.join(DATA_DIR, 'copilot')
+const COPILOT_TASKS_DIR = path.join(DATA_DIR, 'copilot', 'tasks')
 
 function getPrebuiltSkillsDir(): string {
   // In packaged app: resources/skills/
@@ -33,7 +37,7 @@ function getPrebuiltSkillsDir(): string {
 }
 
 function ensureDirectories() {
-  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, ARTIFACTS_DIR, MODELS_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR]) {
+  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, ARTIFACTS_DIR, MODELS_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR, COPILOT_DIR, COPILOT_TASKS_DIR]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
     }
@@ -392,6 +396,28 @@ function setupIPC() {
 
   // Get app data path
   ipcMain.handle('app:get-data-path', () => DATA_DIR)
+
+  // Copilot: start main agent
+  ipcMain.handle('copilot:start', async (_event, data: { message: string; runId: string; apiConfig: any }) => {
+    return copilotManager.startMainAgent(data.message, data.runId, data.apiConfig)
+  })
+
+  // Copilot: stop main agent
+  ipcMain.handle('copilot:stop', async () => {
+    copilotManager.stopMainAgent()
+    return true
+  })
+
+  // Copilot: load persisted data
+  ipcMain.handle('copilot:load', async () => {
+    return copilotManager.loadData()
+  })
+
+  // Copilot: save data
+  ipcMain.handle('copilot:save', async (_event, data: { messages: any[]; tasks: any[] }) => {
+    await copilotManager.saveData(data.messages, data.tasks)
+    return true
+  })
 }
 
 app.whenReady().then(() => {
@@ -400,9 +426,16 @@ app.whenReady().then(() => {
   skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
   skillEvolutionManager = new SkillEvolutionManager(skillManager)
 
-  agentManager = new AgentManager((channel, data) => {
+  // Wrap sendToRenderer to detect copilot worker completions
+  const workerSend = (channel: string, data: any) => {
     mainWindow?.webContents.send(channel, data)
-  }, {
+    // Detect when a copilot worker session completes and notify CopilotManager
+    if (channel === 'agent:complete' && data.sessionId?.startsWith('copilot-task-')) {
+      copilotManager?.onWorkerComplete(data.sessionId, data.status || 'completed')
+    }
+  }
+
+  agentManager = new AgentManager(workerSend, {
     artifactsDir: ARTIFACTS_DIR,
     localModelManager,
     onRunComplete: (params) => {
@@ -428,6 +461,15 @@ app.whenReady().then(() => {
   schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager, (channel, data) => {
     mainWindow?.webContents.send(channel, data)
   })
+
+  // Create CopilotManager with the worker AgentManager
+  copilotManager = new CopilotManager(
+    (channel, data) => {
+      mainWindow?.webContents.send(channel, data)
+    },
+    agentManager,
+    { dataDir: DATA_DIR, localModelManager },
+  )
 
   createWindow()
   setupIPC()

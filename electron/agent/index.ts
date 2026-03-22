@@ -141,18 +141,29 @@ export class AgentManager {
     apiConfig: AgentSession['apiConfig']
   }) => void) | null = null
 
+  // Optional overrides for Copilot orchestrator mode
+  private toolsOverride: any[] | null
+  private toolExecutorOverride: ((name: string, args: string, workspace: string | null, opts: any) => Promise<any>) | null
+  private systemPromptPrepend: string | null
+
   constructor(
     sendToRenderer: (channel: string, data: any) => void,
     options?: {
       artifactsDir?: string
       localModelManager?: LocalModelManager
       onRunComplete?: AgentManager['onRunComplete']
+      toolsOverride?: any[]
+      toolExecutorOverride?: (name: string, args: string, workspace: string | null, opts: any) => Promise<any>
+      systemPromptPrepend?: string
     }
   ) {
     this.sendToRenderer = sendToRenderer
     this.artifactsDir = options?.artifactsDir || null
     this.localModelManager = options?.localModelManager || null
     this.onRunComplete = options?.onRunComplete || null
+    this.toolsOverride = options?.toolsOverride || null
+    this.toolExecutorOverride = options?.toolExecutorOverride || null
+    this.systemPromptPrepend = options?.systemPromptPrepend || null
   }
 
   async startAgent(sessionId: string, userMessage: string, runId: string, sessionData: any): Promise<boolean> {
@@ -194,11 +205,14 @@ export class AgentManager {
     const { contents: mentionedSkillContents, names: mentionedSkillNames } = this.extractMentionedSkills(userMessage, enabledSkills)
 
     // Build the system prompt
-    const systemPrompt = this.buildSystemPrompt(
+    const baseSystemPrompt = this.buildSystemPrompt(
       sessionData.workspacePath,
       sessionData.permissionMode,
       enabledSkills,
     )
+    const systemPrompt = this.systemPromptPrepend
+      ? this.systemPromptPrepend + '\n\n' + baseSystemPrompt
+      : baseSystemPrompt
 
     // Restore conversation history from session
     const messages: AgentMessage[] = [
@@ -1498,12 +1512,14 @@ When providing final results, format them clearly with markdown. For code, use a
     iteration: number,
     onChunk: (chunk: any) => void
   ): Promise<{ content: string; toolCalls: any[] }> {
+    const tools = this.toolsOverride || AGENT_TOOLS
+
     if (agentSession.apiConfig.billingMode === 'local-model') {
       return this.requestCompletionLocal(
         agentSession,
         {
           messages: agentSession.messages,
-          tools: AGENT_TOOLS,
+          tools,
           temperature: 0.7,
           max_tokens: this.getEffectiveMaxOutputTokens(agentSession),
         },
@@ -1515,7 +1531,7 @@ When providing final results, format them clearly with markdown. For code, use a
       agentSession,
       {
         messages: agentSession.messages,
-        tools: AGENT_TOOLS,
+        tools,
         stream: true,
         temperature: 0.7,
         max_tokens: this.getEffectiveMaxOutputTokens(agentSession),
@@ -1968,8 +1984,9 @@ When providing final results, format them clearly with markdown. For code, use a
             }
           }
 
-          // Execute the tool
-          const result = await executeTool(toolName, toolArgs, agentSession.workspacePath, {
+          // Execute the tool (use override if provided, e.g. for Copilot orchestrator)
+          const executeToolFn = this.toolExecutorOverride || executeTool
+          const result = await executeToolFn(toolName, toolArgs, agentSession.workspacePath, {
             signal: agentSession.abortController?.signal,
           })
 

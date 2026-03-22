@@ -159,6 +159,24 @@ export interface PermissionRequest {
 
 export type Language = 'zh' | 'en'
 
+// Copilot mode types
+export type AppMode = 'onit' | 'copilot'
+
+export type CopilotTaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+export interface CopilotTask {
+  id: string
+  name: string
+  description: string
+  status: CopilotTaskStatus
+  sessionId: string
+  createdAt: number
+  completedAt?: number
+  summary?: string
+  workspace?: string
+  skills?: string[]
+}
+
 export interface AppSettings {
   apiConfig: ApiConfig
   defaultPermissionMode: PermissionMode
