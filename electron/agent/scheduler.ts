@@ -24,13 +24,17 @@ interface ScheduledTaskData {
   permissionMode?: string        // 'plan' | 'accept-edit' | 'full-access'
 }
 
+type SchedulerTriggerSource = 'manual' | 'scheduled'
+
 export class SchedulerManager {
   private dataDir: string
   private agentManager: AgentManager
   private jobs: Map<string, schedule.Job> = new Map()
+  private rendererEmitter?: (channel: string, data: any) => void
   private apiConfig: {
     billingMode: string
     apiKey: string
+    model?: string
     customBaseUrl?: string
     codingPlanProvider?: string
     localModelId?: string
@@ -38,15 +42,21 @@ export class SchedulerManager {
     maxOutputTokens?: number
   } | null = null
 
-  constructor(dataDir: string, agentManager: AgentManager) {
+  constructor(
+    dataDir: string,
+    agentManager: AgentManager,
+    rendererEmitter?: (channel: string, data: any) => void,
+  ) {
     this.dataDir = dataDir
     this.agentManager = agentManager
+    this.rendererEmitter = rendererEmitter
     this.loadAndScheduleAll()
   }
 
   setApiConfig(config: {
     billingMode: string
     apiKey: string
+    model?: string
     customBaseUrl?: string
     codingPlanProvider?: string
     localModelId?: string
@@ -101,6 +111,7 @@ export class SchedulerManager {
       scheduleDayOfWeek: taskData.scheduleDayOfWeek,
       scheduleDayOfMonth: taskData.scheduleDayOfMonth,
       scheduleDateTime: taskData.scheduleDateTime,
+      permissionMode: taskData.permissionMode,
     }
 
     this.saveTask(task)
@@ -145,14 +156,21 @@ export class SchedulerManager {
     return task
   }
 
-  async runTaskNow(id: string, sendToRenderer?: (channel: string, data: any) => void): Promise<boolean> {
+  async runTaskNow(
+    id: string,
+    options?: {
+      sendToRenderer?: (channel: string, data: any) => void
+      triggerSource?: SchedulerTriggerSource
+    },
+  ): Promise<boolean> {
     const task = this.loadTask(id)
     if (!task) return false
 
+    const sendToRenderer = options?.sendToRenderer || this.rendererEmitter
+    const triggerSource = options?.triggerSource || 'manual'
+
     if (!this.apiConfig) return false
 
-    // Local model mode does not require an API key, but it does require a
-    // selected local model id.
     if (this.apiConfig.billingMode === 'local-model') {
       if (!this.apiConfig.localModelId) return false
     } else {
@@ -170,10 +188,14 @@ export class SchedulerManager {
       sendToRenderer('scheduler:session-created', {
         taskId: task.id,
         taskName: task.name,
+        taskPrompt: task.taskPrompt,
         sessionId,
         runId,
         workspacePath: task.workspacePath,
         model: task.model,
+        permissionMode: task.permissionMode || 'accept-edit',
+        triggerSource,
+        openInForeground: triggerSource === 'manual',
       })
 
       // Wait for the renderer to process the session-created event and register
@@ -187,9 +209,9 @@ export class SchedulerManager {
       await this.agentManager.startAgent(sessionId, task.taskPrompt, runId, {
         permissionMode: task.permissionMode || 'accept-edit',
         workspacePath: task.workspacePath,
-        model: task.model,
+        model: task.model || this.apiConfig.model,
         messages: [],
-        apiConfig: this.apiConfig,
+        apiConfig: { ...this.apiConfig, model: task.model || this.apiConfig.model },
       })
       return true
     } catch (err: any) {
@@ -251,7 +273,7 @@ export class SchedulerManager {
     if (!cron) return
 
     const job = schedule.scheduleJob(cron, () => {
-      this.runTaskNow(task.id)
+      void this.runTaskNow(task.id, { triggerSource: 'scheduled' })
     })
 
     if (job) {
@@ -276,7 +298,7 @@ export class SchedulerManager {
     const job = schedule.scheduleJob(targetDate, () => {
       const freshTask = this.loadTask(task.id)
       if (!freshTask) return
-      this.runTaskNow(freshTask.id)
+      void this.runTaskNow(freshTask.id, { triggerSource: 'scheduled' })
       // Auto-disable after one-time execution
       freshTask.enabled = false
       freshTask.lastRun = Date.now()

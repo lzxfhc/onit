@@ -19,36 +19,95 @@ interface Props {
   sessionId: string
 }
 
-function getMentionMatch(value: string, caretPosition: number) {
-  const beforeCursor = value.slice(0, caretPosition)
-  const match = beforeCursor.match(/(^|\s)@([\w-]*)$/)
-  if (!match) return null
+// ---------------------------------------------------------------------------
+// ContentEditable helpers
+// ---------------------------------------------------------------------------
 
-  const start = beforeCursor.lastIndexOf('@')
-  if (start < 0) return null
-
-  return {
-    query: match[2] || '',
-    start,
-    end: caretPosition,
+/** Extract plain text from the editor, converting mention spans to @name */
+function extractText(el: HTMLElement): string {
+  let text = ''
+  for (const node of el.childNodes) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent || ''
+    } else if (node instanceof HTMLElement) {
+      if (node.dataset.mention) {
+        text += `@${node.dataset.mention}`
+      } else if (node.tagName === 'BR') {
+        text += '\n'
+      } else {
+        text += extractText(node)
+      }
+    }
   }
+  return text
 }
+
+/** Get caret offset (character position) inside the editor */
+function getCaretOffset(el: HTMLElement): number {
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return 0
+  const range = sel.getRangeAt(0).cloneRange()
+  range.selectNodeContents(el)
+  range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset)
+  return range.toString().length
+}
+
+/** Get text before caret (for @ detection) */
+function getTextBeforeCaret(el: HTMLElement): string {
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return ''
+  const range = sel.getRangeAt(0).cloneRange()
+  range.selectNodeContents(el)
+  range.setEnd(sel.getRangeAt(0).startContainer, sel.getRangeAt(0).startOffset)
+
+  // Walk the fragment and extract text, treating mention spans as @name
+  const fragment = range.cloneContents()
+  const temp = document.createElement('div')
+  temp.appendChild(fragment)
+  return extractText(temp)
+}
+
+/** Create a mention span element */
+function createMentionSpan(skillName: string, displayName: string): HTMLSpanElement {
+  const span = document.createElement('span')
+  span.contentEditable = 'false'
+  span.dataset.mention = skillName
+  span.className = 'inline-block rounded bg-accent/10 text-accent text-sm font-medium px-1 mx-0.5 select-none align-baseline'
+  span.style.cursor = 'default'
+  span.textContent = `@${displayName}`
+  return span
+}
+
+/** Place caret after a given node */
+function placeCaretAfter(node: Node) {
+  const sel = window.getSelection()
+  if (!sel) return
+  const range = document.createRange()
+  range.setStartAfter(node)
+  range.collapse(true)
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
+
+// ---------------------------------------------------------------------------
+// InputBox Component
+// ---------------------------------------------------------------------------
 
 function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
   const t = useT()
   const [input, setInput] = useState('')
-  const [mentions, setMentions] = useState<{ name: string; displayName: string }[]>([])
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [showPermissionPicker, setShowPermissionPicker] = useState(false)
   const [showSkillMention, setShowSkillMention] = useState(false)
   const [mentionFilter, setMentionFilter] = useState('')
   const [mentionIndex, setMentionIndex] = useState(0)
   const isComposingRef = useRef(false)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const editorRef = useRef<HTMLDivElement>(null)
   const modelPickerRef = useRef<HTMLDivElement>(null)
   const permPickerRef = useRef<HTMLDivElement>(null)
   const mentionRef = useRef<HTMLDivElement>(null)
-  const mentionRangeRef = useRef<{ start: number; end: number } | null>(null)
+  /** Stores the Range to replace when a mention is selected from the dropdown */
+  const mentionRangeRef = useRef<Range | null>(null)
 
   const session = useSessionStore((state) => {
     const current = state.sessions.find(item => item.id === sessionId)
@@ -74,22 +133,12 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
   const enabledSkills = skills.filter(skill => skill.enabled)
 
   const filteredMentionSkills = enabledSkills.filter(skill =>
-    // Exclude skills already mentioned
-    !mentions.some(m => m.name === skill.name) &&
-    // Apply text filter
-    (!mentionFilter ||
+    !mentionFilter ||
     skill.name.toLowerCase().includes(mentionFilter.toLowerCase()) ||
-    skill.displayName.toLowerCase().includes(mentionFilter.toLowerCase())),
+    skill.displayName.toLowerCase().includes(mentionFilter.toLowerCase()),
   )
 
-  useEffect(() => {
-    const textarea = textareaRef.current
-    if (textarea) {
-      textarea.style.height = 'auto'
-      textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px'
-    }
-  }, [input])
-
+  // Close dropdowns on outside click
   useEffect(() => {
     const handler = (event: MouseEvent) => {
       if (modelPickerRef.current && !modelPickerRef.current.contains(event.target as Node)) {
@@ -107,11 +156,13 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // Handle auto-input event (e.g., from "Create with Onit")
   useEffect(() => {
     const handler = (event: CustomEvent) => {
-      if (event.detail?.text) {
+      if (event.detail?.text && editorRef.current) {
+        editorRef.current.textContent = event.detail.text
         setInput(event.detail.text)
-        setTimeout(() => textareaRef.current?.focus(), 100)
+        setTimeout(() => editorRef.current?.focus(), 100)
       }
     }
 
@@ -119,97 +170,134 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
     return () => window.removeEventListener('onit:auto-input', handler as EventListener)
   }, [])
 
-  const updateMentionState = useCallback((value: string, caretPosition: number) => {
-    const match = getMentionMatch(value, caretPosition)
+  // Detect @ mention pattern from text before caret
+  const updateMentionState = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+
+    const beforeCaret = getTextBeforeCaret(editor)
+    const match = beforeCaret.match(/(^|\s)@([\w-]*)$/)
+
     if (!match) {
       mentionRangeRef.current = null
       setShowSkillMention(false)
       return
     }
 
-    mentionRangeRef.current = { start: match.start, end: match.end }
-    setMentionFilter(match.query)
+    // Save the range that covers the @query so we can replace it later
+    const sel = window.getSelection()
+    if (sel && sel.rangeCount > 0) {
+      const range = sel.getRangeAt(0).cloneRange()
+      // Move start back to cover the @query
+      const queryLen = match[2].length + 1 // +1 for @
+      for (let i = 0; i < queryLen; i++) {
+        range.setStart(range.startContainer, Math.max(0, range.startOffset - 1))
+        // If we hit the start of a text node, walk to previous
+        if (range.startOffset === 0 && range.startContainer.previousSibling) {
+          const prev = range.startContainer.previousSibling
+          if (prev.nodeType === Node.TEXT_NODE) {
+            range.setStart(prev, (prev.textContent?.length || 0) - (queryLen - i - 1))
+            break
+          }
+        }
+      }
+      mentionRangeRef.current = range
+    }
+
+    setMentionFilter(match[2] || '')
     setShowSkillMention(true)
     setMentionIndex(0)
   }, [])
 
-  const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = event.target.value
-    const caretPosition = event.target.selectionStart ?? value.length
+  // Handle contentEditable input
+  const handleInput = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) return
+    const text = extractText(editor)
+    setInput(text)
+    updateMentionState()
+  }, [updateMentionState])
 
-    setInput(value)
-    updateMentionState(value, caretPosition)
-  }
-
-  const removeMention = useCallback((index: number) => {
-    setMentions(prev => prev.filter((_, i) => i !== index))
-    textareaRef.current?.focus()
-  }, [])
-
+  // Insert mention span at the @query position
   const insertMention = useCallback((skill: Skill) => {
-    const mentionRange = mentionRangeRef.current
-    if (!mentionRange) return
+    const editor = editorRef.current
+    if (!editor) return
 
-    // Prevent duplicate mentions
-    setMentions(prev => {
-      if (prev.some(m => m.name === skill.name)) return prev
-      return [...prev, { name: skill.name, displayName: skill.displayName }]
-    })
+    const sel = window.getSelection()
+    if (!sel || sel.rangeCount === 0) return
 
-    // Remove the @query text from the textarea
-    const before = input.slice(0, mentionRange.start)
-    const after = input.slice(mentionRange.end)
-    // Trim trailing space from 'before' if the @ was preceded by a space
-    const cleanBefore = before.endsWith(' ') ? before.slice(0, -1) : before
-    // Trim leading space from 'after' if present
-    const cleanAfter = after.startsWith(' ') ? after.slice(1) : after
-    // Combine, but add space between parts if both exist
-    const nextValue = cleanBefore && cleanAfter
-      ? `${cleanBefore} ${cleanAfter}`
-      : `${cleanBefore}${cleanAfter}`
+    // Find the @query text to replace
+    const beforeCaret = getTextBeforeCaret(editor)
+    const match = beforeCaret.match(/(^|\s)@([\w-]*)$/)
+    if (!match) return
 
-    setInput(nextValue)
+    const range = sel.getRangeAt(0)
+    const node = range.startContainer
+    const offset = range.startOffset
+
+    if (node.nodeType !== Node.TEXT_NODE || !node.textContent) return
+
+    // Find @ position in the text node
+    const textBefore = node.textContent.slice(0, offset)
+    const atIdx = textBefore.lastIndexOf('@')
+    if (atIdx < 0) return
+
+    // Split the text node: [before @] [@ query] [after cursor]
+    const textNode = node as Text
+    const afterText = textNode.textContent.slice(offset)
+    const beforeText = textNode.textContent.slice(0, atIdx)
+
+    // Build: beforeText + mentionSpan + space + afterText
+    const mentionSpan = createMentionSpan(skill.name, skill.displayName)
+    const spaceNode = document.createTextNode('\u00A0') // non-breaking space after mention
+
+    // Replace the text node content
+    textNode.textContent = beforeText
+    // Insert mention span and space after the text node
+    const parent = textNode.parentNode!
+    const nextSibling = textNode.nextSibling
+    parent.insertBefore(mentionSpan, nextSibling)
+    parent.insertBefore(spaceNode, mentionSpan.nextSibling)
+
+    // If there was text after the cursor, add it back
+    if (afterText) {
+      const afterNode = document.createTextNode(afterText)
+      parent.insertBefore(afterNode, spaceNode.nextSibling)
+    }
+
+    // Place cursor after the space (after the mention)
+    placeCaretAfter(spaceNode)
+
+    // Update state
+    setInput(extractText(editor))
     setShowSkillMention(false)
     mentionRangeRef.current = null
-
-    requestAnimationFrame(() => {
-      const textarea = textareaRef.current
-      if (!textarea) return
-      textarea.focus()
-      const cursor = nextValue.length
-      textarea.setSelectionRange(cursor, cursor)
-    })
-  }, [input])
+  }, [])
 
   const handleSend = async () => {
     const trimmedInput = input.trim()
-    const hasMentions = mentions.length > 0
 
     if (isRunning) {
       await onStop()
-      if (!trimmedInput && !hasMentions) return
-    } else if (!trimmedInput && !hasMentions) {
+      if (!trimmedInput) return
+    } else if (!trimmedInput) {
       return
     }
 
-    // Prepend @mentions to the message text so the agent can parse them
-    const mentionPrefix = hasMentions
-      ? mentions.map(m => `@${m.name}`).join(' ')
-      : ''
-    const fullMessage = mentionPrefix && trimmedInput
-      ? `${mentionPrefix} ${trimmedInput}`
-      : mentionPrefix || trimmedInput
-
+    // Clear editor
+    if (editorRef.current) {
+      editorRef.current.innerHTML = ''
+    }
     setInput('')
-    setMentions([])
     setShowSkillMention(false)
     mentionRangeRef.current = null
-    await onSend(fullMessage)
+    await onSend(trimmedInput)
   }
 
   const handleKeyDown = (event: React.KeyboardEvent) => {
     if (isComposingRef.current) return
 
+    // Mention dropdown navigation
     if (showSkillMention && filteredMentionSkills.length > 0) {
       if (event.key === 'ArrowDown') {
         event.preventDefault()
@@ -235,18 +323,19 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
       }
     }
 
-    // Remove last mention chip when backspace is pressed on empty input
-    if (event.key === 'Backspace' && !input && mentions.length > 0) {
-      event.preventDefault()
-      setMentions(prev => prev.slice(0, -1))
-      return
-    }
-
+    // Enter to send
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
       void handleSend()
     }
   }
+
+  // Handle paste — strip formatting, keep plain text
+  const handlePaste = useCallback((e: React.ClipboardEvent) => {
+    e.preventDefault()
+    const text = e.clipboardData.getData('text/plain')
+    document.execCommand('insertText', false, text)
+  }, [])
 
   const handleSelectFolder = async () => {
     const folder = await window.electronAPI.selectFolder()
@@ -299,6 +388,7 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
 
         <div className="flex items-end gap-2">
           <div className="flex-1 relative bg-canvas border border-border-subtle rounded-lg focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/10 transition-all">
+            {/* Mention dropdown */}
             {showSkillMention && filteredMentionSkills.length > 0 && (
               <div
                 ref={mentionRef}
@@ -327,40 +417,24 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
               </div>
             )}
 
-            {mentions.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2.5 pb-0">
-                {mentions.map((mention, idx) => (
-                  <span
-                    key={`${mention.name}-${idx}`}
-                    className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full bg-accent/10 text-accent text-xs font-medium leading-5 select-none"
-                  >
-                    <Sparkles className="w-3 h-3 shrink-0" />
-                    @{mention.displayName}
-                    <button
-                      onClick={() => removeMention(idx)}
-                      className="ml-0.5 rounded-full p-0.5 hover:bg-accent/20 transition-colors"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={handleInputChange}
+            {/* ContentEditable editor */}
+            <div
+              ref={editorRef}
+              contentEditable
+              suppressContentEditableWarning
+              onInput={handleInput}
               onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
               onCompositionStart={() => { isComposingRef.current = true }}
-              onCompositionEnd={(event) => {
+              onCompositionEnd={() => {
                 isComposingRef.current = false
-                updateMentionState(event.currentTarget.value, event.currentTarget.selectionStart ?? event.currentTarget.value.length)
+                handleInput()
               }}
-              placeholder={isRunning ? t.chat.interruptPlaceholder : t.chat.inputPlaceholder}
-              className="w-full resize-none bg-transparent px-4 py-3 text-sm text-charcoal placeholder:text-text-tertiary focus:outline-none"
-              rows={1}
-              style={{ minHeight: '44px', maxHeight: '200px' }}
+              data-placeholder={isRunning ? t.chat.interruptPlaceholder : t.chat.inputPlaceholder}
+              className="w-full px-4 py-3 text-sm text-charcoal focus:outline-none overflow-y-auto empty:before:content-[attr(data-placeholder)] empty:before:text-text-tertiary empty:before:pointer-events-none"
+              style={{ minHeight: '44px', maxHeight: '200px', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+              role="textbox"
+              aria-multiline="true"
             />
 
             <div className="flex items-center gap-1 px-2 pb-2">
@@ -468,11 +542,11 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
 
           <button
             onClick={() => { void handleSend() }}
-            disabled={!isRunning && !input.trim() && mentions.length === 0}
+            disabled={!isRunning && !input.trim()}
             className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
               isRunning
                 ? 'bg-danger text-white hover:bg-red-600'
-                : (input.trim() || mentions.length > 0)
+                : input.trim()
                 ? 'bg-accent text-white hover:bg-accent-hover'
                 : 'bg-gray-100 text-text-tertiary cursor-not-allowed'
             }`}

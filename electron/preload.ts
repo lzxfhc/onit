@@ -28,6 +28,7 @@ const api = {
   setSchedulerApiConfig: (config: {
     billingMode: string
     apiKey: string
+    model?: string
     customBaseUrl?: string
     codingPlanProvider?: string
     localModelId?: string

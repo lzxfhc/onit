@@ -108,6 +108,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       window.electronAPI.setSchedulerApiConfig({
         billingMode: mergedConfig.billingMode,
         apiKey: mergedConfig.apiKey,
+        model: mergedConfig.model,
         customBaseUrl: mergedConfig.customBaseUrl,
         codingPlanProvider: mergedConfig.codingPlanProvider,
         localModelId: mergedConfig.localModelId,
@@ -192,7 +193,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   runScheduledTaskNow: async (id) => {
-    await window.electronAPI.runScheduledTaskNow({ id })
+    const started = await window.electronAPI.runScheduledTaskNow({ id })
+    if (started) {
+      await get().loadScheduledTasks()
+    }
   },
 
   loadSkills: async () => {
