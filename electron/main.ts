@@ -192,8 +192,8 @@ function setupIPC() {
   })
 
   ipcMain.handle('scheduler:run-now', async (_event, data: { id: string }) => {
-    return schedulerManager.runTaskNow(data.id, (channel, eventData) => {
-      mainWindow?.webContents.send(channel, eventData)
+    return schedulerManager.runTaskNow(data.id, {
+      triggerSource: 'manual',
     })
   })
 
@@ -201,6 +201,7 @@ function setupIPC() {
   ipcMain.handle('scheduler:set-api-config', async (_event, config: {
     billingMode: string
     apiKey: string
+    model?: string
     customBaseUrl?: string
     codingPlanProvider?: string
     localModelId?: string
@@ -424,7 +425,9 @@ app.whenReady().then(() => {
       }
     },
   })
-  schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager)
+  schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager, (channel, data) => {
+    mainWindow?.webContents.send(channel, data)
+  })
 
   createWindow()
   setupIPC()

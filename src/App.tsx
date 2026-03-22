@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { v4 as uuidv4 } from 'uuid'
 import { shallow } from 'zustand/shallow'
 import { useSettingsStore } from './stores/settingsStore'
 import { useSessionStore } from './stores/sessionStore'
@@ -7,7 +8,7 @@ import Sidebar from './components/Sidebar'
 import TopBar from './components/TopBar'
 import ChatView from './components/Chat'
 import PermissionDialog from './components/Dialogs/PermissionDialog'
-import type { Session } from './types'
+import type { Message, ScheduledSessionCreatedEvent, Session } from './types'
 
 export default function App() {
   const { isLoggedIn, loadSettings, loadScheduledTasks, loadSkills, permissionRequests } = useSettingsStore((state) => ({
@@ -17,10 +18,8 @@ export default function App() {
     loadSkills: state.loadSkills,
     permissionRequests: state.permissionRequests,
   }), shallow)
-  const { loadSessions, registerExternalSession, saveSession } = useSessionStore((state) => ({
+  const { loadSessions } = useSessionStore((state) => ({
     loadSessions: state.loadSessions,
-    registerExternalSession: state.registerExternalSession,
-    saveSession: state.saveSession,
   }), shallow)
 
   const [rightPanelOpen, setRightPanelOpen] = useState(true)
@@ -36,34 +35,56 @@ export default function App() {
     loadScheduledTasks()
     loadSkills()
 
-    const unsubscribe = window.electronAPI.onSchedulerSessionCreated((data: any) => {
+    const unsubscribe = window.electronAPI.onSchedulerSessionCreated((data: ScheduledSessionCreatedEvent) => {
+      const now = Date.now()
+      const userMessage: Message = {
+        id: uuidv4(),
+        role: 'user',
+        content: data.taskPrompt,
+        timestamp: now,
+      }
+      const assistantMessage: Message = {
+        id: uuidv4(),
+        role: 'assistant',
+        content: '',
+        timestamp: now,
+        isStreaming: true,
+        toolCalls: [],
+        contentBlocks: [],
+        runId: data.runId,
+      }
       const session: Session = {
         id: data.sessionId,
         name: data.taskName,
-        messages: [],
+        messages: [userMessage, assistantMessage],
         status: 'running',
         activeRunId: data.runId,
-        permissionMode: 'full-access',
+        permissionMode: data.permissionMode || 'accept-edit',
         workspacePath: data.workspacePath || null,
         attachedFiles: [],
         model: data.model || 'qianfan-code-latest',
         tasks: [],
         workspaceFiles: [],
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        isBackgroundRunning: true,
+        sessionMemory: null,
+        createdAt: now,
+        updatedAt: now,
+        isBackgroundRunning: !data.openInForeground,
         backgroundCompleted: false,
         hasUnviewedResult: false,
       }
 
-      registerExternalSession(session)
-      saveSession(session.id)
+      const sessionStore = useSessionStore.getState()
+      sessionStore.registerExternalSession(session)
+      if (data.openInForeground) {
+        sessionStore.setActiveSession(session.id)
+      }
+      sessionStore.saveSession(session.id)
     })
 
     return () => {
       unsubscribe()
     }
-  }, [isLoggedIn, loadSessions, loadScheduledTasks, loadSkills, registerExternalSession, saveSession])
+  }, [isLoggedIn, loadSessions, loadScheduledTasks, loadSkills])
 
   if (!isLoggedIn) {
     return <Login />

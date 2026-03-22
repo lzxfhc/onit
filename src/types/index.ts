@@ -130,6 +130,20 @@ export interface ScheduledTask {
   scheduleDayOfWeek?: number
   scheduleDayOfMonth?: number
   scheduleDateTime?: string
+  permissionMode?: PermissionMode
+}
+
+export interface ScheduledSessionCreatedEvent {
+  taskId: string
+  taskName: string
+  taskPrompt: string
+  sessionId: string
+  runId: string
+  workspacePath: string | null
+  model: string
+  permissionMode: PermissionMode
+  triggerSource: 'manual' | 'scheduled'
+  openInForeground: boolean
 }
 
 export interface PermissionRequest {

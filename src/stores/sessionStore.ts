@@ -223,6 +223,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   createSession: (name?: string) => {
+    const state = get()
+    // If current active session is empty (no user messages), just reuse it
+    const currentSession = state.sessions.find(s => s.id === state.activeSessionId)
+    if (currentSession && currentSession.messages.length === 0 && currentSession.status === 'idle') {
+      // Already on an empty session, no need to create another
+      return currentSession
+    }
+
+    // Otherwise create a new session normally
     const newSession = createDefaultSession(name)
     set(state => ({
       sessions: [newSession, ...state.sessions],

@@ -120,7 +120,7 @@ export default function ScheduledTasks() {
               </div>
               <div className="flex items-center gap-1 mt-2">
                 <button
-                  onClick={() => runScheduledTaskNow(task.id)}
+                  onClick={() => { void runScheduledTaskNow(task.id) }}
                   className="btn-ghost btn-sm text-[10px]"
                   title={t.scheduled.runNow}
                 >
