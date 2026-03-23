@@ -7,6 +7,7 @@ import { SchedulerManager } from './agent/scheduler'
 import { SkillManager } from './agent/skills'
 import { SkillEvolutionManager } from './agent/skill-evolution'
 import { LocalModelManager } from './local-model/index'
+import { runCLI, detectCLIMode, createCLIOutputHandler } from './cli'
 
 let mainWindow: BrowserWindow | null = null
 let agentManager: AgentManager
@@ -394,49 +395,82 @@ function setupIPC() {
   ipcMain.handle('app:get-data-path', () => DATA_DIR)
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   ensureDirectories()
   localModelManager = new LocalModelManager(MODELS_DIR)
   skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
   skillEvolutionManager = new SkillEvolutionManager(skillManager)
 
-  agentManager = new AgentManager((channel, data) => {
-    mainWindow?.webContents.send(channel, data)
-  }, {
-    artifactsDir: ARTIFACTS_DIR,
-    localModelManager,
-    onRunComplete: (params) => {
-      // Fire-and-forget: record usage counts and save evolution records
-      const { sessionId, currentRunSkillNames, sessionSkillNames, messages, apiConfig } = params
+  // Check for CLI mode
+  const cliArgs = detectCLIMode(app.isPackaged)
 
-      // Record usage counts (only for skills @-mentioned in this run)
-      for (const skillName of currentRunSkillNames) {
-        skillManager.recordSkillUsage(skillName)
-      }
-
-      // Record usage for evolution (all session skills within recording window)
-      // Saves formatted conversation log to EVOLUTION.json.
-      // May trigger LLM compression of old records if storage exceeds budget.
-      for (const skillName of sessionSkillNames) {
-        skillEvolutionManager.recordUsage(skillName, sessionId, messages, apiConfig)
-          .catch((err) => {
-            console.error(`[SkillEvolution] Record usage error for ${skillName}:`, err)
-          })
-      }
-    },
-  })
-  schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager, (channel, data) => {
-    mainWindow?.webContents.send(channel, data)
-  })
-
-  createWindow()
-  setupIPC()
-
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow()
+  // Create AgentManager with appropriate output handler
+  const onRunComplete = (params: any) => {
+    const { sessionId, currentRunSkillNames, sessionSkillNames, messages, apiConfig } = params
+    for (const skillName of currentRunSkillNames) {
+      skillManager.recordSkillUsage(skillName)
     }
-  })
+    for (const skillName of sessionSkillNames) {
+      skillEvolutionManager.recordUsage(skillName, sessionId, messages, apiConfig)
+        .catch((err: any) => {
+          console.error(`[SkillEvolution] Record usage error for ${skillName}:`, err)
+        })
+    }
+  }
+
+  if (cliArgs) {
+    // --- CLI Mode: no window, output to terminal ---
+    // Create a temporary AgentManager — the output handler will be set after creation
+    // using a mutable reference so the CLI handler can access the manager for permission responses
+    let cliOutputHandler: (channel: string, data: any) => void = () => {}
+
+    agentManager = new AgentManager((channel, data) => {
+      cliOutputHandler(channel, data)
+    }, {
+      artifactsDir: ARTIFACTS_DIR,
+      localModelManager,
+      onRunComplete,
+    })
+
+    // Now set the real handler (it needs agentManager reference for permission responses)
+    cliOutputHandler = createCLIOutputHandler(agentManager)
+
+    schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager, cliOutputHandler)
+
+    const exitCode = await runCLI(cliArgs, {
+      agentManager,
+      skillManager,
+      skillEvolutionManager,
+      schedulerManager,
+      localModelManager,
+      settingsPath: path.join(DATA_DIR, 'cli-config.json'),
+      sessionsDir: SESSIONS_DIR,
+      artifactsDir: ARTIFACTS_DIR,
+    })
+
+    app.exit(exitCode)
+  } else {
+    // --- GUI Mode: normal Electron window ---
+    agentManager = new AgentManager((channel, data) => {
+      mainWindow?.webContents.send(channel, data)
+    }, {
+      artifactsDir: ARTIFACTS_DIR,
+      localModelManager,
+      onRunComplete,
+    })
+    schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager, (channel, data) => {
+      mainWindow?.webContents.send(channel, data)
+    })
+
+    createWindow()
+    setupIPC()
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow()
+      }
+    })
+  }
 })
 
 app.on('window-all-closed', () => {
