@@ -23,7 +23,7 @@ export class CopilotManager {
   private dataDir: string
   private localModelManager: LocalModelManager | null
 
-  /** The orchestrator's own AgentManager (uses copilot tools + Jarvis prompt). */
+  /** The orchestrator's own AgentManager (uses copilot tools + Onit prompt). */
   private orchestratorAgent: AgentManager | null = null
 
   /** In-memory task registry. Loaded from disk on startup, saved on changes. */
@@ -51,7 +51,7 @@ export class CopilotManager {
   // Orchestrator system prompt
   // ---------------------------------------------------------------------------
 
-  private buildJarvisSystemPrompt(): string {
+  private buildOnitSystemPrompt(): string {
     const now = new Date()
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
@@ -63,7 +63,7 @@ export class CopilotManager {
     const taskList = Array.from(this.tasks.values())
     const contextBlock = buildContextInjection(taskList)
 
-    return `You are Jarvis, the user's personal intelligent assistant running on their desktop via Onit.
+    return `You are Onit, the user's personal intelligent assistant running on their desktop via Onit.
 Your job is to help the user accomplish tasks, manage their workflow, and provide a seamless experience.
 
 Current date and time: ${dateStr}
@@ -143,8 +143,8 @@ ${contextBlock}`
             copilotManager: self,
           })
         },
-        // Prepend Jarvis system prompt
-        systemPromptPrepend: this.buildJarvisSystemPrompt(),
+        // Prepend Onit system prompt
+        systemPromptPrepend: this.buildOnitSystemPrompt(),
       },
     )
 
