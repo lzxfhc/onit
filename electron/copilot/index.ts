@@ -150,7 +150,7 @@ ${contextBlock}`
   // Main Agent lifecycle
   // ---------------------------------------------------------------------------
 
-  async startMainAgent(userMessage: string, runId: string, apiConfig: any): Promise<boolean> {
+  async startMainAgent(userMessage: string, runId: string, apiConfig: any, conversationHistory?: any[]): Promise<boolean> {
     this.apiConfig = apiConfig
     this.currentRunId = runId
 
@@ -158,14 +158,13 @@ ${contextBlock}`
     this.orchestratorAgent = null
     const orchestrator = this.ensureOrchestrator()
 
-    // Use a fixed session ID for the main copilot conversation
     const sessionId = 'copilot-main'
 
     return orchestrator.startAgent(sessionId, userMessage, runId, {
       apiConfig,
-      permissionMode: 'full-access', // orchestrator tools are all safe
-      workspacePath: null, // orchestrator doesn't work with files directly
-      messages: [], // conversation managed by orchestrator
+      permissionMode: 'full-access',
+      workspacePath: null,
+      messages: conversationHistory || [],
     })
   }
 
@@ -187,13 +186,14 @@ ${contextBlock}`
     priority?: string
   }): Promise<CopilotTask> {
     const taskId = uuidv4().replace(/-/g, '').substring(0, 12)
-    const sessionId = args.session_hint || `copilot-task-${taskId}`
+    const sessionId = `copilot-task-${args.session_hint || taskId}`
 
     const task: CopilotTask = {
       id: taskId,
+      name: args.description.substring(0, 50),
       sessionId,
       description: args.description,
-      status: 'pending',
+      status: 'queued',
       createdAt: Date.now(),
       workspace: args.workspace,
       skills: args.skills,
@@ -279,7 +279,7 @@ ${contextBlock}`
   async cancelTask(taskId: string): Promise<boolean> {
     const task = this.tasks.get(taskId)
     if (!task) return false
-    if (task.status !== 'running' && task.status !== 'pending') return false
+    if (task.status !== 'running' && task.status !== 'queued') return false
 
     // Stop the worker session
     this.workerAgent.stopAgent(task.sessionId)

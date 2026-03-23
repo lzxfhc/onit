@@ -73,6 +73,7 @@ export default function App() {
     loadSessions()
     loadScheduledTasks()
     loadSkills()
+    useCopilotStore.getState().loadCopilotData()
 
     // --- Scheduler session created listener (existing) ---
     const unsubScheduler = window.electronAPI.onSchedulerSessionCreated((data: ScheduledSessionCreatedEvent) => {
@@ -142,6 +143,8 @@ export default function App() {
       const { runId, status } = data
       flushCopilotChunks(runId)
       useCopilotStore.getState().completeRun(runId, status || 'completed')
+      // Persist conversation after each run
+      useCopilotStore.getState().saveCopilotData()
     })
 
     const unsubCopilotError = window.electronAPI.onCopilotError?.((data: any) => {
@@ -161,10 +164,11 @@ export default function App() {
 
     const unsubCopilotTaskEvent = window.electronAPI.onCopilotTaskEvent?.((data: any) => {
       const copilotStore = useCopilotStore.getState()
-      if (data.type === 'add') {
+      if (data.type === 'created') {
         copilotStore.addTask(data.task)
-      } else if (data.type === 'update') {
-        copilotStore.updateTask(data.taskId, data.updates)
+      } else {
+        // started, completed, failed, cancelled — all update the task
+        copilotStore.updateTask(data.task?.id || data.taskId, data.task || data.updates || {})
       }
     })
 

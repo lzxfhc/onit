@@ -135,7 +135,7 @@ export const useCopilotStore = create<CopilotState>((set, get) => ({
     taskDetailOpen: taskId !== null,
   }),
 
-  setTaskDetailOpen: (open) => set({ taskDetailOpen: open }),
+  setTaskDetailOpen: (open) => set(open ? { taskDetailOpen: true } : { taskDetailOpen: false, selectedTaskId: null }),
 
   loadCopilotData: async () => {
     try {

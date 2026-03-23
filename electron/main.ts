@@ -398,8 +398,8 @@ function setupIPC() {
   ipcMain.handle('app:get-data-path', () => DATA_DIR)
 
   // Copilot: start main agent
-  ipcMain.handle('copilot:start', async (_event, data: { message: string; runId: string; apiConfig: any }) => {
-    return copilotManager.startMainAgent(data.message, data.runId, data.apiConfig)
+  ipcMain.handle('copilot:start', async (_event, data: { message: string; runId: string; apiConfig: any; messages?: any[] }) => {
+    return copilotManager.startMainAgent(data.message, data.runId, data.apiConfig, data.messages || [])
   })
 
   // Copilot: stop main agent
@@ -426,12 +426,15 @@ app.whenReady().then(() => {
   skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
   skillEvolutionManager = new SkillEvolutionManager(skillManager)
 
-  // Wrap sendToRenderer to detect copilot worker completions
+  // Wrap sendToRenderer to detect copilot worker completions (both success and error)
   const workerSend = (channel: string, data: any) => {
     mainWindow?.webContents.send(channel, data)
-    // Detect when a copilot worker session completes and notify CopilotManager
-    if (channel === 'agent:complete' && data.sessionId?.startsWith('copilot-task-')) {
-      copilotManager?.onWorkerComplete(data.sessionId, data.status || 'completed')
+    if (data.sessionId?.startsWith('copilot-task-')) {
+      if (channel === 'agent:complete') {
+        copilotManager?.onWorkerComplete(data.sessionId, data.status || 'completed')
+      } else if (channel === 'agent:error') {
+        copilotManager?.onWorkerComplete(data.sessionId, 'failed')
+      }
     }
   }
 
@@ -482,6 +485,7 @@ app.whenReady().then(() => {
 })
 
 app.on('window-all-closed', () => {
+  copilotManager?.stopMainAgent()
   schedulerManager?.shutdown()
   agentManager?.stopAll()
   if (process.platform !== 'darwin') {

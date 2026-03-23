@@ -4,9 +4,11 @@ import MessageList from '../Chat/MessageList'
 import CopilotInputBox from './CopilotInputBox'
 import { useCopilotStore } from '../../stores/copilotStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { useT } from '../../i18n'
 import type { Message } from '../../types'
 
 export default function CopilotChat() {
+  const t = useT()
   const messages = useCopilotStore(s => s.messages)
   const isRunning = useCopilotStore(s => s.isRunning)
 
@@ -43,10 +45,13 @@ export default function CopilotChat() {
     copilotStore.startRun(userMsg, assistantMsg, runId)
 
     try {
+      // Pass conversation history so the orchestrator has context
+      const prevMessages = copilotStore.messages.slice(0, -2) // exclude the just-added user+assistant msgs
       await window.electronAPI.startCopilot({
         message: trimmed,
         runId,
         apiConfig: settingsStore.settings.apiConfig,
+        messages: prevMessages,
       })
     } catch (err: any) {
       copilotStore.completeRun(runId, 'error')
@@ -73,10 +78,18 @@ export default function CopilotChat() {
     }
   }, [])
 
+  // Show greeting when conversation is empty
+  const displayMessages = messages.length > 0 ? messages : [{
+    id: 'greeting',
+    role: 'assistant' as const,
+    content: t.copilot.greeting,
+    timestamp: Date.now(),
+  }]
+
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
       <MessageList
-        messages={messages}
+        messages={displayMessages}
         isRunning={isRunning}
         sessionId="copilot-main"
       />

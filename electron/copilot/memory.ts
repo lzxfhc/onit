@@ -3,9 +3,10 @@ import path from 'path'
 
 export interface CopilotTask {
   id: string
+  name: string
   sessionId: string
   description: string
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
   createdAt: number
   completedAt?: number
   summary?: string
