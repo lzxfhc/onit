@@ -132,6 +132,7 @@ export default function MessageList({ messages, isRunning, sessionId }: Props) {
               key={message.id}
               message={message}
               isLast={idx === messages.length - 1}
+              sessionId={sessionId}
             />
           ))}
 

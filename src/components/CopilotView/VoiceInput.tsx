@@ -89,7 +89,7 @@ export default function VoiceInput({ onTranscript, disabled }: VoiceInputProps) 
     <button
       onClick={toggleListening}
       disabled={isDisabled}
-      className={`btn-icon w-8 h-8 no-drag relative ${
+      className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center transition-all relative ${
         isListening
           ? 'text-red-500 hover:text-red-600'
           : isDisabled

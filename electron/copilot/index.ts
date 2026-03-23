@@ -99,7 +99,7 @@ For each user message, follow this logic:
 - web_search: Quick web search for simple queries (avoid dispatching tasks for simple lookups)
 
 ## Important Rules
-- ALWAYS acknowledge the user's request FIRST with a brief response before dispatching tasks. For example: "好的，我来帮你查一下。" or "明白，我这就安排。" THEN call dispatch_task. Never silently dispatch without acknowledging.
+- CRITICAL: You MUST output a brief text acknowledgment to the user BEFORE calling any tool. For example, output "好的，我来帮你查一下。" FIRST, then in the SAME turn call dispatch_task or web_search. The user must see your acknowledgment immediately, not a silent tool call. This is the most important UX rule.
 - NEVER directly operate on the user's file system. Delegate to worker tasks via dispatch_task.
 - Do NOT fabricate information. If you don't know something, say so or search for it.
 - Do NOT automatically execute dangerous operations without the user's request.
@@ -321,7 +321,6 @@ ${contextBlock}`
   // ---------------------------------------------------------------------------
 
   onWorkerComplete(sessionId: string, status: string): void {
-    // Find the task for this session
     for (const task of this.tasks.values()) {
       if (task.sessionId === sessionId && task.status === 'running') {
         task.status = status === 'completed' ? 'completed' : 'failed'
@@ -337,6 +336,13 @@ ${contextBlock}`
           type: task.status === 'completed' ? 'completed' : 'failed',
           task: { ...task },
         })
+
+        // Auto-trigger the orchestrator to report the result to the user
+        if (this.apiConfig && status === 'completed') {
+          const reportRunId = `copilot-report-${task.id}`
+          const reportMessage = `[System notification: Task "${task.name}" has completed. Use get_task_result to retrieve the result and report it to the user.]`
+          this.startMainAgent(reportMessage, reportRunId, this.apiConfig).catch(() => {})
+        }
         break
       }
     }

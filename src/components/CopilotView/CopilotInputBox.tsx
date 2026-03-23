@@ -46,7 +46,7 @@ export default function CopilotInputBox({ onSend, onStop, isRunning }: Props) {
 
   return (
     <div className="shrink-0 border-t border-border-subtle bg-surface px-4 py-3">
-      <div className="flex items-end gap-2 max-w-3xl mx-auto">
+      <div className="flex items-center gap-2 max-w-3xl mx-auto">
         {/* Voice input */}
         <VoiceInput onTranscript={handleVoiceTranscript} disabled={isRunning} />
 
@@ -61,7 +61,7 @@ export default function CopilotInputBox({ onSend, onStop, isRunning }: Props) {
             placeholder={t.copilot.inputPlaceholder}
             disabled={isRunning}
             rows={1}
-            className="w-full resize-none rounded-lg border border-border-subtle bg-white px-3 py-2 text-sm text-charcoal placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all duration-200 disabled:opacity-50"
+            className="w-full resize-none rounded-lg border border-border-subtle bg-white px-3 py-2.5 text-sm text-charcoal placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all duration-200 disabled:opacity-50"
             style={{ minHeight: '40px', maxHeight: '200px' }}
           />
         </div>
@@ -70,19 +70,19 @@ export default function CopilotInputBox({ onSend, onStop, isRunning }: Props) {
         {isRunning ? (
           <button
             onClick={() => onStop()}
-            className="btn-icon w-8 h-8 no-drag text-danger hover:bg-danger-light"
+            className="shrink-0 w-10 h-10 rounded-lg flex items-center justify-center bg-danger text-white hover:bg-red-600 transition-all"
             title="Stop"
           >
-            <Square className="w-4 h-4 fill-current" />
+            <Square className="w-4 h-4" fill="currentColor" />
           </button>
         ) : (
           <button
             onClick={handleSend}
             disabled={!text.trim()}
-            className={`btn-icon w-8 h-8 no-drag ${
+            className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center transition-all ${
               text.trim()
-                ? 'text-accent hover:bg-accent-50'
-                : 'text-text-tertiary opacity-50 cursor-not-allowed'
+                ? 'bg-accent text-white hover:bg-accent-hover'
+                : 'bg-gray-100 text-text-tertiary cursor-not-allowed'
             }`}
             title="Send"
           >
