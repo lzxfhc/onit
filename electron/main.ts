@@ -87,6 +87,23 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
+  // Prevent navigation to external URLs — open in system browser instead
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const appUrl = process.env.VITE_DEV_SERVER_URL || 'file://'
+    if (!url.startsWith(appUrl) && !url.startsWith('file://')) {
+      event.preventDefault()
+      shell.openExternal(url)
+    }
+  })
+
+  // Prevent new windows from opening — redirect to system browser
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
