@@ -75,7 +75,7 @@ const MessageBubble = memo(function MessageBubble({ message }: Props) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-semibold text-charcoal">
-              {isUser ? t.chat.you : t.chat.agent}
+              {isUser ? t.chat.you : (message.runId?.startsWith('copilot-') ? 'Jarvis' : t.chat.agent)}
             </span>
             <span className="text-[10px] text-text-tertiary">
               {new Date(message.timestamp).toLocaleTimeString('en-US', {

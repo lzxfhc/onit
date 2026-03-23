@@ -471,7 +471,7 @@ app.whenReady().then(() => {
       mainWindow?.webContents.send(channel, data)
     },
     agentManager,
-    { dataDir: DATA_DIR, localModelManager },
+    { dataDir: DATA_DIR, localModelManager, skillManager },
   )
 
   createWindow()

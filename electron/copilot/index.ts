@@ -1,6 +1,7 @@
 import os from 'os'
 import { v4 as uuidv4 } from 'uuid'
 import { AgentManager } from '../agent/index'
+import type { SkillManager } from '../agent/skills'
 import type { LocalModelManager } from '../local-model/index'
 import { COPILOT_TOOLS, executeCopilotTool } from './tools'
 import {
@@ -18,6 +19,7 @@ export type { CopilotTask } from './memory'
 export class CopilotManager {
   private sendToRenderer: (channel: string, data: any) => void
   private workerAgent: AgentManager
+  private skillManager: SkillManager | null
   private dataDir: string
   private localModelManager: LocalModelManager | null
 
@@ -36,10 +38,11 @@ export class CopilotManager {
   constructor(
     sendToRenderer: (channel: string, data: any) => void,
     workerAgent: AgentManager,
-    options: { dataDir: string; localModelManager?: LocalModelManager }
+    options: { dataDir: string; localModelManager?: LocalModelManager; skillManager?: SkillManager }
   ) {
     this.sendToRenderer = sendToRenderer
     this.workerAgent = workerAgent
+    this.skillManager = options.skillManager || null
     this.dataDir = options.dataDir
     this.localModelManager = options.localModelManager || null
   }
@@ -96,11 +99,13 @@ For each user message, follow this logic:
 - web_search: Quick web search for simple queries (avoid dispatching tasks for simple lookups)
 
 ## Important Rules
+- ALWAYS acknowledge the user's request FIRST with a brief response before dispatching tasks. For example: "好的，我来帮你查一下。" or "明白，我这就安排。" THEN call dispatch_task. Never silently dispatch without acknowledging.
 - NEVER directly operate on the user's file system. Delegate to worker tasks via dispatch_task.
 - Do NOT fabricate information. If you don't know something, say so or search for it.
 - Do NOT automatically execute dangerous operations without the user's request.
-- When multiple tasks are requested, dispatch them in parallel and report results as they come in.
+- When multiple tasks are requested, acknowledge them all, then dispatch them.
 - Keep the user informed about task progress without being verbose.
+- Respond in the same language the user uses.
 ${contextBlock}`
   }
 
@@ -221,12 +226,26 @@ ${contextBlock}`
     const runId = uuidv4()
 
     try {
-      await this.workerAgent.startAgent(sessionId, args.description, runId, {
+      // Get enabled skills so the worker can use them
+      const enabledSkills = this.skillManager
+        ? this.skillManager.getEnabledSkills().map(s => ({
+            name: s.name, displayName: s.displayName,
+            description: s.description, content: s.content, memory: s.memory,
+          }))
+        : []
+
+      // Build message with skill mentions if specified
+      let workerMessage = args.description
+      if (args.skills && args.skills.length > 0) {
+        workerMessage = args.skills.map(s => `@${s}`).join(' ') + ' ' + workerMessage
+      }
+
+      await this.workerAgent.startAgent(sessionId, workerMessage, runId, {
         apiConfig: this.apiConfig,
-        permissionMode: 'full-access',
+        permissionMode: 'accept-edit',
         workspacePath: args.workspace || null,
         messages: [],
-        enabledSkills: [],
+        enabledSkills,
       })
     } catch (err: any) {
       task.status = 'failed'

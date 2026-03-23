@@ -21,7 +21,7 @@ export default function CopilotChat() {
 
     if (copilotStore.isRunning) return
 
-    const runId = uuidv4()
+    const runId = `copilot-${uuidv4()}`
     const now = Date.now()
 
     const userMsg: Message = {
