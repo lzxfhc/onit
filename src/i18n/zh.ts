@@ -263,10 +263,13 @@ export const zh = {
     taskFailed: '失败',
     taskCancelled: '已取消',
     taskDetail: '任务详情',
+    taskExecution: '执行过程',
+    taskLatestResult: '最新结果',
     viewDetail: '查看详情',
     closeDetail: '关闭详情',
     dispatching: '正在派发任务...',
     noTaskSelected: '选择左侧任务查看执行详情',
+    noTaskTranscript: '这个任务还没有可展示的执行记录。',
   },
 }
 

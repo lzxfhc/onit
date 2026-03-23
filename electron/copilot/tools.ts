@@ -3,7 +3,8 @@ import { AGENT_TOOLS, executeTool } from '../agent/tools'
 import type { CopilotManager } from './index'
 
 // Reuse the exact web_search tool definition from agent/tools.ts
-const webSearchTool = AGENT_TOOLS.find(t => t.function.name === 'web_search')!
+const webSearchTool = AGENT_TOOLS.find(t => t.function.name === 'web_search')
+if (!webSearchTool) throw new Error('[Copilot] web_search tool not found in AGENT_TOOLS')
 
 export const COPILOT_TOOLS: AgentToolDef[] = [
   {
@@ -41,7 +42,7 @@ export const COPILOT_TOOLS: AgentToolDef[] = [
     type: 'function',
     function: {
       name: 'get_task_result',
-      description: 'Get the result of a completed task. Returns the task summary and status. Use this when the user asks about a finished task.',
+      description: 'Get the result of a completed task. Returns status, summary, full result text, and sessionId for follow-up routing.',
       parameters: {
         type: 'object',
         properties: {
@@ -137,6 +138,9 @@ export async function executeCopilotTool(
         const tasks = manager.listTasks()
         const summary = tasks.map(t => ({
           id: t.id,
+          sessionId: t.sessionId,
+          topic: t.topic,
+          taskType: t.taskType,
           description: t.description.substring(0, 200),
           status: t.status,
           createdAt: t.createdAt,

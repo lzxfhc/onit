@@ -1,6 +1,7 @@
 import { X, Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useCopilotStore } from '../../stores/copilotStore'
+import MessageBubble from '../Chat/MessageBubble'
 import type { CopilotTaskStatus } from '../../types'
 
 function statusLabel(status: CopilotTaskStatus, t: any): string {
@@ -79,59 +80,77 @@ export default function TaskDetail() {
             {t.copilot.noTaskSelected}
           </p>
         ) : (
-          <div className="space-y-4">
-            {/* Task name */}
-            <div>
-              <h4 className="text-sm font-semibold text-charcoal">{task.name}</h4>
-              <p className="text-xs text-text-secondary mt-1">{task.description}</p>
-            </div>
-
-            {/* Status */}
-            <div>
-              <label className="label">Status</label>
-              <StatusBadge status={task.status} t={t} />
-            </div>
-
-            {/* Timestamps */}
-            <div>
-              <label className="label">Created</label>
-              <p className="text-xs text-charcoal">{formatDateTime(task.createdAt)}</p>
-            </div>
-
-            {task.completedAt && (
+          <div className="space-y-5">
+            <div className="space-y-4">
               <div>
-                <label className="label">Completed</label>
-                <p className="text-xs text-charcoal">{formatDateTime(task.completedAt)}</p>
+                <h4 className="text-sm font-semibold text-charcoal">{task.name}</h4>
+                <p className="text-xs text-text-secondary mt-1">{task.description}</p>
               </div>
-            )}
 
-            {/* Workspace */}
-            {task.workspace && (
               <div>
-                <label className="label">Workspace</label>
-                <p className="text-xs text-charcoal font-mono truncate">{task.workspace}</p>
+                <label className="label">Status</label>
+                <StatusBadge status={task.status} t={t} />
               </div>
-            )}
 
-            {/* Skills used */}
-            {task.skills && task.skills.length > 0 && (
               <div>
-                <label className="label">Skills</label>
-                <div className="flex flex-wrap gap-1">
-                  {task.skills.map(skill => (
-                    <span key={skill} className="badge-blue text-[10px]">{skill}</span>
+                <label className="label">Created</label>
+                <p className="text-xs text-charcoal">{formatDateTime(task.createdAt)}</p>
+              </div>
+
+              {task.completedAt && (
+                <div>
+                  <label className="label">Completed</label>
+                  <p className="text-xs text-charcoal">{formatDateTime(task.completedAt)}</p>
+                </div>
+              )}
+
+              {task.workspace && (
+                <div>
+                  <label className="label">Workspace</label>
+                  <p className="text-xs text-charcoal font-mono break-all">{task.workspace}</p>
+                </div>
+              )}
+
+              {task.skills && task.skills.length > 0 && (
+                <div>
+                  <label className="label">Skills</label>
+                  <div className="flex flex-wrap gap-1">
+                    {task.skills.map(skill => (
+                      <span key={skill} className="badge-blue text-[10px]">{skill}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {(task.finalResponse || task.summary) && (
+                <div>
+                  <label className="label">{t.copilot.taskLatestResult}</label>
+                  <p className="text-xs text-charcoal leading-relaxed whitespace-pre-wrap break-words">
+                    {task.finalResponse || task.summary}
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t border-border-light pt-4">
+              <label className="label">{t.copilot.taskExecution}</label>
+              {task.messages && task.messages.length > 0 ? (
+                <div className="mt-2 space-y-1">
+                  {task.messages.map((message, index) => (
+                    <MessageBubble
+                      key={message.id}
+                      message={message}
+                      isLast={index === task.messages!.length - 1}
+                      sessionId={task.sessionId}
+                    />
                   ))}
                 </div>
-              </div>
-            )}
-
-            {/* Summary */}
-            {task.summary && (
-              <div>
-                <label className="label">Summary</label>
-                <p className="text-xs text-charcoal leading-relaxed">{task.summary}</p>
-              </div>
-            )}
+              ) : (
+                <p className="mt-2 text-xs text-text-tertiary">
+                  {t.copilot.noTaskTranscript}
+                </p>
+              )}
+            </div>
           </div>
         )}
       </div>

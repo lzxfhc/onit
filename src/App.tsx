@@ -160,6 +160,7 @@ export default function App() {
         timestamp: Date.now(),
         runId,
       })
+      copilotStore.saveCopilotData()
     })
 
     const unsubCopilotTaskEvent = window.electronAPI.onCopilotTaskEvent?.((data: any) => {

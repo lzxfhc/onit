@@ -17,6 +17,11 @@ let skillEvolutionManager: SkillEvolutionManager
 let localModelManager: LocalModelManager
 let copilotManager: CopilotManager
 
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+}
+
 const DATA_DIR = path.join(app.getPath('userData'), 'onit-data')
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions')
 const SCHEDULED_DIR = path.join(DATA_DIR, 'scheduled')
@@ -447,10 +452,15 @@ app.whenReady().then(() => {
   const workerSend = (channel: string, data: any) => {
     mainWindow?.webContents.send(channel, data)
     if (data.sessionId?.startsWith('copilot-task-')) {
-      if (channel === 'agent:complete') {
-        copilotManager?.onWorkerComplete(data.sessionId, data.status || 'completed')
+      if (channel === 'agent:stream') {
+        copilotManager?.onWorkerStream(data.sessionId, data.runId, data.chunk)
+      } else if (channel === 'agent:memory-update') {
+        copilotManager?.onWorkerMemoryUpdate(data.sessionId, data.runId, data.memory)
       } else if (channel === 'agent:error') {
+        copilotManager?.onWorkerError(data.sessionId, data.runId, data.error || 'Unknown error')
         copilotManager?.onWorkerComplete(data.sessionId, 'failed')
+      } else if (channel === 'agent:complete') {
+        copilotManager?.onWorkerComplete(data.sessionId, data.status || 'completed')
       }
     }
   }
@@ -501,8 +511,18 @@ app.whenReady().then(() => {
   })
 })
 
+app.on('second-instance', () => {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
+  mainWindow.show()
+  mainWindow.focus()
+})
+
 app.on('window-all-closed', () => {
   copilotManager?.stopMainAgent()
+  copilotManager?.flushAndSave()
   schedulerManager?.shutdown()
   agentManager?.stopAll()
   if (process.platform !== 'darwin') {

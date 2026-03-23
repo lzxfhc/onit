@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import MessageList from '../Chat/MessageList'
 import CopilotInputBox from './CopilotInputBox'
@@ -45,8 +45,8 @@ export default function CopilotChat() {
     copilotStore.startRun(userMsg, assistantMsg, runId)
 
     try {
-      // Pass conversation history so the orchestrator has context
-      const prevMessages = copilotStore.messages.slice(0, -2) // exclude the just-added user+assistant msgs
+      // Pass the pre-run conversation history so the orchestrator keeps the full dialogue context.
+      const prevMessages = copilotStore.messages
       await window.electronAPI.startCopilot({
         message: trimmed,
         runId,
@@ -62,6 +62,7 @@ export default function CopilotChat() {
         timestamp: Date.now(),
         runId,
       })
+      copilotStore.saveCopilotData()
     }
   }, [])
 
@@ -75,16 +76,19 @@ export default function CopilotChat() {
       await window.electronAPI.stopCopilot()
     } finally {
       copilotStore.completeRun(runId, 'stopped')
+      copilotStore.saveCopilotData()
     }
   }, [])
 
-  // Show greeting when conversation is empty
-  const displayMessages = messages.length > 0 ? messages : [{
+  // Show greeting when conversation is empty (stable reference to avoid re-renders)
+  const greetingMsg = useMemo(() => [{
     id: 'greeting',
     role: 'assistant' as const,
     content: t.copilot.greeting,
-    timestamp: Date.now(),
-  }]
+    timestamp: 0,
+  }], [t.copilot.greeting])
+
+  const displayMessages = messages.length > 0 ? messages : greetingMsg
 
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">

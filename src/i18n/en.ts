@@ -265,9 +265,12 @@ export const en: Translations = {
     taskFailed: 'Failed',
     taskCancelled: 'Cancelled',
     taskDetail: 'Task Detail',
+    taskExecution: 'Execution',
+    taskLatestResult: 'Latest Result',
     viewDetail: 'View Detail',
     closeDetail: 'Close Detail',
     dispatching: 'Dispatching task...',
     noTaskSelected: 'Select a task to view execution details',
+    noTaskTranscript: 'No execution trace is available for this task yet.',
   },
 }

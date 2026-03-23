@@ -175,8 +175,12 @@ export interface CopilotTask {
   createdAt: number
   completedAt?: number
   summary?: string
+  finalResponse?: string
   workspace?: string
   skills?: string[]
+  messages?: Message[]
+  sessionMemory?: SessionMemory | null
+  lastRunId?: string | null
 }
 
 export interface AppSettings {

@@ -347,6 +347,10 @@ export class AgentManager {
     }
   }
 
+  isSessionRunning(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.isRunning === true
+  }
+
   handlePermissionResponse(requestId: string, approved: boolean, alwaysAllow?: boolean): void {
     for (const [, session] of this.sessions) {
       const pending = session.pendingPermissions.get(requestId)

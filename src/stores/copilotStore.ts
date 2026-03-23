@@ -37,34 +37,113 @@ interface CopilotState {
 
 function applyChunkToMessage(message: Message, chunk: StreamChunk): Message {
   if (chunk.type === 'content' && chunk.content) {
-    return { ...message, content: message.content + chunk.content }
+    const blocks = message.contentBlocks ? [...message.contentBlocks] : []
+    if (blocks.length > 0 && blocks[blocks.length - 1].type === 'text') {
+      const previous = blocks[blocks.length - 1]
+      blocks[blocks.length - 1] = {
+        ...previous,
+        content: (previous.content || '') + chunk.content,
+      }
+    } else {
+      blocks.push({ type: 'text', content: chunk.content })
+    }
+
+    return {
+      ...message,
+      content: message.content + chunk.content,
+      contentBlocks: blocks,
+    }
   }
+
   if (chunk.type === 'thinking' && chunk.content) {
     return { ...message, thinking: (message.thinking || '') + chunk.content }
   }
+
   if (chunk.type === 'tool-call-start' && chunk.toolCall) {
     const toolCalls = [...(message.toolCalls || [])]
-    toolCalls.push({
+    const existingIndex = toolCalls.findIndex(tc => tc.id === chunk.toolCall!.id)
+    const nextToolCall = {
       id: chunk.toolCall.id || '',
       name: chunk.toolCall.name || '',
       arguments: chunk.toolCall.arguments || '',
-      status: 'running',
-    })
-    return { ...message, toolCalls }
+      status: chunk.toolCall.status || 'running',
+    }
+    if (existingIndex >= 0) {
+      toolCalls[existingIndex] = { ...toolCalls[existingIndex], ...nextToolCall }
+    } else {
+      toolCalls.push(nextToolCall)
+    }
+
+    const blocks = [...(message.contentBlocks || [])]
+    blocks.push({ type: 'tool-call', toolCallId: chunk.toolCall.id })
+
+    return { ...message, toolCalls, contentBlocks: blocks }
   }
+
   if (chunk.type === 'tool-call-result' && chunk.toolCall) {
     const toolCalls = [...(message.toolCalls || [])]
     const idx = toolCalls.findIndex(tc => tc.id === chunk.toolCall!.id)
     if (idx >= 0) {
       toolCalls[idx] = { ...toolCalls[idx], ...chunk.toolCall }
+    } else {
+      toolCalls.push({
+        id: chunk.toolCall.id || '',
+        name: chunk.toolCall.name || '',
+        arguments: chunk.toolCall.arguments || '',
+        status: chunk.toolCall.status || 'completed',
+        result: chunk.toolCall.result,
+        error: chunk.toolCall.error,
+        resultFilePath: chunk.toolCall.resultFilePath,
+      })
     }
     return { ...message, toolCalls }
   }
+
   if (chunk.type === 'iteration-end') {
     const blocks = [...(message.contentBlocks || [])]
     blocks.push({ type: 'iteration-end', iterationIndex: chunk.iterationIndex })
-    return { ...message, contentBlocks: blocks }
+    return { ...message, contentBlocks: blocks, iterationIndex: chunk.iterationIndex }
   }
+
+  if (chunk.type === 'reconnect') {
+    const blocks = [...(message.contentBlocks || [])]
+    if (blocks.length === 0) {
+      return { ...message, content: '', contentBlocks: [] }
+    }
+
+    let boundaryIndex = -1
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i].type === 'iteration-end') {
+        boundaryIndex = i
+        break
+      }
+    }
+
+    const keptBlocks = boundaryIndex >= 0 ? blocks.slice(0, boundaryIndex + 1) : []
+    const nextContent = keptBlocks
+      .filter(block => block.type === 'text')
+      .map(block => block.content || '')
+      .join('')
+
+    const keptToolCallIds = new Set(
+      keptBlocks
+        .filter(block => block.type === 'tool-call')
+        .map(block => block.toolCallId)
+        .filter(Boolean) as string[],
+    )
+
+    const nextToolCalls = message.toolCalls && message.toolCalls.length > 0
+      ? message.toolCalls.filter(toolCall => keptToolCallIds.has(toolCall.id))
+      : message.toolCalls
+
+    return {
+      ...message,
+      content: nextContent,
+      contentBlocks: keptBlocks,
+      toolCalls: nextToolCalls,
+    }
+  }
+
   return message
 }
 
@@ -132,13 +211,30 @@ export const useCopilotStore = create<CopilotState>((set, get) => ({
     })
   },
 
-  addTask: (task) => set(state => ({
-    tasks: [task, ...state.tasks],
-  })),
+  addTask: (task) => set(state => {
+    const existingIndex = state.tasks.findIndex(t => t.id === task.id)
+    if (existingIndex >= 0) {
+      const tasks = [...state.tasks]
+      tasks[existingIndex] = { ...tasks[existingIndex], ...task }
+      return { tasks }
+    }
 
-  updateTask: (taskId, updates) => set(state => ({
-    tasks: state.tasks.map(t => t.id === taskId ? { ...t, ...updates } : t),
-  })),
+    return {
+      tasks: [task, ...state.tasks],
+    }
+  }),
+
+  updateTask: (taskId, updates) => set(state => {
+    const existingIndex = state.tasks.findIndex(t => t.id === taskId)
+    if (existingIndex < 0) {
+      if (updates.id !== taskId) return state
+      return { tasks: [updates as CopilotTask, ...state.tasks] }
+    }
+
+    const tasks = [...state.tasks]
+    tasks[existingIndex] = { ...tasks[existingIndex], ...updates }
+    return { tasks }
+  }),
 
   removeTask: (taskId) => set(state => ({
     tasks: state.tasks.filter(t => t.id !== taskId),

@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import type { Message, SessionMemory } from '../../src/types'
 
 export interface CopilotTask {
   id: string
@@ -7,21 +8,62 @@ export interface CopilotTask {
   sessionId: string
   description: string
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
-  /** Task lifecycle: temporary tasks are cleaned up after completion */
+  /** Task lifecycle: temporary tasks are lightweight and retained only for recent follow-ups */
   taskType: 'temporary' | 'persistent'
   /** Topic/category for session grouping and reuse */
   topic?: string
   createdAt: number
   completedAt?: number
   summary?: string
+  finalResponse?: string
   workspace?: string
   skills?: string[]
   priority?: 'normal' | 'urgent'
+  messages?: Message[]
+  sessionMemory?: SessionMemory | null
+  lastRunId?: string | null
 }
 
 interface MainConversationData {
   messages: any[]
   lastSaved: number
+  normalized?: boolean
+}
+
+function normalizeMainConversationMessages(messages: any[]): { messages: any[]; normalized: boolean } {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return { messages: [], normalized: false }
+  }
+
+  let normalized = false
+  const nextMessages: any[] = []
+
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') continue
+
+    if (message.role === 'assistant' && message.isStreaming) {
+      const hasContent = typeof message.content === 'string' && message.content.trim().length > 0
+      const hasThinking = typeof message.thinking === 'string' && message.thinking.trim().length > 0
+      const hasToolCalls = Array.isArray(message.toolCalls) && message.toolCalls.length > 0
+
+      normalized = true
+
+      // Drop blank in-flight shells left behind by an interrupted run.
+      if (!hasContent && !hasThinking && !hasToolCalls) {
+        continue
+      }
+
+      nextMessages.push({
+        ...message,
+        isStreaming: false,
+      })
+      continue
+    }
+
+    nextMessages.push(message)
+  }
+
+  return { messages: nextMessages, normalized }
 }
 
 /**
@@ -33,9 +75,13 @@ export function loadMainConversation(dataDir: string): MainConversationData {
     if (fs.existsSync(filePath)) {
       const raw = fs.readFileSync(filePath, 'utf-8')
       const parsed = JSON.parse(raw)
+      const normalized = normalizeMainConversationMessages(
+        Array.isArray(parsed.messages) ? parsed.messages : [],
+      )
       return {
-        messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+        messages: normalized.messages,
         lastSaved: typeof parsed.lastSaved === 'number' ? parsed.lastSaved : 0,
+        normalized: normalized.normalized,
       }
     }
   } catch {

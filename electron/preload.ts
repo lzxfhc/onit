@@ -131,7 +131,7 @@ const api = {
   },
 
   // Copilot
-  startCopilot: (data: { message: string; runId: string; apiConfig: any }) =>
+  startCopilot: (data: { message: string; runId: string; apiConfig: any; messages?: any[] }) =>
     ipcRenderer.invoke('copilot:start', data),
   stopCopilot: (data?: any) =>
     ipcRenderer.invoke('copilot:stop', data),

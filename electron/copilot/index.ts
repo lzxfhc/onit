@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { AgentManager } from '../agent/index'
 import type { SkillManager } from '../agent/skills'
 import type { LocalModelManager } from '../local-model/index'
+import type { Message, SessionMemory, StreamChunk } from '../../src/types'
 import { COPILOT_TOOLS, executeCopilotTool } from './tools'
 import {
   CopilotTask,
@@ -13,8 +14,18 @@ import {
   deleteTask as deleteTaskFile,
   buildContextInjection,
 } from './memory'
+import {
+  applyTaskError,
+  applyTaskStreamChunks,
+  buildTaskRunMessages,
+  completeTaskRun,
+  extractTaskResult,
+} from './task-messages'
 
 export type { CopilotTask } from './memory'
+
+const TASK_CHUNK_FLUSH_MS = 80
+const COMPLETED_TASK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 
 export class CopilotManager {
   private sendToRenderer: (channel: string, data: any) => void
@@ -34,6 +45,11 @@ export class CopilotManager {
 
   /** The orchestrator's current run ID, so we can detect completion. */
   private currentRunId: string | null = null
+
+  /** Buffered worker chunks per task to avoid flooding disk/UI on every token. */
+  private pendingTaskChunks: Map<string, { runId: string; chunks: StreamChunk[] }> = new Map()
+
+  private pendingTaskChunkTimers: Map<string, NodeJS.Timeout> = new Map()
 
   constructor(
     sendToRenderer: (channel: string, data: any) => void,
@@ -100,7 +116,7 @@ For each user message, follow this logic:
 
 ## Session Management Strategy
 - **Session reuse**: When the user's request relates to an existing topic (e.g., "weather", "code-review"), route it to the EXISTING session by setting reuse_session_id. This preserves conversation context. Check the "Reusable Sessions" list in Current Context below.
-- **Temporary tasks**: Simple one-shot tasks (quick search, single file check) → set task_type="temporary". These are cleaned up after completion.
+- **Temporary tasks**: Simple one-shot tasks (quick search, single file check) → set task_type="temporary". These stay available for recent follow-up questions and are pruned later.
 - **Persistent tasks**: Recurring topics or complex multi-step work → set task_type="persistent" with a topic. These sessions are preserved for future reuse.
 - **Topic naming**: Use short, consistent topic names: "weather", "code-review", "research", "file-management", etc.
 
@@ -184,6 +200,178 @@ ${contextBlock}`
     }
   }
 
+  private listTasksSorted(): CopilotTask[] {
+    return Array.from(this.tasks.values()).sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  private findLatestTaskBySessionId(sessionId: string): CopilotTask | null {
+    return this.listTasksSorted().find(task => task.sessionId === sessionId) || null
+  }
+
+  private findTaskForRun(sessionId: string, runId: string): CopilotTask | null {
+    return this.listTasksSorted().find(
+      task => task.sessionId === sessionId && task.lastRunId === runId,
+    ) || null
+  }
+
+  private emitTaskEvent(type: string, task: CopilotTask): void {
+    this.sendToRenderer('copilot:task-event', {
+      type,
+      task: { ...task },
+    })
+  }
+
+  private persistTask(task: CopilotTask, eventType?: string): void {
+    this.tasks.set(task.id, task)
+    saveTask(this.dataDir, task)
+    if (eventType) {
+      this.emitTaskEvent(eventType, task)
+    }
+  }
+
+  private flushTaskChunks(taskId: string): void {
+    const pending = this.pendingTaskChunks.get(taskId)
+    if (!pending) return
+    const timer = this.pendingTaskChunkTimers.get(taskId)
+    if (timer) {
+      clearTimeout(timer)
+    }
+
+    const task = this.tasks.get(taskId)
+    if (!task || !task.messages) {
+      this.pendingTaskChunks.delete(taskId)
+      this.pendingTaskChunkTimers.delete(taskId)
+      return
+    }
+
+    task.messages = applyTaskStreamChunks(task.messages, pending.runId, pending.chunks)
+    this.pendingTaskChunks.delete(taskId)
+    this.pendingTaskChunkTimers.delete(taskId)
+    this.persistTask(task, 'updated')
+  }
+
+  private queueTaskChunk(task: CopilotTask, runId: string, chunk: StreamChunk): void {
+    const pending = this.pendingTaskChunks.get(task.id)
+    if (pending) {
+      pending.chunks.push(chunk)
+    } else {
+      this.pendingTaskChunks.set(task.id, { runId, chunks: [chunk] })
+    }
+
+    if (this.pendingTaskChunkTimers.has(task.id)) return
+
+    const timer = setTimeout(() => {
+      this.flushTaskChunks(task.id)
+    }, TASK_CHUNK_FLUSH_MS)
+    this.pendingTaskChunkTimers.set(task.id, timer)
+  }
+
+  private flushAllTaskChunks(): void {
+    for (const taskId of Array.from(this.pendingTaskChunks.keys())) {
+      this.flushTaskChunks(taskId)
+    }
+  }
+
+  private getReusableSessionState(sessionId?: string): { messages: Message[]; sessionMemory: SessionMemory | null } {
+    if (!sessionId) {
+      return { messages: [], sessionMemory: null }
+    }
+
+    const latestTask = this.findLatestTaskBySessionId(sessionId)
+    return {
+      messages: latestTask?.messages ? [...latestTask.messages] : [],
+      sessionMemory: latestTask?.sessionMemory || null,
+    }
+  }
+
+  private summarizeTask(task: CopilotTask): CopilotTask {
+    const extracted = extractTaskResult(task.messages || [])
+
+    if (extracted.finalResponse) {
+      task.finalResponse = extracted.finalResponse
+    }
+
+    if (extracted.summary) {
+      task.summary = extracted.summary
+    } else if (!task.summary) {
+      task.summary = task.status === 'completed'
+        ? 'Task completed successfully'
+        : task.status === 'cancelled'
+          ? 'Cancelled by user'
+          : `Task ended with status: ${task.status}`
+    }
+
+    return task
+  }
+
+  private buildTaskResultMessage(task: CopilotTask): string {
+    const resultBody = task.finalResponse || task.summary || ''
+    const conciseResult = resultBody.length > 500
+      ? task.summary || `${resultBody.slice(0, 500).trim()}...`
+      : resultBody
+
+    if (task.status === 'completed') {
+      return conciseResult
+        ? `✅ 任务「${task.name}」已完成。\n\n${conciseResult}`
+        : `✅ 任务「${task.name}」已完成。`
+    }
+
+    if (task.status === 'cancelled') {
+      return `⏹️ 任务「${task.name}」已取消。`
+    }
+
+    return conciseResult
+      ? `❌ 任务「${task.name}」执行失败。\n\n${conciseResult}`
+      : `❌ 任务「${task.name}」执行失败。`
+  }
+
+  private normalizeLoadedTask(task: CopilotTask): CopilotTask | null {
+    const now = Date.now()
+    const age = now - (task.completedAt || task.createdAt)
+    const isExpired = age > COMPLETED_TASK_RETENTION_MS
+
+    if (isExpired && task.status !== 'running' && task.status !== 'queued') {
+      deleteTaskFile(this.dataDir, task.id)
+      return null
+    }
+
+    if (task.status === 'running' || task.status === 'queued') {
+      task.status = 'failed'
+      task.completedAt = now
+      if (!task.summary) {
+        task.summary = 'Task stopped because the app was restarted.'
+      }
+      task.messages = completeTaskRun(task.messages || [], task.lastRunId || '')
+      this.summarizeTask(task)
+      saveTask(this.dataDir, task)
+    }
+
+    return task
+  }
+
+  onWorkerStream(sessionId: string, runId: string, chunk: StreamChunk): void {
+    const task = this.findTaskForRun(sessionId, runId)
+    if (!task || !task.messages) return
+    this.queueTaskChunk(task, runId, chunk)
+  }
+
+  onWorkerMemoryUpdate(sessionId: string, runId: string, memory: SessionMemory | null): void {
+    const task = this.findTaskForRun(sessionId, runId)
+    if (!task) return
+
+    task.sessionMemory = memory
+    this.persistTask(task, 'updated')
+  }
+
+  onWorkerError(sessionId: string, runId: string, error: string): void {
+    const task = this.findTaskForRun(sessionId, runId)
+    if (!task || !task.messages) return
+
+    this.flushTaskChunks(task.id)
+    task.messages = applyTaskError(task.messages, runId, error, Date.now())
+    this.persistTask(task, 'updated')
+  }
+
   // ---------------------------------------------------------------------------
   // Task dispatch (called by copilot tools via executeCopilotTool)
   // ---------------------------------------------------------------------------
@@ -198,44 +386,38 @@ ${contextBlock}`
   }): Promise<CopilotTask> {
     const taskId = uuidv4().replace(/-/g, '').substring(0, 12)
     const taskType = (args.task_type === 'persistent' ? 'persistent' : 'temporary') as 'temporary' | 'persistent'
-
-    // Session reuse: if reuse_session_id provided, use that session (maintains context)
-    // Otherwise create a new session
-    const sessionId = args.reuse_session_id || `copilot-task-${taskId}`
-    const isReuse = !!args.reuse_session_id
+    const requestedSessionId = args.reuse_session_id
+    const shouldForkRunningSession = requestedSessionId
+      ? this.workerAgent.isSessionRunning(requestedSessionId)
+      : false
+    const sessionId = requestedSessionId && !shouldForkRunningSession
+      ? requestedSessionId
+      : `copilot-task-${taskId}`
+    const reusableState = this.getReusableSessionState(requestedSessionId)
+    const runId = uuidv4()
+    const now = Date.now()
 
     const task: CopilotTask = {
       id: taskId,
-      name: args.description.substring(0, 50),
+      name: args.description.substring(0, 50) || 'Task',
       sessionId,
       description: args.description,
       status: 'queued',
       taskType,
       topic: args.topic,
-      createdAt: Date.now(),
+      createdAt: now,
       workspace: args.workspace,
-      skills: typeof args.skills === 'string' ? (args.skills as string).split(',').map(s => s.trim()) : args.skills,
+      skills: args.skills,
+      messages: buildTaskRunMessages(reusableState.messages, args.description, runId, now),
+      sessionMemory: reusableState.sessionMemory,
+      lastRunId: runId,
     }
 
-    this.tasks.set(taskId, task)
-    saveTask(this.dataDir, task)
-
-    // Notify renderer about task creation
-    this.sendToRenderer('copilot:task-event', {
-      type: 'created',
-      task: { ...task },
-    })
+    this.persistTask(task, 'created')
 
     // Start the worker session
     task.status = 'running'
-    saveTask(this.dataDir, task)
-
-    this.sendToRenderer('copilot:task-event', {
-      type: 'started',
-      task: { ...task },
-    })
-
-    const runId = uuidv4()
+    this.persistTask(task, 'started')
 
     try {
       // Get enabled skills so the worker can use them
@@ -256,29 +438,26 @@ ${contextBlock}`
         apiConfig: this.apiConfig,
         permissionMode: 'accept-edit',
         workspacePath: args.workspace || null,
-        messages: [],
+        messages: reusableState.messages,
+        sessionMemory: reusableState.sessionMemory,
         enabledSkills,
       })
     } catch (err: any) {
       task.status = 'failed'
       task.completedAt = Date.now()
       task.summary = `Failed to start: ${err.message || String(err)}`
-      saveTask(this.dataDir, task)
-
-      this.sendToRenderer('copilot:task-event', {
-        type: 'failed',
-        task: { ...task },
-      })
+      task.messages = applyTaskError(task.messages || [], runId, err.message || String(err), Date.now())
+      this.persistTask(task, 'failed')
     }
 
     return task
   }
 
   listTasks(): CopilotTask[] {
-    return Array.from(this.tasks.values()).sort((a, b) => b.createdAt - a.createdAt)
+    return this.listTasksSorted()
   }
 
-  getTaskResult(taskId: string): { status: string; summary?: string } {
+  getTaskResult(taskId: string): { status: string; summary?: string; result?: string; sessionId?: string } {
     const task = this.tasks.get(taskId)
     if (!task) {
       return { status: 'not_found' }
@@ -286,6 +465,8 @@ ${contextBlock}`
     return {
       status: task.status,
       summary: task.summary,
+      result: task.finalResponse,
+      sessionId: task.sessionId,
     }
   }
 
@@ -318,12 +499,8 @@ ${contextBlock}`
     task.status = 'cancelled'
     task.completedAt = Date.now()
     task.summary = 'Cancelled by user'
-    saveTask(this.dataDir, task)
-
-    this.sendToRenderer('copilot:task-event', {
-      type: 'cancelled',
-      task: { ...task },
-    })
+    task.messages = completeTaskRun(task.messages || [], task.lastRunId || '')
+    this.persistTask(task, 'cancelled')
 
     return true
   }
@@ -335,46 +512,22 @@ ${contextBlock}`
   onWorkerComplete(sessionId: string, status: string): void {
     for (const task of this.tasks.values()) {
       if (task.sessionId === sessionId && task.status === 'running') {
+        this.flushTaskChunks(task.id)
+
         task.status = status === 'completed' ? 'completed' : 'failed'
         task.completedAt = Date.now()
-        if (!task.summary) {
-          task.summary = status === 'completed'
-            ? 'Task completed successfully'
-            : `Task ended with status: ${status}`
-        }
-        saveTask(this.dataDir, task)
-
-        this.sendToRenderer('copilot:task-event', {
-          type: task.status === 'completed' ? 'completed' : 'failed',
-          task: { ...task },
-        })
+        task.messages = completeTaskRun(task.messages || [], task.lastRunId || '')
+        this.summarizeTask(task)
+        this.persistTask(task, task.status === 'completed' ? 'completed' : 'failed')
 
         // Inject task result directly into the copilot conversation
-        // This avoids the complexity of triggering another orchestrator run
         const reportRunId = `copilot-report-${task.id}`
-        const resultSummary = status === 'completed'
-          ? `✅ 任务「${task.name}」已完成。`
-          : `❌ 任务「${task.name}」执行失败。`
-
-        // Send a "start new run" signal so the renderer creates a message slot
         this.sendToRenderer('copilot:task-result', {
           runId: reportRunId,
           taskId: task.id,
-          content: resultSummary,
+          content: this.buildTaskResultMessage(task),
           status: task.status,
         })
-
-        // Auto-cleanup temporary tasks after a short delay
-        if (task.taskType === 'temporary') {
-          setTimeout(() => {
-            this.tasks.delete(task.id)
-            deleteTaskFile(this.dataDir, task.id)
-            this.sendToRenderer('copilot:task-event', {
-              type: 'removed',
-              task: { id: task.id },
-            })
-          }, 5000) // 5 second delay so user can see the result
-        }
         break
       }
     }
@@ -394,7 +547,12 @@ ${contextBlock}`
 
   async loadData(): Promise<{ messages: any[]; tasks: CopilotTask[] }> {
     const conversation = loadMainConversation(this.dataDir)
+    if (conversation.normalized) {
+      saveMainConversation(this.dataDir, conversation.messages)
+    }
     const tasks = loadTasks(this.dataDir)
+      .map(task => this.normalizeLoadedTask(task))
+      .filter((task): task is CopilotTask => task !== null)
 
     // Populate in-memory task map
     this.tasks.clear()
@@ -408,12 +566,19 @@ ${contextBlock}`
     }
   }
 
-  async saveData(messages: any[], tasks: CopilotTask[]): Promise<void> {
+  async saveData(messages: any[], _tasks?: CopilotTask[]): Promise<void> {
+    this.flushAllTaskChunks()
     saveMainConversation(this.dataDir, messages)
 
-    // Sync task files
-    for (const task of tasks) {
-      this.tasks.set(task.id, task)
+    for (const task of this.tasks.values()) {
+      saveTask(this.dataDir, task)
+    }
+  }
+
+  /** Synchronous save for shutdown — flushes task chunks and persists all tasks */
+  flushAndSave(): void {
+    this.flushAllTaskChunks()
+    for (const task of this.tasks.values()) {
       saveTask(this.dataDir, task)
     }
   }
