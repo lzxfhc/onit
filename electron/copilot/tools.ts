@@ -10,15 +10,16 @@ export const COPILOT_TOOLS: AgentToolDef[] = [
     type: 'function',
     function: {
       name: 'dispatch_task',
-      description: 'Create a new task and route it to a worker session for execution. Use this for tasks that require file operations, command execution, code analysis, or any multi-step work. Do NOT use this for simple questions you can answer directly.',
+      description: 'Dispatch a task to a worker session. Can reuse an existing session (to maintain context) or create a new one. For simple one-shot tasks, set task_type="temporary". For recurring/complex topics, set task_type="persistent".',
       parameters: {
         type: 'object',
         properties: {
           description: { type: 'string', description: 'Clear description of the task for the worker agent to execute' },
-          session_hint: { type: 'string', description: 'Optional: session ID to route to an existing worker session' },
+          topic: { type: 'string', description: 'Topic category for grouping, e.g. "weather", "code-review", "research". Used to find matching existing sessions.' },
+          reuse_session_id: { type: 'string', description: 'If routing to an existing session, provide its session ID (from list_tasks)' },
+          task_type: { type: 'string', description: '"temporary" for simple one-shot tasks (cleaned up after), "persistent" for recurring topics (default: "temporary")' },
           workspace: { type: 'string', description: 'Optional: working directory path for the task' },
           skills: { type: 'string', description: 'Optional: comma-separated skill names to enable for this task' },
-          priority: { type: 'string', description: 'Task priority: "normal" or "urgent" (default: "normal")' },
         },
         required: ['description'],
       },
@@ -114,10 +115,11 @@ export async function executeCopilotTool(
       case 'dispatch_task': {
         const task = await manager.dispatchTask({
           description: args.description || '',
-          session_hint: args.session_hint,
+          topic: args.topic,
+          reuse_session_id: args.reuse_session_id,
+          task_type: args.task_type,
           workspace: args.workspace,
           skills: args.skills ? String(args.skills).split(',').map((s: string) => s.trim()) : undefined,
-          priority: args.priority,
         })
         return {
           success: true,

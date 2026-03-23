@@ -91,18 +91,23 @@ For each user message, follow this logic:
 5. None of the above -> Treat as general conversation
 
 ## Your Tools
-- dispatch_task: Create a worker task for complex operations (file work, code analysis, etc.)
-- list_tasks: Check active and recent tasks
+- dispatch_task: Dispatch a task to a worker session. Set topic for grouping, reuse_session_id to route to existing session, task_type to control lifecycle.
+- list_tasks: Check active and recent tasks. Shows reusable sessions.
 - get_task_result: Get results of completed tasks
 - check_task_status: Check progress of running tasks
 - cancel_task: Cancel a running task
 - web_search: Quick web search for simple queries (avoid dispatching tasks for simple lookups)
 
+## Session Management Strategy
+- **Session reuse**: When the user's request relates to an existing topic (e.g., "weather", "code-review"), route it to the EXISTING session by setting reuse_session_id. This preserves conversation context. Check the "Reusable Sessions" list in Current Context below.
+- **Temporary tasks**: Simple one-shot tasks (quick search, single file check) → set task_type="temporary". These are cleaned up after completion.
+- **Persistent tasks**: Recurring topics or complex multi-step work → set task_type="persistent" with a topic. These sessions are preserved for future reuse.
+- **Topic naming**: Use short, consistent topic names: "weather", "code-review", "research", "file-management", etc.
+
 ## Important Rules
 - CRITICAL: You MUST output a brief text acknowledgment to the user BEFORE calling any tool. For example, output "好的，我来帮你查一下。" FIRST, then in the SAME turn call dispatch_task or web_search. The user must see your acknowledgment immediately, not a silent tool call. This is the most important UX rule.
 - NEVER directly operate on the user's file system. Delegate to worker tasks via dispatch_task.
 - Do NOT fabricate information. If you don't know something, say so or search for it.
-- Do NOT automatically execute dangerous operations without the user's request.
 - When multiple tasks are requested, acknowledge them all, then dispatch them.
 - Keep the user informed about task progress without being verbose.
 - Respond in the same language the user uses.
@@ -185,13 +190,19 @@ ${contextBlock}`
 
   async dispatchTask(args: {
     description: string
-    session_hint?: string
+    topic?: string
+    reuse_session_id?: string
+    task_type?: string
     workspace?: string
     skills?: string[]
-    priority?: string
   }): Promise<CopilotTask> {
     const taskId = uuidv4().replace(/-/g, '').substring(0, 12)
-    const sessionId = `copilot-task-${args.session_hint || taskId}`
+    const taskType = (args.task_type === 'persistent' ? 'persistent' : 'temporary') as 'temporary' | 'persistent'
+
+    // Session reuse: if reuse_session_id provided, use that session (maintains context)
+    // Otherwise create a new session
+    const sessionId = args.reuse_session_id || `copilot-task-${taskId}`
+    const isReuse = !!args.reuse_session_id
 
     const task: CopilotTask = {
       id: taskId,
@@ -199,10 +210,11 @@ ${contextBlock}`
       sessionId,
       description: args.description,
       status: 'queued',
+      taskType,
+      topic: args.topic,
       createdAt: Date.now(),
       workspace: args.workspace,
-      skills: args.skills,
-      priority: (args.priority === 'urgent' ? 'urgent' : 'normal') as 'normal' | 'urgent',
+      skills: typeof args.skills === 'string' ? (args.skills as string).split(',').map(s => s.trim()) : args.skills,
     }
 
     this.tasks.set(taskId, task)
@@ -351,6 +363,18 @@ ${contextBlock}`
           content: resultSummary,
           status: task.status,
         })
+
+        // Auto-cleanup temporary tasks after a short delay
+        if (task.taskType === 'temporary') {
+          setTimeout(() => {
+            this.tasks.delete(task.id)
+            deleteTaskFile(this.dataDir, task.id)
+            this.sendToRenderer('copilot:task-event', {
+              type: 'removed',
+              task: { id: task.id },
+            })
+          }, 5000) // 5 second delay so user can see the result
+        }
         break
       }
     }

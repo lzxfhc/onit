@@ -166,6 +166,8 @@ export default function App() {
       const copilotStore = useCopilotStore.getState()
       if (data.type === 'created') {
         copilotStore.addTask(data.task)
+      } else if (data.type === 'removed') {
+        copilotStore.removeTask(data.task?.id || data.taskId)
       } else {
         copilotStore.updateTask(data.task?.id || data.taskId, data.task || data.updates || {})
       }

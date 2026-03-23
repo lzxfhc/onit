@@ -170,6 +170,8 @@ export interface CopilotTask {
   description: string
   status: CopilotTaskStatus
   sessionId: string
+  taskType: 'temporary' | 'persistent'
+  topic?: string
   createdAt: number
   completedAt?: number
   summary?: string

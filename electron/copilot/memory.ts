@@ -7,6 +7,10 @@ export interface CopilotTask {
   sessionId: string
   description: string
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  /** Task lifecycle: temporary tasks are cleaned up after completion */
+  taskType: 'temporary' | 'persistent'
+  /** Topic/category for session grouping and reuse */
+  topic?: string
   createdAt: number
   completedAt?: number
   summary?: string
@@ -118,41 +122,43 @@ export function buildContextInjection(tasks: CopilotTask[]): string {
     return '\n## Current Context\n\nNo active or recent tasks.\n'
   }
 
-  // Take at most 10 tasks
-  const relevantTasks = tasks.slice(0, 10)
-
-  const activeTasks = relevantTasks.filter(t => t.status === 'running' || t.status === 'pending')
+  const relevantTasks = tasks.slice(0, 15)
+  const activeTasks = relevantTasks.filter(t => t.status === 'running' || t.status === 'queued')
   const completedTasks = relevantTasks.filter(t => t.status === 'completed')
-  const failedTasks = relevantTasks.filter(t => t.status === 'failed' || t.status === 'cancelled')
+
+  // Persistent sessions that can be reused (have topic and are completed or running)
+  const reusableSessions = relevantTasks
+    .filter(t => t.taskType === 'persistent' && t.topic)
+    .reduce((acc, t) => {
+      if (!acc.has(t.topic!)) acc.set(t.topic!, t)
+      return acc
+    }, new Map<string, CopilotTask>())
 
   const lines: string[] = ['\n## Current Context\n']
+
+  // Show reusable sessions — the agent should route related tasks here
+  if (reusableSessions.size > 0) {
+    lines.push('### Reusable Sessions (route related tasks here instead of creating new)')
+    for (const [topic, t] of reusableSessions) {
+      lines.push(`- Topic: "${topic}" | Session: ${t.sessionId} | Status: ${t.status} | Last task: "${t.name}"`)
+    }
+    lines.push('')
+  }
 
   if (activeTasks.length > 0) {
     lines.push('### Active Tasks')
     for (const t of activeTasks) {
       const elapsed = Math.round((Date.now() - t.createdAt) / 60000)
-      const desc = t.description.substring(0, 200)
-      lines.push(`- [${t.id}] "${desc}" | Status: ${t.status} | Started: ${elapsed}m ago | Session: ${t.sessionId}`)
+      lines.push(`- [${t.id}] "${t.name}" | ${t.topic ? `Topic: ${t.topic} | ` : ''}Status: ${t.status} | ${elapsed}m ago | Session: ${t.sessionId}`)
     }
     lines.push('')
   }
 
   if (completedTasks.length > 0) {
     lines.push('### Recently Completed')
-    for (const t of completedTasks) {
-      const desc = t.description.substring(0, 100)
-      const summary = t.summary ? t.summary.substring(0, 200) : 'No summary'
-      const completedAt = t.completedAt ? new Date(t.completedAt).toLocaleTimeString() : 'unknown'
-      lines.push(`- [${t.id}] "${desc}" | Completed: ${completedAt} | Summary: ${summary}`)
-    }
-    lines.push('')
-  }
-
-  if (failedTasks.length > 0) {
-    lines.push('### Failed/Cancelled')
-    for (const t of failedTasks) {
-      const desc = t.description.substring(0, 100)
-      lines.push(`- [${t.id}] "${desc}" | Status: ${t.status}`)
+    for (const t of completedTasks.slice(0, 5)) {
+      const summary = t.summary ? t.summary.substring(0, 200) : ''
+      lines.push(`- [${t.id}] "${t.name}" | ${t.topic ? `Topic: ${t.topic} | ` : ''}${summary}`)
     }
     lines.push('')
   }
