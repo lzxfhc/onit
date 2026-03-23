@@ -117,6 +117,13 @@ export const useCopilotStore = create<CopilotState>((set, get) => ({
       const lastIdx = messages.length - 1
       let last = messages[lastIdx]
       if (last.role !== 'assistant') return state
+
+      // Auto-acknowledge: if first meaningful output is a tool call and no content yet,
+      // prepend an acknowledgment so the user sees immediate feedback
+      if (!last.content && chunks.some(c => c.type === 'tool-call-start') && !chunks.some(c => c.type === 'content')) {
+        last = { ...last, content: '好的，我来处理。\n\n' }
+      }
+
       for (const chunk of chunks) {
         last = applyChunkToMessage(last, chunk)
       }

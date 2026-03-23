@@ -167,9 +167,21 @@ export default function App() {
       if (data.type === 'created') {
         copilotStore.addTask(data.task)
       } else {
-        // started, completed, failed, cancelled — all update the task
         copilotStore.updateTask(data.task?.id || data.taskId, data.task || data.updates || {})
       }
+    })
+
+    // Task result: inject completed task result as an assistant message
+    const unsubCopilotTaskResult = window.electronAPI.onCopilotTaskResult?.((data: any) => {
+      const copilotStore = useCopilotStore.getState()
+      copilotStore.addMessage({
+        id: uuidv4(),
+        role: 'assistant',
+        content: data.content || '',
+        timestamp: Date.now(),
+        runId: data.runId,
+      })
+      copilotStore.saveCopilotData()
     })
 
     return () => {
@@ -185,6 +197,7 @@ export default function App() {
       unsubCopilotComplete?.()
       unsubCopilotError?.()
       unsubCopilotTaskEvent?.()
+      unsubCopilotTaskResult?.()
     }
   }, [isLoggedIn, loadSessions, loadScheduledTasks, loadSkills, flushCopilotChunks, scheduleCopilotFlush])
 

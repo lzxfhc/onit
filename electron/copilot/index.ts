@@ -337,12 +337,20 @@ ${contextBlock}`
           task: { ...task },
         })
 
-        // Auto-trigger the orchestrator to report the result to the user
-        if (this.apiConfig && status === 'completed') {
-          const reportRunId = `copilot-report-${task.id}`
-          const reportMessage = `[System notification: Task "${task.name}" has completed. Use get_task_result to retrieve the result and report it to the user.]`
-          this.startMainAgent(reportMessage, reportRunId, this.apiConfig).catch(() => {})
-        }
+        // Inject task result directly into the copilot conversation
+        // This avoids the complexity of triggering another orchestrator run
+        const reportRunId = `copilot-report-${task.id}`
+        const resultSummary = status === 'completed'
+          ? `✅ 任务「${task.name}」已完成。`
+          : `❌ 任务「${task.name}」执行失败。`
+
+        // Send a "start new run" signal so the renderer creates a message slot
+        this.sendToRenderer('copilot:task-result', {
+          runId: reportRunId,
+          taskId: task.id,
+          content: resultSummary,
+          status: task.status,
+        })
         break
       }
     }
