@@ -90,15 +90,23 @@ export const useCopilotStore = create<CopilotState>((set, get) => ({
   })),
 
   completeRun: (runId, result) => set(state => {
-    if (state.activeRunId !== runId) return state
+    // Accept completion for current run OR any run that matches a streaming message
+    const isCurrentRun = state.activeRunId === runId
     const messages = [...state.messages]
-    if (messages.length > 0) {
-      const last = messages[messages.length - 1]
-      if (last.role === 'assistant' && last.isStreaming) {
-        messages[messages.length - 1] = { ...last, isStreaming: false }
+
+    // Always clear isStreaming on ALL streaming assistant messages
+    let changed = false
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant' && messages[i].isStreaming) {
+        messages[i] = { ...messages[i], isStreaming: false }
+        changed = true
       }
     }
-    return { messages, isRunning: false, activeRunId: null }
+
+    if (isCurrentRun) {
+      return { messages, isRunning: false, activeRunId: null }
+    }
+    return changed ? { messages } : state
   }),
 
   applyStreamChunks: (runId, chunks) => {
