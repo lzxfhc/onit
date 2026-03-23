@@ -19,7 +19,7 @@ export default function CopilotChat() {
     const copilotStore = useCopilotStore.getState()
     const settingsStore = useSettingsStore.getState()
 
-    if (copilotStore.isRunning) return
+    // Allow sending even if running — InputBox handles stop-then-send
 
     const runId = `copilot-${uuidv4()}`
     const now = Date.now()
@@ -42,11 +42,12 @@ export default function CopilotChat() {
       runId,
     }
 
+    // Capture conversation history BEFORE startRun modifies the messages array
+    const prevMessages = [...copilotStore.messages]
+
     copilotStore.startRun(userMsg, assistantMsg, runId)
 
     try {
-      // Pass the pre-run conversation history so the orchestrator keeps the full dialogue context.
-      const prevMessages = copilotStore.messages
       await window.electronAPI.startCopilot({
         message: trimmed,
         runId,
@@ -54,15 +55,9 @@ export default function CopilotChat() {
         messages: prevMessages,
       })
     } catch (err: any) {
-      copilotStore.completeRun(runId, 'error')
-      copilotStore.addMessage({
-        id: uuidv4(),
-        role: 'assistant',
-        content: `Failed to start copilot: ${err.message}`,
-        timestamp: Date.now(),
-        runId,
-      })
-      copilotStore.saveCopilotData()
+      // IPC call itself failed — update the streaming assistant message with error
+      useCopilotStore.getState().completeRun(runId, 'error')
+      useCopilotStore.getState().saveCopilotData()
     }
   }, [])
 
