@@ -528,6 +528,18 @@ ${contextBlock}`
           content: this.buildTaskResultMessage(task),
           status: task.status,
         })
+
+        // Auto-cleanup temporary tasks after showing result
+        if (task.taskType === 'temporary' && task.status === 'completed') {
+          setTimeout(() => {
+            this.tasks.delete(task.id)
+            deleteTaskFile(this.dataDir, task.id)
+            this.sendToRenderer('copilot:task-event', {
+              type: 'removed',
+              task: { id: task.id },
+            })
+          }, 8000)
+        }
         break
       }
     }
