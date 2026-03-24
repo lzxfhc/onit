@@ -1,4 +1,4 @@
-import { useCallback } from 'react'
+import { useCallback, useMemo } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import MessageList from '../Chat/MessageList'
 import CopilotInputBox from './CopilotInputBox'
@@ -80,13 +80,15 @@ export default function CopilotChat() {
     }
   }, [])
 
-  // Show greeting when conversation is empty
-  const displayMessages = messages.length > 0 ? messages : [{
+  // Show greeting when conversation is empty (memoized to avoid re-render)
+  const greetingMessage = useMemo<Message[]>(() => [{
     id: 'greeting',
     role: 'assistant' as const,
     content: t.copilot.greeting,
     timestamp: Date.now(),
-  }]
+  }], [t.copilot.greeting])
+
+  const displayMessages = messages.length > 0 ? messages : greetingMessage
 
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">
