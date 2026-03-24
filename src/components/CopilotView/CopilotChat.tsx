@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react'
+import { useCallback } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import MessageList from '../Chat/MessageList'
 import CopilotInputBox from './CopilotInputBox'
@@ -19,7 +19,7 @@ export default function CopilotChat() {
     const copilotStore = useCopilotStore.getState()
     const settingsStore = useSettingsStore.getState()
 
-    // Allow sending even if running — InputBox handles stop-then-send
+    if (copilotStore.isRunning) return
 
     const runId = `copilot-${uuidv4()}`
     const now = Date.now()
@@ -42,12 +42,11 @@ export default function CopilotChat() {
       runId,
     }
 
-    // Capture conversation history BEFORE startRun modifies the messages array
-    const prevMessages = [...copilotStore.messages]
-
     copilotStore.startRun(userMsg, assistantMsg, runId)
 
     try {
+      // Pass the pre-run conversation history so the orchestrator keeps the full dialogue context.
+      const prevMessages = copilotStore.messages
       await window.electronAPI.startCopilot({
         message: trimmed,
         runId,
@@ -55,9 +54,15 @@ export default function CopilotChat() {
         messages: prevMessages,
       })
     } catch (err: any) {
-      // IPC call itself failed — update the streaming assistant message with error
-      useCopilotStore.getState().completeRun(runId, 'error')
-      useCopilotStore.getState().saveCopilotData()
+      copilotStore.completeRun(runId, 'error')
+      copilotStore.addMessage({
+        id: uuidv4(),
+        role: 'assistant',
+        content: `Failed to start copilot: ${err.message}`,
+        timestamp: Date.now(),
+        runId,
+      })
+      copilotStore.saveCopilotData()
     }
   }, [])
 
@@ -75,15 +80,13 @@ export default function CopilotChat() {
     }
   }, [])
 
-  // Show greeting when conversation is empty (stable reference to avoid re-renders)
-  const greetingMsg = useMemo(() => [{
+  // Show greeting when conversation is empty
+  const displayMessages = messages.length > 0 ? messages : [{
     id: 'greeting',
     role: 'assistant' as const,
     content: t.copilot.greeting,
-    timestamp: 0,
-  }], [t.copilot.greeting])
-
-  const displayMessages = messages.length > 0 ? messages : greetingMsg
+    timestamp: Date.now(),
+  }]
 
   return (
     <div className="flex-1 flex flex-col min-w-0 min-h-0">

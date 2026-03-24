@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { getT } from '../i18n'
 import type { Message, StreamChunk, CopilotTask, AppMode, ContentBlock } from '../types'
 
 interface CopilotState {
@@ -200,7 +201,7 @@ export const useCopilotStore = create<CopilotState>((set, get) => ({
       // Auto-acknowledge: if first meaningful output is a tool call and no content yet,
       // prepend an acknowledgment so the user sees immediate feedback
       if (!last.content && chunks.some(c => c.type === 'tool-call-start') && !chunks.some(c => c.type === 'content')) {
-        last = { ...last, content: '好的，我来处理。\n\n' }
+        last = { ...last, content: getT().copilot.autoAcknowledge }
       }
 
       for (const chunk of chunks) {

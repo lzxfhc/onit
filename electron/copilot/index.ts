@@ -306,23 +306,25 @@ ${contextBlock}`
 
   private buildTaskResultMessage(task: CopilotTask): string {
     const resultBody = task.finalResponse || task.summary || ''
-    const conciseResult = resultBody.length > 500
-      ? task.summary || `${resultBody.slice(0, 500).trim()}...`
+    const conciseResult = resultBody.length > 800
+      ? task.summary || `${resultBody.slice(0, 800).trim()}...`
       : resultBody
+
+    const label = task.name || task.description.substring(0, 50)
 
     if (task.status === 'completed') {
       return conciseResult
-        ? `✅ 任务「${task.name}」已完成。\n\n${conciseResult}`
-        : `✅ 任务「${task.name}」已完成。`
+        ? `✅ **${label}**\n\n${conciseResult}`
+        : `✅ **${label}** — done.`
     }
 
     if (task.status === 'cancelled') {
-      return `⏹️ 任务「${task.name}」已取消。`
+      return `⏹️ **${label}** — cancelled.`
     }
 
     return conciseResult
-      ? `❌ 任务「${task.name}」执行失败。\n\n${conciseResult}`
-      : `❌ 任务「${task.name}」执行失败。`
+      ? `❌ **${label}**\n\n${conciseResult}`
+      : `❌ **${label}** — failed.`
   }
 
   private normalizeLoadedTask(task: CopilotTask): CopilotTask | null {
@@ -399,7 +401,7 @@ ${contextBlock}`
 
     const task: CopilotTask = {
       id: taskId,
-      name: args.description.substring(0, 50) || 'Task',
+      name: args.description.substring(0, 50),
       sessionId,
       description: args.description,
       status: 'queued',
@@ -407,7 +409,7 @@ ${contextBlock}`
       topic: args.topic,
       createdAt: now,
       workspace: args.workspace,
-      skills: args.skills,
+      skills: typeof args.skills === 'string' ? (args.skills as string).split(',').map(s => s.trim()) : args.skills,
       messages: buildTaskRunMessages(reusableState.messages, args.description, runId, now),
       sessionMemory: reusableState.sessionMemory,
       lastRunId: runId,
@@ -528,18 +530,6 @@ ${contextBlock}`
           content: this.buildTaskResultMessage(task),
           status: task.status,
         })
-
-        // Auto-cleanup temporary tasks after showing result
-        if (task.taskType === 'temporary' && task.status === 'completed') {
-          setTimeout(() => {
-            this.tasks.delete(task.id)
-            deleteTaskFile(this.dataDir, task.id)
-            this.sendToRenderer('copilot:task-event', {
-              type: 'removed',
-              task: { id: task.id },
-            })
-          }, 8000)
-        }
         break
       }
     }
@@ -578,18 +568,11 @@ ${contextBlock}`
     }
   }
 
-  async saveData(messages: any[], _tasks?: CopilotTask[]): Promise<void> {
+  async saveData(messages: any[], _tasks: CopilotTask[]): Promise<void> {
     this.flushAllTaskChunks()
     saveMainConversation(this.dataDir, messages)
 
-    for (const task of this.tasks.values()) {
-      saveTask(this.dataDir, task)
-    }
-  }
-
-  /** Synchronous save for shutdown — flushes task chunks and persists all tasks */
-  flushAndSave(): void {
-    this.flushAllTaskChunks()
+    // Tasks are owned and persisted by the main process to avoid transcript races.
     for (const task of this.tasks.values()) {
       saveTask(this.dataDir, task)
     }

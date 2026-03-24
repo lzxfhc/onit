@@ -270,6 +270,7 @@ export const en: Translations = {
     viewDetail: 'View Detail',
     closeDetail: 'Close Detail',
     dispatching: 'Dispatching task...',
+    autoAcknowledge: 'OK, on it.\n\n',
     noTaskSelected: 'Select a task to view execution details',
     noTaskTranscript: 'No execution trace is available for this task yet.',
   },

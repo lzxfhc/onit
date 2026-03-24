@@ -522,7 +522,6 @@ app.on('second-instance', () => {
 
 app.on('window-all-closed', () => {
   copilotManager?.stopMainAgent()
-  copilotManager?.flushAndSave()
   schedulerManager?.shutdown()
   agentManager?.stopAll()
   if (process.platform !== 'darwin') {

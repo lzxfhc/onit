@@ -3,8 +3,7 @@ import { AGENT_TOOLS, executeTool } from '../agent/tools'
 import type { CopilotManager } from './index'
 
 // Reuse the exact web_search tool definition from agent/tools.ts
-const webSearchTool = AGENT_TOOLS.find(t => t.function.name === 'web_search')
-if (!webSearchTool) throw new Error('[Copilot] web_search tool not found in AGENT_TOOLS')
+const webSearchTool = AGENT_TOOLS.find(t => t.function.name === 'web_search')!
 
 export const COPILOT_TOOLS: AgentToolDef[] = [
   {

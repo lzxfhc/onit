@@ -14,21 +14,16 @@ export default function CopilotInputBox({ onSend, onStop, isRunning }: Props) {
   const [text, setText] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(() => {
     const trimmed = text.trim()
-    if (!trimmed) return
-
-    // If running, stop current run first then send new message
-    if (isRunning) {
-      await onStop()
-    }
-
+    if (!trimmed || isRunning) return
+    onSend(trimmed)
     setText('')
+    // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
-    onSend(trimmed)
-  }, [text, isRunning, onSend, onStop])
+  }, [text, isRunning, onSend])
 
   const handleKeyDown = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -63,7 +58,8 @@ export default function CopilotInputBox({ onSend, onStop, isRunning }: Props) {
             onChange={(e) => setText(e.target.value)}
             onKeyDown={handleKeyDown}
             onInput={handleInput}
-            placeholder={isRunning ? '输入以中断并发送新指令...' : t.copilot.inputPlaceholder}
+            placeholder={t.copilot.inputPlaceholder}
+            disabled={isRunning}
             rows={1}
             className="w-full resize-none rounded-lg border border-border-subtle bg-white px-3 py-2.5 text-sm text-charcoal placeholder:text-text-tertiary focus:outline-none focus:ring-2 focus:ring-accent/20 focus:border-accent transition-all duration-200 disabled:opacity-50"
             style={{ minHeight: '40px', maxHeight: '200px' }}
@@ -71,7 +67,7 @@ export default function CopilotInputBox({ onSend, onStop, isRunning }: Props) {
         </div>
 
         {/* Send / Stop button */}
-        {isRunning && !text.trim() ? (
+        {isRunning ? (
           <button
             onClick={() => onStop()}
             className="shrink-0 w-10 h-10 rounded-lg flex items-center justify-center bg-danger text-white hover:bg-red-600 transition-all"
@@ -88,7 +84,7 @@ export default function CopilotInputBox({ onSend, onStop, isRunning }: Props) {
                 ? 'bg-accent text-white hover:bg-accent-hover'
                 : 'bg-gray-100 text-text-tertiary cursor-not-allowed'
             }`}
-            title={isRunning ? 'Interrupt & Send' : 'Send'}
+            title="Send"
           >
             <Send className="w-4 h-4" />
           </button>
