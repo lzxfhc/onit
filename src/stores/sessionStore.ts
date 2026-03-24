@@ -497,8 +497,11 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
         if (!matchesRun && s.activeRunId !== runId) return s
 
-        if (matchesRun) {
-          messages[lastIndex] = { ...last, isStreaming: false }
+        // Clear isStreaming on ALL streaming assistant messages, not just the last one
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant' && messages[i].isStreaming) {
+            messages[i] = { ...messages[i], isStreaming: false }
+          }
         }
 
         const wasBackgroundRunning = s.isBackgroundRunning
