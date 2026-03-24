@@ -184,9 +184,9 @@ export function buildContextInjection(tasks: CopilotTask[]): string {
 
   // Show reusable sessions — the agent should route related tasks here
   if (reusableSessions.size > 0) {
-    lines.push('### Reusable Sessions (route related tasks here instead of creating new)')
+    lines.push('### Reusable Sessions (use reuse_session_id to route here)')
     for (const [topic, t] of reusableSessions) {
-      lines.push(`- Topic: "${topic}" | Session: ${t.sessionId} | Status: ${t.status} | Last task: "${t.name}"`)
+      lines.push(`- Topic: "${topic}" | reuse_session_id: "${t.sessionId}" | Last: "${t.name}"`)
     }
     lines.push('')
   }
