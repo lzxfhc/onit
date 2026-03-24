@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import { getT } from '../i18n'
 import type { Message, StreamChunk, CopilotTask, AppMode, ContentBlock } from '../types'
 
 interface CopilotState {
@@ -163,11 +162,17 @@ export const useCopilotStore = create<CopilotState>((set, get) => ({
     messages: [...state.messages, msg],
   })),
 
-  startRun: (userMsg, assistantMsg, runId) => set(state => ({
-    messages: [...state.messages, userMsg, assistantMsg],
-    isRunning: true,
-    activeRunId: runId,
-  })),
+  startRun: (userMsg, assistantMsg, runId) => set(state => {
+    // Clear any lingering isStreaming from previous runs before adding new messages
+    const cleaned = state.messages.map(m =>
+      m.role === 'assistant' && m.isStreaming ? { ...m, isStreaming: false } : m
+    )
+    return {
+      messages: [...cleaned, userMsg, assistantMsg],
+      isRunning: true,
+      activeRunId: runId,
+    }
+  }),
 
   completeRun: (runId, result) => set(state => {
     // Accept completion for current run OR any run that matches a streaming message
@@ -201,7 +206,7 @@ export const useCopilotStore = create<CopilotState>((set, get) => ({
       // Auto-acknowledge: if first meaningful output is a tool call and no content yet,
       // prepend an acknowledgment so the user sees immediate feedback
       if (!last.content && chunks.some(c => c.type === 'tool-call-start') && !chunks.some(c => c.type === 'content')) {
-        last = { ...last, content: getT().copilot.autoAcknowledge }
+        last = { ...last, content: '好的，我来处理。\n\n' }
       }
 
       for (const chunk of chunks) {
