@@ -198,6 +198,8 @@ ${contextBlock}`
     if (this.orchestratorAgent) {
       this.orchestratorAgent.stopAgent('copilot-main')
     }
+    // Flush buffered chunks and clear timers
+    this.flushAllTaskChunks()
   }
 
   private listTasksSorted(): CopilotTask[] {
