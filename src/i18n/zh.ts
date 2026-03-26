@@ -173,6 +173,7 @@ export const zh = {
     suggestion4: '查找磁盘上的大文件',
     scrollToBottom: '滚动到底部',
     thinking: '思考中...',
+    thinkingDone: '思考完成',
     you: '你',
     agent: 'Agent',
     input: '输入:',

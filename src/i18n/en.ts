@@ -175,6 +175,7 @@ export const en: Translations = {
     suggestion4: 'Find large files on disk',
     scrollToBottom: 'Scroll to bottom',
     thinking: 'Thinking...',
+    thinkingDone: 'Thought complete',
     you: 'You',
     agent: 'Agent',
     input: 'Input:',
