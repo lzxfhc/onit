@@ -82,13 +82,15 @@ const MessageBubble = memo(function MessageBubble({ message }: Props) {
                 hour: '2-digit', minute: '2-digit',
               })}
             </span>
-            {message.isStreaming && (
-              <Loader2 className="w-3 h-3 animate-spin text-accent" />
-            )}
+            <span className="inline-flex w-3 h-3 items-center justify-center shrink-0">
+              {message.isStreaming ? (
+                <Loader2 className="w-3 h-3 animate-spin text-accent" />
+              ) : null}
+            </span>
           </div>
 
-          {message.thinking && (
-            <ThinkingBlock content={message.thinking} isStreaming={message.isStreaming} />
+          {(message.thinkingStatus === 'thinking' || !!message.thinking) && (
+            <ThinkingBlock content={message.thinking || ''} isThinking={message.thinkingStatus === 'thinking'} />
           )}
 
           {message.contentBlocks && message.contentBlocks.length > 0 ? (
@@ -272,28 +274,45 @@ function getToolSummaryLabel(name: string, t: Translations): string {
   return labels[name] || name
 }
 
-function ThinkingBlock({ content, isStreaming }: { content: string; isStreaming?: boolean }) {
+function ThinkingBlock({ content, isThinking }: { content: string; isThinking: boolean }) {
   const t = useT()
   const [expanded, setExpanded] = useState(false)
+  const hasContent = content.trim().length > 0
 
   return (
     <div className="mb-3">
       <button
-        onClick={() => setExpanded(prev => !prev)}
-        className="flex items-center gap-1.5 text-xs text-text-tertiary hover:text-text-secondary transition-colors"
+        onClick={() => {
+          if (!hasContent) return
+          setExpanded(prev => !prev)
+        }}
+        disabled={!hasContent}
+        className={`flex items-center gap-1.5 text-xs transition-colors ${
+          hasContent
+            ? 'text-text-tertiary hover:text-text-secondary'
+            : 'text-text-tertiary cursor-default'
+        }`}
       >
-        <Brain className="w-3.5 h-3.5" />
-        <span>{isStreaming ? t.chat.thinking : '思考完成'}</span>
-        {isStreaming && <Loader2 className="w-3 h-3 animate-spin" />}
-        <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
+        <Brain className="w-3.5 h-3.5 shrink-0" />
+        <span>{isThinking ? t.chat.thinking : t.chat.thinkingDone}</span>
+        <span className="inline-flex w-3 h-3 items-center justify-center shrink-0">
+          {isThinking ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+        </span>
+        <span className="inline-flex w-3 h-3 items-center justify-center shrink-0">
+          {hasContent ? (
+            <ChevronRight className={`w-3 h-3 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
+          ) : null}
+        </span>
       </button>
       <div className={`grid transition-[grid-template-rows] duration-200 ease-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}>
         <div className="overflow-hidden min-h-0">
-          <div className="mt-1.5 pl-5 border-l-2 border-border-light">
-            <p className="text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap">
-              {content}
-            </p>
-          </div>
+          {hasContent && (
+            <div className="mt-1.5 pl-5 border-l-2 border-border-light">
+              <p className="text-xs text-text-tertiary leading-relaxed whitespace-pre-wrap">
+                {content}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </div>

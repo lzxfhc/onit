@@ -195,6 +195,7 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
       role: 'assistant',
       content: '',
       timestamp: now,
+      thinkingStatus: 'thinking',
       isStreaming: true,
       toolCalls: [],
       contentBlocks: [],
@@ -294,4 +295,3 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
     </div>
   )
 }
-
