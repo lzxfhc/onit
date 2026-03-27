@@ -47,8 +47,10 @@
     "appId": "com.onit.app",
     "productName": "Onit",
     "electronDist": "node_modules/electron/dist",
+    "icon": "build/icon.png",
     "mac": {
-      "target": [
+      "icon": "build/icon.icns",
+     "target": [
         {
           "target": "dmg",
           "arch": [
