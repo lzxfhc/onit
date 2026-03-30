@@ -6,6 +6,7 @@ import https from 'https'
 import http from 'http'
 import { URL } from 'url'
 import { AgentToolDef, ToolExecutionResult, RiskLevel } from './types'
+import { isExtractableFile, extractFileContent } from '../utils/file-extract'
 
 export const AGENT_TOOLS: AgentToolDef[] = [
   {
@@ -653,7 +654,6 @@ export async function executeTool(
         }
 
         // Non-text files (PDF, DOCX, XLSX, images, etc.) → use unified extraction
-        const { isExtractableFile, extractFileContent } = require('../utils/file-extract')
         if (isExtractableFile(filePath)) {
           const result = await extractFileContent(filePath)
           const output = result.content

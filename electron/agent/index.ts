@@ -7,6 +7,7 @@ import { URL } from 'url'
 import { v4 as uuidv4 } from 'uuid'
 import { executeTool, AGENT_TOOLS, getToolRiskLevel } from './tools'
 import { AgentMessage } from './types'
+import { extractFileContent } from '../utils/file-extract'
 import type { LocalModelManager } from '../local-model/index'
 
 interface SkillData {
@@ -395,7 +396,6 @@ export class AgentManager {
   }
 
   private async buildAttachedFileMessages(attachedFiles: string[]): Promise<AgentMessage[]> {
-    const { extractFileContent } = require('../utils/file-extract')
     const messages: AgentMessage[] = []
     let totalChars = 0
 
