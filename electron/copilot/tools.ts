@@ -79,6 +79,21 @@ export const COPILOT_TOOLS: AgentToolDef[] = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'search_tasks',
+      description: 'Search past tasks by keyword. Use when the user asks about previous work and the specific task is not immediately visible in context.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search keyword(s) to match against task names, descriptions, topics, and summaries' },
+          limit: { type: 'number', description: 'Max results to return (default 5)' },
+        },
+        required: ['query'],
+      },
+    },
+  },
   // Reuse exact web_search definition from agent/tools.ts
   webSearchTool,
 ]
@@ -176,6 +191,18 @@ export async function executeCopilotTool(
         return {
           success: true,
           output: JSON.stringify({ cancelled }),
+          riskLevel: 'safe',
+        }
+      }
+
+      case 'search_tasks': {
+        const results = manager.searchTasks(args.query || '', args.limit || 5)
+        return {
+          success: true,
+          output: JSON.stringify(results.map((t: any) => ({
+            id: t.id, name: t.name, topic: t.topic, status: t.status,
+            summary: t.summary, sessionId: t.sessionId,
+          }))),
           riskLevel: 'safe',
         }
       }

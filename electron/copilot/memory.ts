@@ -32,6 +32,7 @@ interface MainConversationData {
   messages: any[]
   lastSaved: number
   normalized?: boolean
+  sessionMemory?: { content: string; updatedAt: number; version?: number } | null
 }
 
 function normalizeMainConversationMessages(messages: any[]): { messages: any[]; normalized: boolean } {
@@ -86,6 +87,7 @@ export function loadMainConversation(dataDir: string): MainConversationData {
         messages: normalized.messages,
         lastSaved: typeof parsed.lastSaved === 'number' ? parsed.lastSaved : 0,
         normalized: normalized.normalized,
+        sessionMemory: parsed.sessionMemory || null,
       }
     }
   } catch {
@@ -97,7 +99,11 @@ export function loadMainConversation(dataDir: string): MainConversationData {
 /**
  * Save the main copilot conversation to disk (atomic: write tmp then rename).
  */
-export function saveMainConversation(dataDir: string, messages: any[]): void {
+export function saveMainConversation(
+  dataDir: string,
+  messages: any[],
+  sessionMemory?: { content: string; updatedAt: number; version?: number } | null,
+): void {
   const dir = path.join(dataDir, 'copilot')
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true })
@@ -107,6 +113,7 @@ export function saveMainConversation(dataDir: string, messages: any[]): void {
   const data: MainConversationData = {
     messages,
     lastSaved: Date.now(),
+    sessionMemory: sessionMemory || undefined,
   }
   fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2), 'utf-8')
   fs.renameSync(tmpPath, filePath)

@@ -58,6 +58,9 @@ export class CopilotManager {
   /** The orchestrator's own AgentManager (uses copilot tools + Onit prompt). */
   private orchestratorAgent: AgentManager | null = null
 
+  /** Orchestrator's compressed memory — survives across AgentManager rebuilds. */
+  private orchestratorSessionMemory: { content: string; updatedAt: number; version?: number } | null = null
+
   /** In-memory task registry. Loaded from disk on startup, saved on changes. */
   private tasks: Map<string, CopilotTask> = new Map()
 
@@ -175,8 +178,15 @@ ${contextBlock}`
     this.orchestratorAgent = new AgentManager(
       // Forward orchestrator streaming events with copilot:* channels
       (channel: string, data: any) => {
-        // Map agent:stream -> copilot:stream, agent:complete -> copilot:complete, etc.
         const copilotChannel = channel.replace(/^agent:/, 'copilot:')
+        // Capture orchestrator's SessionMemory so it survives across rebuilds
+        if (channel === 'agent:memory-update' && data.memory) {
+          this.orchestratorSessionMemory = {
+            content: data.memory.content,
+            updatedAt: data.memory.updatedAt || Date.now(),
+            version: data.memory.version,
+          }
+        }
         this.sendToRenderer(copilotChannel, data)
       },
       {
@@ -222,6 +232,7 @@ ${contextBlock}`
       permissionMode: 'full-access',
       workspacePath: null,
       messages: conversationHistory || [],
+      sessionMemory: this.orchestratorSessionMemory,
     })
   }
 
@@ -552,6 +563,22 @@ ${contextBlock}`
     }
   }
 
+  /** Keyword search across task names, descriptions, topics, summaries. */
+  searchTasks(query: string, limit: number = 5): CopilotTask[] {
+    const keywords = query.toLowerCase().split(/\s+/).filter(k => k.length > 0)
+    if (keywords.length === 0) return this.listTasksSorted().slice(0, limit)
+
+    return this.listTasksSorted()
+      .filter(task => {
+        const searchable = [
+          task.name, task.description, task.topic,
+          task.summary, task.finalResponse?.substring(0, 500),
+        ].filter(Boolean).join(' ').toLowerCase()
+        return keywords.some(kw => searchable.includes(kw))
+      })
+      .slice(0, limit)
+  }
+
   checkTaskStatus(taskId: string): { status: string; progress?: string } {
     const task = this.tasks.get(taskId)
     if (!task) {
@@ -630,7 +657,11 @@ ${contextBlock}`
   async loadData(): Promise<{ messages: any[]; tasks: CopilotTask[] }> {
     const conversation = loadMainConversation(this.dataDir)
     if (conversation.normalized) {
-      saveMainConversation(this.dataDir, conversation.messages)
+      saveMainConversation(this.dataDir, conversation.messages, conversation.sessionMemory)
+    }
+    // Restore orchestrator's SessionMemory from disk
+    if (conversation.sessionMemory) {
+      this.orchestratorSessionMemory = conversation.sessionMemory
     }
     const tasks = loadTasks(this.dataDir)
       .map(task => this.normalizeLoadedTask(task))
@@ -650,7 +681,7 @@ ${contextBlock}`
 
   async saveData(messages: any[], _tasks: CopilotTask[]): Promise<void> {
     this.flushAllTaskChunks()
-    saveMainConversation(this.dataDir, messages)
+    saveMainConversation(this.dataDir, messages, this.orchestratorSessionMemory)
 
     // Tasks are owned and persisted by the main process to avoid transcript races.
     for (const task of this.tasks.values()) {

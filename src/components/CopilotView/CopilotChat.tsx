@@ -45,8 +45,23 @@ export default function CopilotChat() {
     copilotStore.startRun(userMsg, assistantMsg, runId)
 
     try {
-      // Pass the pre-run conversation history so the orchestrator keeps the full dialogue context.
-      const prevMessages = copilotStore.messages
+      // Time-gap-aware context trimming:
+      // Recent → full context. Long gap → trimmed (SessionMemory covers the rest).
+      const allMessages = copilotStore.messages
+      const lastMsgTime = allMessages.length > 0
+        ? allMessages[allMessages.length - 1].timestamp
+        : 0
+      const gapMs = Date.now() - lastMsgTime
+
+      let prevMessages = allMessages
+      if (gapMs > 4 * 60 * 60 * 1000) {
+        // > 4 hours: near-fresh start, rely on SessionMemory for history
+        prevMessages = allMessages.slice(-4)
+      } else if (gapMs > 30 * 60 * 1000) {
+        // 30 min ~ 4 hours: moderate trim
+        prevMessages = allMessages.slice(-20)
+      }
+
       await window.electronAPI.startCopilot({
         message: trimmed,
         runId,
