@@ -199,7 +199,7 @@ export class AgentManager {
         }
       : null
     const enabledSkills: SkillData[] = sessionData.enabledSkills || []
-    const attachedFileMessages = this.buildAttachedFileMessages(sessionData.attachedFiles || [])
+    const attachedFileMessages = await this.buildAttachedFileMessages(sessionData.attachedFiles || [])
 
     // Parse @skill-name mentions from user message and inject skill content
     const { contents: mentionedSkillContents, names: mentionedSkillNames } = this.extractMentionedSkills(userMessage, enabledSkills)
@@ -394,40 +394,39 @@ export class AgentManager {
     return { contents, names }
   }
 
-  private buildAttachedFileMessages(attachedFiles: string[]): AgentMessage[] {
+  private async buildAttachedFileMessages(attachedFiles: string[]): Promise<AgentMessage[]> {
+    const { extractFileContent } = require('../utils/file-extract')
     const messages: AgentMessage[] = []
     let totalChars = 0
 
     for (const filePath of attachedFiles.slice(0, MAX_ATTACHED_FILES)) {
+      const remainingChars = MAX_TOTAL_ATTACHED_CHARS - totalChars
+      if (remainingChars <= 0) break
+
       try {
-        if (!fs.existsSync(filePath)) {
-          messages.push({
-            role: 'system',
-            content: `[Attached File Unavailable]\n\nThe user attached this file, but it could not be found: ${filePath}`,
-          })
+        const result = await extractFileContent(filePath)
+        const header = result.header || `[Attached File: ${filePath}]`
+        const content = result.content || ''
+
+        if (!content) {
+          // File had no extractable content (image, audio, or parse failure)
+          messages.push({ role: 'system', content: header })
           continue
         }
 
-        const stat = fs.statSync(filePath)
-        if (!stat.isFile()) continue
-
-        const remainingChars = MAX_TOTAL_ATTACHED_CHARS - totalChars
-        if (remainingChars <= 0) break
-
-        const content = fs.readFileSync(filePath, 'utf-8')
         const cap = Math.min(MAX_ATTACHED_FILE_CHARS, remainingChars)
         const truncated = content.length > cap
-        const excerpt = truncated ? `${content.slice(0, cap)}\n\n[Attached file truncated]` : content
+        const excerpt = truncated ? `${content.slice(0, cap)}\n\n[Content truncated]` : content
 
         totalChars += excerpt.length
         messages.push({
           role: 'system',
-          content: `[Attached File: ${filePath}]\n\n${excerpt}`,
+          content: `${header}\n\n${excerpt}`,
         })
       } catch {
         messages.push({
           role: 'system',
-          content: `[Attached File Unreadable]\n\nThe user attached this file, but it could not be decoded as text: ${filePath}`,
+          content: `[Attached File Unreadable: ${filePath}]`,
         })
       }
     }
