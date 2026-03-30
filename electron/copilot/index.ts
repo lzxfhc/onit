@@ -629,14 +629,24 @@ ${contextBlock}`
         this.summarizeTask(task)
         this.persistTask(task, task.status === 'completed' ? 'completed' : 'failed')
 
-        // Inject task result directly into the copilot conversation
-        const reportRunId = `copilot-report-${task.id}`
-        this.sendToRenderer('copilot:task-result', {
-          runId: reportRunId,
-          taskId: task.id,
-          content: this.buildTaskResultMessage(task),
-          status: task.status,
-        })
+        // Trigger main Agent to auto-report the result with streaming
+        if (this.apiConfig && task.status === 'completed') {
+          const reportRunId = `copilot-report-${task.id}-${Date.now()}`
+          this.sendToRenderer('copilot:auto-report', {
+            runId: reportRunId,
+            taskId: task.id,
+            taskName: task.name,
+            message: `[System: Task "${task.name}" (ID: ${task.id}) has completed. Call get_task_result("${task.id}") to retrieve the full result, then tell the user the key findings in your own words. Be concise but include important details.]`,
+          })
+        } else {
+          // Failed tasks: inject static message
+          this.sendToRenderer('copilot:task-result', {
+            runId: `copilot-report-${task.id}`,
+            taskId: task.id,
+            content: this.buildTaskResultMessage(task),
+            status: task.status,
+          })
+        }
         break
       }
     }

@@ -166,6 +166,11 @@ const api = {
     ipcRenderer.on('copilot:task-result', listener)
     return () => ipcRenderer.removeListener('copilot:task-result', listener)
   },
+  onCopilotAutoReport: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:auto-report', listener)
+    return () => ipcRenderer.removeListener('copilot:auto-report', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

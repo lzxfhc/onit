@@ -70,6 +70,8 @@ export interface Message {
   isStreaming?: boolean
   contentBlocks?: ContentBlock[]
   iterationIndex?: number
+  /** System-generated message (hidden from UI, used for auto-report triggers) */
+  isSystem?: boolean
 }
 
 export type SessionStatus = 'idle' | 'running' | 'completed' | 'error' | 'waiting-input'

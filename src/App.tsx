@@ -174,7 +174,7 @@ export default function App() {
       }
     })
 
-    // Task result: inject completed task result as an assistant message
+    // Task result: inject completed task result as an assistant message (fallback for failed tasks)
     const unsubCopilotTaskResult = window.electronAPI.onCopilotTaskResult?.((data: any) => {
       const copilotStore = useCopilotStore.getState()
       copilotStore.addMessage({
@@ -185,6 +185,50 @@ export default function App() {
         runId: data.runId,
       })
       copilotStore.saveCopilotData()
+    })
+
+    // Auto-report: when a worker task completes, trigger main Agent to summarize results
+    const unsubCopilotAutoReport = window.electronAPI.onCopilotAutoReport?.((data: any) => {
+      const copilotStore = useCopilotStore.getState()
+      const settingsStore = useSettingsStore.getState()
+
+      // Don't trigger if main Agent is already running
+      if (copilotStore.isRunning) return
+
+      const { runId, message, taskName } = data
+      const now = Date.now()
+
+      // Create system message (hidden from UI) + assistant placeholder
+      const systemMsg: Message = {
+        id: uuidv4(),
+        role: 'user',
+        content: message,
+        timestamp: now,
+        isSystem: true, // Hidden from UI
+      }
+      const assistantMsg: Message = {
+        id: uuidv4(),
+        role: 'assistant',
+        content: '',
+        timestamp: now,
+        isStreaming: true,
+        toolCalls: [],
+        contentBlocks: [],
+        runId,
+      }
+
+      copilotStore.startRun(systemMsg, assistantMsg, runId)
+
+      // Trigger orchestrator to read and summarize the result
+      const prevMessages = copilotStore.messages.slice(0, -2)
+      window.electronAPI.startCopilot?.({
+        message,
+        runId,
+        apiConfig: settingsStore.settings.apiConfig,
+        messages: prevMessages,
+      }).catch(() => {
+        copilotStore.completeRun(runId, 'error')
+      })
     })
 
     return () => {
@@ -201,6 +245,7 @@ export default function App() {
       unsubCopilotError?.()
       unsubCopilotTaskEvent?.()
       unsubCopilotTaskResult?.()
+      unsubCopilotAutoReport?.()
     }
   }, [isLoggedIn, loadSessions, loadScheduledTasks, loadSkills, flushCopilotChunks, scheduleCopilotFlush])
 
