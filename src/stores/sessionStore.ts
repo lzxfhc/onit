@@ -89,9 +89,18 @@ function upsertToolCall(toolCalls: ToolCall[] | undefined, nextToolCall: ToolCal
   return nextCalls
 }
 
+function finalizeThinkingStatus(message: Message): Message {
+  if (message.thinkingStatus !== 'thinking') return message
+  return {
+    ...message,
+    thinkingStatus: 'done',
+  }
+}
+
 function applyChunkToAssistantMessage(message: Message, chunk: StreamChunk): Message {
   if (chunk.type === 'content' && chunk.content) {
-    const blocks = message.contentBlocks ? [...message.contentBlocks] : []
+    const nextMessage = finalizeThinkingStatus(message)
+    const blocks = nextMessage.contentBlocks ? [...nextMessage.contentBlocks] : []
     if (blocks.length > 0 && blocks[blocks.length - 1].type === 'text') {
       const previous = blocks[blocks.length - 1]
       blocks[blocks.length - 1] = {
@@ -103,8 +112,8 @@ function applyChunkToAssistantMessage(message: Message, chunk: StreamChunk): Mes
     }
 
     return {
-      ...message,
-      content: message.content + chunk.content,
+      ...nextMessage,
+      content: nextMessage.content + chunk.content,
       contentBlocks: blocks,
     }
   }
@@ -113,16 +122,18 @@ function applyChunkToAssistantMessage(message: Message, chunk: StreamChunk): Mes
     return {
       ...message,
       thinking: (message.thinking || '') + chunk.content,
+      thinkingStatus: 'thinking',
     }
   }
 
   if (chunk.type === 'tool-call-start' && chunk.toolCall) {
-    const blocks = message.contentBlocks ? [...message.contentBlocks] : []
+    const nextMessage = finalizeThinkingStatus(message)
+    const blocks = nextMessage.contentBlocks ? [...nextMessage.contentBlocks] : []
     blocks.push({ type: 'tool-call', toolCallId: chunk.toolCall.id })
 
     return {
-      ...message,
-      toolCalls: upsertToolCall(message.toolCalls, chunk.toolCall),
+      ...nextMessage,
+      toolCalls: upsertToolCall(nextMessage.toolCalls, chunk.toolCall),
       contentBlocks: blocks,
     }
   }
@@ -135,11 +146,12 @@ function applyChunkToAssistantMessage(message: Message, chunk: StreamChunk): Mes
   }
 
   if (chunk.type === 'iteration-end') {
-    const blocks = message.contentBlocks ? [...message.contentBlocks] : []
+    const nextMessage = finalizeThinkingStatus(message)
+    const blocks = nextMessage.contentBlocks ? [...nextMessage.contentBlocks] : []
     blocks.push({ type: 'iteration-end', iterationIndex: chunk.iterationIndex })
 
     return {
-      ...message,
+      ...nextMessage,
       contentBlocks: blocks,
       iterationIndex: chunk.iterationIndex,
     }
@@ -497,8 +509,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
         if (!matchesRun && s.activeRunId !== runId) return s
 
-        if (matchesRun) {
-          messages[lastIndex] = { ...last, isStreaming: false }
+        // Clear isStreaming on ALL streaming assistant messages, not just the last one
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant' && messages[i].isStreaming) {
+            messages[i] = {
+              ...messages[i],
+              isStreaming: false,
+              thinkingStatus: messages[i].thinkingStatus === 'thinking' ? 'done' : messages[i].thinkingStatus,
+            }
+          }
         }
 
         const wasBackgroundRunning = s.isBackgroundRunning

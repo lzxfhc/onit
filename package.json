@@ -1,6 +1,6 @@
 {
   "name": "onit",
-  "version": "1.3.0",
+  "version": "1.3.3",
   "description": "Onit - Desktop AI Agent",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -48,8 +48,10 @@
     "appId": "com.onit.app",
     "productName": "Onit",
     "electronDist": "node_modules/electron/dist",
+    "icon": "build/icon.png",
     "mac": {
-      "target": [
+      "icon": "build/icon.icns",
+     "target": [
         {
           "target": "dmg",
           "arch": [

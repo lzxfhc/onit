@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Message } from '../../types'
 import { useT } from '../../i18n'
 import MessageBubble from './MessageBubble'
-import { Loader2, Zap, ArrowDown } from 'lucide-react'
+import { Zap, ArrowDown } from 'lucide-react'
 
 interface Props {
   messages: Message[]
@@ -135,16 +135,6 @@ export default function MessageList({ messages, isRunning, sessionId }: Props) {
               sessionId={sessionId}
             />
           ))}
-
-          {isRunning && lastMessage?.isStreaming &&
-            lastMessage.content === '' &&
-            !lastMessage.thinking && (
-            <div className="flex items-center gap-2 py-3 text-text-tertiary animate-fade-in">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              <span className="text-xs">{t.chat.thinking}</span>
-            </div>
-          )}
-
           <div ref={bottomRef} />
         </div>
       </div>

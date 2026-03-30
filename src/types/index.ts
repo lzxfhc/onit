@@ -66,6 +66,7 @@ export interface Message {
   runId?: string
   toolCalls?: ToolCall[]
   thinking?: string
+  thinkingStatus?: 'thinking' | 'done'
   isStreaming?: boolean
   contentBlocks?: ContentBlock[]
   iterationIndex?: number
