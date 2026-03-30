@@ -28,33 +28,25 @@ export type { CopilotTask } from './memory'
 // Topic inference — auto-generates a topic from task description
 // ---------------------------------------------------------------------------
 
-/** Topic keyword map — used ONLY for naming, not for type classification. */
 const TOPIC_KEYWORDS: [RegExp, string][] = [
-  [/天气|weather|气温|forecast/i, 'weather'],
-  [/代码|code|审查|review|bug|debug|fix|refactor/i, 'code-review'],
-  [/调研|research|论文|paper|article/i, 'research'],
-  [/数据|data|分析|analysis|excel|csv|统计/i, 'data-analysis'],
-  [/项目|project|开发|develop|架构/i, 'project'],
-  [/文件|file|整理|organize|归档|folder|目录/i, 'file-management'],
-  [/文档|document|总结|summary|pdf|报告/i, 'document'],
+  [/天气|weather|气温|temperature|forecast/i, 'weather'],
+  [/代码|code|审查|review|bug|debug|fix/i, 'code-review'],
+  [/文件|file|整理|organize|归档|clean|folder|目录/i, 'file-management'],
+  [/搜索|search|调研|research|论文|paper|article/i, 'research'],
   [/翻译|translate|translation/i, 'translation'],
-  [/搜索|search|查找|look up/i, 'search'],
-  [/安装|install|配置|config|setup|环境/i, 'setup'],
-  [/git|部署|deploy|发布|release/i, 'devops'],
-  [/写|write|创建|create|生成|generate|脚本/i, 'content-creation'],
+  [/数据|data|分析|analysis|excel|csv|统计/i, 'data-analysis'],
+  [/文档|document|总结|summary|summarize|pdf|docx/i, 'document'],
+  [/网页|web|网站|website|页面|page/i, 'web'],
+  [/写|write|创建|create|生成|generate|脚本|script/i, 'content-creation'],
+  [/安装|install|配置|config|setup|环境|environment/i, 'setup'],
+  [/git|部署|deploy|发布|release|push/i, 'devops'],
 ]
 
-/** Auto-cleanup: sessions not reused within this period are deleted. */
-const SESSION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000  // 7 days
-
-/**
- * Infer a topic name from description. Used for session grouping/matching.
- * Does NOT determine persistent vs temporary — everything defaults to persistent.
- */
-function inferTopicName(description: string): string {
+function inferTopic(description: string): string {
   for (const [pattern, topic] of TOPIC_KEYWORDS) {
     if (pattern.test(description)) return topic
   }
+  // Fallback: use first 2 meaningful words
   const words = description.replace(/[^\w\u4e00-\u9fff]+/g, ' ').trim().split(/\s+/).slice(0, 3)
   return words.join('-').toLowerCase().substring(0, 30) || 'general'
 }
@@ -160,9 +152,10 @@ If the user's request is related to ANY existing session's topic, you MUST reuse
 - Completely new topic → create new session
 
 ### task_type
-- Don't set task_type in most cases — everything defaults to **persistent**, which is correct.
-- Sessions auto-expire after 7 days if not reused, so there's no clutter problem.
-- Only set task_type="temporary" for trivially simple tasks like unit conversions or time lookups that definitely won't need context later.
+- **"persistent"** (DEFAULT): Most tasks should be persistent. Set a clear topic name.
+  Examples: "weather", "code-review", "research-ai", "project-myapp", "file-management"
+- **"temporary"**: ONLY for truly one-off tasks where context will never be needed again.
+  Examples: "tell me the current time", "convert 5kg to pounds"
 
 ### topic naming rules
 - Use lowercase English, hyphen-separated: "code-review", "weather", "data-analysis"
@@ -449,13 +442,10 @@ ${contextBlock}`
     skills?: string[]
   }): Promise<CopilotTask> {
     const taskId = uuidv4().replace(/-/g, '').substring(0, 12)
-
-    // Topic: LLM explicit > auto-inferred from description
-    const topic = args.topic || inferTopicName(args.description)
-
-    // Everything persistent by default. LLM can explicitly mark temporary for
-    // trivially simple tasks, but we don't try to guess.
-    const taskType: 'temporary' | 'persistent' = args.task_type === 'temporary' ? 'temporary' : 'persistent'
+    // Default to persistent (most tasks benefit from context preservation)
+    const taskType = (args.task_type === 'temporary' ? 'temporary' : 'persistent') as 'temporary' | 'persistent'
+    // Auto-infer topic from description if not provided (for persistent tasks)
+    const topic = args.topic || (taskType === 'persistent' ? inferTopic(args.description) : undefined)
     // Session routing: explicit reuse > auto-match by topic > new session
     let resolvedSessionId = args.reuse_session_id
 
