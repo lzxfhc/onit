@@ -182,6 +182,8 @@ export interface CopilotTask {
   messages?: Message[]
   sessionMemory?: SessionMemory | null
   lastRunId?: string | null
+  lastAccessedAt?: number
+  accessCount?: number
 }
 
 export interface AppSettings {

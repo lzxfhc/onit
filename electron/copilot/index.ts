@@ -25,34 +25,28 @@ import {
 export type { CopilotTask } from './memory'
 
 // ---------------------------------------------------------------------------
-// Topic inference — auto-generates a topic from task description
+// Simple topic fallback — no regex classification, just word extraction
 // ---------------------------------------------------------------------------
 
-const TOPIC_KEYWORDS: [RegExp, string][] = [
-  [/天气|weather|气温|temperature|forecast/i, 'weather'],
-  [/代码|code|审查|review|bug|debug|fix/i, 'code-review'],
-  [/文件|file|整理|organize|归档|clean|folder|目录/i, 'file-management'],
-  [/搜索|search|调研|research|论文|paper|article/i, 'research'],
-  [/翻译|translate|translation/i, 'translation'],
-  [/数据|data|分析|analysis|excel|csv|统计/i, 'data-analysis'],
-  [/文档|document|总结|summary|summarize|pdf|docx/i, 'document'],
-  [/网页|web|网站|website|页面|page/i, 'web'],
-  [/写|write|创建|create|生成|generate|脚本|script/i, 'content-creation'],
-  [/安装|install|配置|config|setup|环境|environment/i, 'setup'],
-  [/git|部署|deploy|发布|release|push/i, 'devops'],
-]
-
-function inferTopic(description: string): string {
-  for (const [pattern, topic] of TOPIC_KEYWORDS) {
-    if (pattern.test(description)) return topic
-  }
-  // Fallback: use first 2 meaningful words
-  const words = description.replace(/[^\w\u4e00-\u9fff]+/g, ' ').trim().split(/\s+/).slice(0, 3)
+/** Generate a simple topic slug from description when LLM doesn't provide one. */
+function generateSimpleTopic(description: string): string {
+  const words = description
+    .replace(/[^\w\u4e00-\u9fff]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter(w => w.length > 1)
+    .slice(0, 3)
   return words.join('-').toLowerCase().substring(0, 30) || 'general'
 }
 
+/** Normalize a topic string for fuzzy matching. */
+function normalizeTopic(topic: string): string {
+  return topic.toLowerCase().replace(/[-_\s]+/g, '')
+}
+
 const TASK_CHUNK_FLUSH_MS = 80
-const COMPLETED_TASK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+const MAX_RETENTION_MS = 30 * DAY_MS
 
 export class CopilotManager {
   private sendToRenderer: (channel: string, data: any) => void
@@ -144,24 +138,20 @@ Examples:
 
 ## Session Management
 
-### When to reuse a session (IMPORTANT)
-ALWAYS check the "Existing Sessions" list in Current Context below BEFORE creating a new session.
-If the user's request is related to ANY existing session's topic, you MUST reuse that session.
-- Same topic → set reuse_session_id to that session's ID
-- Related topic (e.g., user asks about "上海天气" and there's a "weather" session) → reuse
-- Completely new topic → create new session
+### Session reuse (IMPORTANT — check EVERY TIME)
+ALWAYS check the "Existing Sessions" list in Current Context below BEFORE calling dispatch_task.
+If the user's request is related to ANY existing session, you MUST reuse it via reuse_session_id.
+
+### topic (REQUIRED)
+You MUST always set the `topic` field. Use lowercase English, hyphen-separated.
+- Be specific: "code-review", "research-ai", "data-analysis", "weather"
+- Be consistent: always use the SAME topic name for the same subject
+- Check existing sessions first and reuse their topic name
 
 ### task_type
-- **"persistent"** (DEFAULT): Most tasks should be persistent. Set a clear topic name.
-  Examples: "weather", "code-review", "research-ai", "project-myapp", "file-management"
-- **"temporary"**: ONLY for truly one-off tasks where context will never be needed again.
-  Examples: "tell me the current time", "convert 5kg to pounds"
-
-### topic naming rules
-- Use lowercase English, hyphen-separated: "code-review", "weather", "data-analysis"
-- Be specific enough to distinguish: "research-ai" not just "research"
-- Be consistent: don't create "weather" and "天气" as separate topics
-- ALWAYS set a topic for persistent tasks
+Default is **persistent** (context preserved for future reuse). You decide based on whether previous context would help:
+- **persistent**: code review, research, data analysis, project work, file management — context carries over
+- **temporary**: weather check, translation, unit conversion, quick lookup — each query is independent, no useful context to preserve
 
 ## Critical UX Rules
 1. **Acknowledge first**: ALWAYS output a brief text response BEFORE calling any tool. Example: "好的，我来查一下。" then call web_search. Never start with a silent tool call.
@@ -315,12 +305,16 @@ ${contextBlock}`
     }
   }
 
-  /** Find the most recent persistent task with a matching topic. */
+  /** Find the most recent persistent task with a matching topic (fuzzy match). */
   private findSessionByTopic(topic: string): CopilotTask | null {
+    const normalized = normalizeTopic(topic)
     let best: CopilotTask | null = null
     for (const t of this.tasks.values()) {
-      if (t.taskType !== 'persistent') continue
-      if (t.topic === topic && (!best || t.createdAt > best.createdAt)) {
+      if (t.taskType !== 'persistent' || !t.topic) continue
+      const nt = normalizeTopic(t.topic)
+      // Exact match (after normalization) OR containment
+      const matches = nt === normalized || nt.includes(normalized) || normalized.includes(nt)
+      if (matches && (!best || t.createdAt > best.createdAt)) {
         best = t
       }
     }
@@ -385,9 +379,15 @@ ${contextBlock}`
   private normalizeLoadedTask(task: CopilotTask): CopilotTask | null {
     const now = Date.now()
     const age = now - (task.completedAt || task.createdAt)
-    const isExpired = age > COMPLETED_TASK_RETENTION_MS
 
-    if (isExpired && task.status !== 'running' && task.status !== 'queued') {
+    // Usage-based retention: more used = longer retention
+    const baseRetention = task.taskType === 'temporary' ? 3 * DAY_MS : 7 * DAY_MS
+    const accessBonus = (task.accessCount || 0) * 2 * DAY_MS
+    const lastAccess = task.lastAccessedAt || task.completedAt || task.createdAt
+    const recencyBonus = (now - lastAccess) < 3 * DAY_MS ? 7 * DAY_MS : 0
+    const retention = Math.min(baseRetention + accessBonus + recencyBonus, MAX_RETENTION_MS)
+
+    if (age > retention && task.status !== 'running' && task.status !== 'queued') {
       deleteTaskFile(this.dataDir, task.id)
       return null
     }
@@ -442,10 +442,13 @@ ${contextBlock}`
     skills?: string[]
   }): Promise<CopilotTask> {
     const taskId = uuidv4().replace(/-/g, '').substring(0, 12)
-    // Default to persistent (most tasks benefit from context preservation)
-    const taskType = (args.task_type === 'temporary' ? 'temporary' : 'persistent') as 'temporary' | 'persistent'
-    // Auto-infer topic from description if not provided (for persistent tasks)
-    const topic = args.topic || (taskType === 'persistent' ? inferTopic(args.description) : undefined)
+
+    // Topic: LLM should always provide one. Fallback: extract from description.
+    const topic = args.topic || generateSimpleTopic(args.description)
+
+    // Task type: LLM decides. Default to persistent (context preservation is generally valuable).
+    const taskType: 'temporary' | 'persistent' =
+      args.task_type === 'temporary' ? 'temporary' : 'persistent'
     // Session routing: explicit reuse > auto-match by topic > new session
     let resolvedSessionId = args.reuse_session_id
 
@@ -454,6 +457,10 @@ ${contextBlock}`
       const matchingTask = this.findSessionByTopic(topic)
       if (matchingTask) {
         resolvedSessionId = matchingTask.sessionId
+        // Track usage on the matched session
+        matchingTask.accessCount = (matchingTask.accessCount || 0) + 1
+        matchingTask.lastAccessedAt = Date.now()
+        saveTask(this.dataDir, matchingTask)
       }
     }
 
@@ -532,6 +539,11 @@ ${contextBlock}`
     if (!task) {
       return { status: 'not_found' }
     }
+    // Track access
+    task.accessCount = (task.accessCount || 0) + 1
+    task.lastAccessedAt = Date.now()
+    saveTask(this.dataDir, task)
+
     return {
       status: task.status,
       summary: task.summary,

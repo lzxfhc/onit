@@ -15,9 +15,9 @@ export const COPILOT_TOOLS: AgentToolDef[] = [
         type: 'object',
         properties: {
           description: { type: 'string', description: 'Clear description of the task for the worker agent to execute' },
-          topic: { type: 'string', description: 'Topic category for grouping, e.g. "weather", "code-review", "research". Used to find matching existing sessions.' },
-          reuse_session_id: { type: 'string', description: 'If routing to an existing session, provide its session ID (from list_tasks)' },
-          task_type: { type: 'string', description: '"temporary" for simple one-shot tasks (cleaned up after), "persistent" for recurring topics (default: "temporary")' },
+          topic: { type: 'string', description: 'REQUIRED. Topic category in lowercase-english-hyphenated. e.g. "weather", "code-review", "research-ai". Check existing sessions and reuse their topic.' },
+          reuse_session_id: { type: 'string', description: 'Route to existing session by ID (from list_tasks). ALWAYS set this if matching session exists.' },
+          task_type: { type: 'string', description: '"persistent" (default, context preserved) or "temporary" (one-shot, cleaned up). Set temporary only for independent queries like weather/translation/conversion.' },
           workspace: { type: 'string', description: 'Optional: working directory path for the task' },
           skills: { type: 'string', description: 'Optional: comma-separated skill names to enable for this task' },
         },

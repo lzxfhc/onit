@@ -22,6 +22,10 @@ export interface CopilotTask {
   messages?: Message[]
   sessionMemory?: SessionMemory | null
   lastRunId?: string | null
+  /** Usage tracking: updated each time the session is reused or result is fetched. */
+  lastAccessedAt?: number
+  /** Usage tracking: incremented on each reuse or result fetch. */
+  accessCount?: number
 }
 
 interface MainConversationData {
@@ -163,6 +167,16 @@ export function deleteTask(dataDir: string, taskId: string): void {
  * Build a dynamic context injection block for the orchestrator's system prompt.
  * Lists active tasks, recent completions, etc. Max 10 tasks, summaries under 200 chars.
  */
+function formatRelativeTime(timestamp: number): string {
+  const diff = Date.now() - timestamp
+  const mins = Math.round(diff / 60000)
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  return `${days}d ago`
+}
+
 export function buildContextInjection(tasks: CopilotTask[]): string {
   if (tasks.length === 0) {
     return '\n## Current Context\n\nNo existing sessions. All new tasks will create new sessions.\n'
@@ -181,14 +195,16 @@ export function buildContextInjection(tasks: CopilotTask[]): string {
     }
   }
 
-  // Existing sessions — this is what the agent checks for reuse
+  // Existing sessions — the LLM checks this to decide session reuse
   if (sessionMap.size > 0) {
-    lines.push('### Existing Sessions (MUST reuse if user\'s request is related)')
+    lines.push('### Existing Sessions (MUST reuse via reuse_session_id if user\'s request is related)')
     for (const t of sessionMap.values()) {
       const topic = t.topic || 'no-topic'
       const summary = t.summary ? ` — ${t.summary.substring(0, 100)}` : ''
       const status = t.status === 'running' ? ' [RUNNING]' : ''
-      lines.push(`- Topic: "${topic}" | reuse_session_id: "${t.sessionId}" | "${t.name}"${summary}${status}`)
+      const uses = t.accessCount ? ` | Used ${t.accessCount}x` : ''
+      const lastAccess = t.lastAccessedAt ? `, ${formatRelativeTime(t.lastAccessedAt)}` : ''
+      lines.push(`- Topic: "${topic}" | reuse_session_id: "${t.sessionId}" | "${t.name}"${summary}${status}${uses}${lastAccess}`)
     }
     lines.push('')
   }
