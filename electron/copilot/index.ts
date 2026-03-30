@@ -24,6 +24,33 @@ import {
 
 export type { CopilotTask } from './memory'
 
+// ---------------------------------------------------------------------------
+// Topic inference — auto-generates a topic from task description
+// ---------------------------------------------------------------------------
+
+const TOPIC_KEYWORDS: [RegExp, string][] = [
+  [/天气|weather|气温|temperature|forecast/i, 'weather'],
+  [/代码|code|审查|review|bug|debug|fix/i, 'code-review'],
+  [/文件|file|整理|organize|归档|clean|folder|目录/i, 'file-management'],
+  [/搜索|search|调研|research|论文|paper|article/i, 'research'],
+  [/翻译|translate|translation/i, 'translation'],
+  [/数据|data|分析|analysis|excel|csv|统计/i, 'data-analysis'],
+  [/文档|document|总结|summary|summarize|pdf|docx/i, 'document'],
+  [/网页|web|网站|website|页面|page/i, 'web'],
+  [/写|write|创建|create|生成|generate|脚本|script/i, 'content-creation'],
+  [/安装|install|配置|config|setup|环境|environment/i, 'setup'],
+  [/git|部署|deploy|发布|release|push/i, 'devops'],
+]
+
+function inferTopic(description: string): string {
+  for (const [pattern, topic] of TOPIC_KEYWORDS) {
+    if (pattern.test(description)) return topic
+  }
+  // Fallback: use first 2 meaningful words
+  const words = description.replace(/[^\w\u4e00-\u9fff]+/g, ' ').trim().split(/\s+/).slice(0, 3)
+  return words.join('-').toLowerCase().substring(0, 30) || 'general'
+}
+
 const TASK_CHUNK_FLUSH_MS = 80
 const COMPLETED_TASK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -115,12 +142,26 @@ Examples:
 - **get_task_result**: Get completed task results. Use when user asks about previous work.
 - **check_task_status / cancel_task**: Monitor or stop running tasks.
 
-## Task Types
-- **task_type="temporary"**: One-shot tasks. Quick file check, simple search, single question. Auto-cleaned after completion.
-- **task_type="persistent"**: Recurring topics. Code review, research project, data analysis. Preserved with context for future use. Always set a topic.
+## Session Management
 
-## Session Reuse
-Before creating a new session, CHECK the "Reusable Sessions" list below. If the user's request matches an existing topic, reuse that session by setting reuse_session_id. This preserves context — the worker remembers previous work.
+### When to reuse a session (IMPORTANT)
+ALWAYS check the "Existing Sessions" list in Current Context below BEFORE creating a new session.
+If the user's request is related to ANY existing session's topic, you MUST reuse that session.
+- Same topic → set reuse_session_id to that session's ID
+- Related topic (e.g., user asks about "上海天气" and there's a "weather" session) → reuse
+- Completely new topic → create new session
+
+### task_type
+- **"persistent"** (DEFAULT): Most tasks should be persistent. Set a clear topic name.
+  Examples: "weather", "code-review", "research-ai", "project-myapp", "file-management"
+- **"temporary"**: ONLY for truly one-off tasks where context will never be needed again.
+  Examples: "tell me the current time", "convert 5kg to pounds"
+
+### topic naming rules
+- Use lowercase English, hyphen-separated: "code-review", "weather", "data-analysis"
+- Be specific enough to distinguish: "research-ai" not just "research"
+- Be consistent: don't create "weather" and "天气" as separate topics
+- ALWAYS set a topic for persistent tasks
 
 ## Critical UX Rules
 1. **Acknowledge first**: ALWAYS output a brief text response BEFORE calling any tool. Example: "好的，我来查一下。" then call web_search. Never start with a silent tool call.
@@ -274,6 +315,18 @@ ${contextBlock}`
     }
   }
 
+  /** Find the most recent persistent task with a matching topic. */
+  private findSessionByTopic(topic: string): CopilotTask | null {
+    let best: CopilotTask | null = null
+    for (const t of this.tasks.values()) {
+      if (t.taskType !== 'persistent') continue
+      if (t.topic === topic && (!best || t.createdAt > best.createdAt)) {
+        best = t
+      }
+    }
+    return best
+  }
+
   private getReusableSessionState(sessionId?: string): { messages: Message[]; sessionMemory: SessionMemory | null } {
     if (!sessionId) {
       return { messages: [], sessionMemory: null }
@@ -389,15 +442,28 @@ ${contextBlock}`
     skills?: string[]
   }): Promise<CopilotTask> {
     const taskId = uuidv4().replace(/-/g, '').substring(0, 12)
-    const taskType = (args.task_type === 'persistent' ? 'persistent' : 'temporary') as 'temporary' | 'persistent'
-    const requestedSessionId = args.reuse_session_id
-    const shouldForkRunningSession = requestedSessionId
-      ? this.workerAgent.isSessionRunning(requestedSessionId)
+    // Default to persistent (most tasks benefit from context preservation)
+    const taskType = (args.task_type === 'temporary' ? 'temporary' : 'persistent') as 'temporary' | 'persistent'
+    // Auto-infer topic from description if not provided (for persistent tasks)
+    const topic = args.topic || (taskType === 'persistent' ? inferTopic(args.description) : undefined)
+    // Session routing: explicit reuse > auto-match by topic > new session
+    let resolvedSessionId = args.reuse_session_id
+
+    // Auto-match: if no explicit reuse but topic matches an existing persistent session
+    if (!resolvedSessionId && topic && taskType === 'persistent') {
+      const matchingTask = this.findSessionByTopic(topic)
+      if (matchingTask) {
+        resolvedSessionId = matchingTask.sessionId
+      }
+    }
+
+    const shouldForkRunningSession = resolvedSessionId
+      ? this.workerAgent.isSessionRunning(resolvedSessionId)
       : false
-    const sessionId = requestedSessionId && !shouldForkRunningSession
-      ? requestedSessionId
+    const sessionId = resolvedSessionId && !shouldForkRunningSession
+      ? resolvedSessionId
       : `copilot-task-${taskId}`
-    const reusableState = this.getReusableSessionState(requestedSessionId)
+    const reusableState = this.getReusableSessionState(resolvedSessionId)
     const runId = uuidv4()
     const now = Date.now()
 
@@ -408,7 +474,7 @@ ${contextBlock}`
       description: args.description,
       status: 'queued',
       taskType,
-      topic: args.topic,
+      topic,
       createdAt: now,
       workspace: args.workspace,
       skills: typeof args.skills === 'string' ? (args.skills as string).split(',').map(s => s.trim()) : args.skills,

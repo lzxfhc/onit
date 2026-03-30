@@ -165,46 +165,41 @@ export function deleteTask(dataDir: string, taskId: string): void {
  */
 export function buildContextInjection(tasks: CopilotTask[]): string {
   if (tasks.length === 0) {
-    return '\n## Current Context\n\nNo active or recent tasks.\n'
+    return '\n## Current Context\n\nNo existing sessions. All new tasks will create new sessions.\n'
   }
-
-  const relevantTasks = tasks.slice(0, 15)
-  const activeTasks = relevantTasks.filter(t => t.status === 'running' || t.status === 'queued')
-  const completedTasks = relevantTasks.filter(t => t.status === 'completed')
-
-  // Persistent sessions that can be reused (have topic and are completed or running)
-  const reusableSessions = relevantTasks
-    .filter(t => t.taskType === 'persistent' && t.topic)
-    .reduce((acc, t) => {
-      if (!acc.has(t.topic!)) acc.set(t.topic!, t)
-      return acc
-    }, new Map<string, CopilotTask>())
 
   const lines: string[] = ['\n## Current Context\n']
 
-  // Show reusable sessions — the agent should route related tasks here
-  if (reusableSessions.size > 0) {
-    lines.push('### Reusable Sessions (use reuse_session_id to route here)')
-    for (const [topic, t] of reusableSessions) {
-      lines.push(`- Topic: "${topic}" | reuse_session_id: "${t.sessionId}" | Last: "${t.name}"`)
+  // Group ALL persistent tasks by session (most recent per session)
+  const sessionMap = new Map<string, CopilotTask>()
+  for (const t of tasks) {
+    if (t.taskType === 'temporary') continue
+    const key = t.sessionId
+    const existing = sessionMap.get(key)
+    if (!existing || t.createdAt > existing.createdAt) {
+      sessionMap.set(key, t)
+    }
+  }
+
+  // Existing sessions — this is what the agent checks for reuse
+  if (sessionMap.size > 0) {
+    lines.push('### Existing Sessions (MUST reuse if user\'s request is related)')
+    for (const t of sessionMap.values()) {
+      const topic = t.topic || 'no-topic'
+      const summary = t.summary ? ` — ${t.summary.substring(0, 100)}` : ''
+      const status = t.status === 'running' ? ' [RUNNING]' : ''
+      lines.push(`- Topic: "${topic}" | reuse_session_id: "${t.sessionId}" | "${t.name}"${summary}${status}`)
     }
     lines.push('')
   }
 
+  // Active tasks
+  const activeTasks = tasks.filter(t => t.status === 'running' || t.status === 'queued')
   if (activeTasks.length > 0) {
-    lines.push('### Active Tasks')
+    lines.push('### Currently Running')
     for (const t of activeTasks) {
       const elapsed = Math.round((Date.now() - t.createdAt) / 60000)
-      lines.push(`- [${t.id}] "${t.name}" | ${t.topic ? `Topic: ${t.topic} | ` : ''}Status: ${t.status} | ${elapsed}m ago | Session: ${t.sessionId}`)
-    }
-    lines.push('')
-  }
-
-  if (completedTasks.length > 0) {
-    lines.push('### Recently Completed')
-    for (const t of completedTasks.slice(0, 5)) {
-      const summary = t.summary ? t.summary.substring(0, 200) : ''
-      lines.push(`- [${t.id}] "${t.name}" | ${t.topic ? `Topic: ${t.topic} | ` : ''}${summary}`)
+      lines.push(`- "${t.name}" | ${elapsed}m ago`)
     }
     lines.push('')
   }
