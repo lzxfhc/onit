@@ -28,45 +28,35 @@ export type { CopilotTask } from './memory'
 // Topic inference — auto-generates a topic from task description
 // ---------------------------------------------------------------------------
 
-/** Topics where context carries over between tasks — default persistent. */
-const PERSISTENT_TOPICS: [RegExp, string][] = [
+/** Topic keyword map — used ONLY for naming, not for type classification. */
+const TOPIC_KEYWORDS: [RegExp, string][] = [
+  [/天气|weather|气温|forecast/i, 'weather'],
   [/代码|code|审查|review|bug|debug|fix|refactor/i, 'code-review'],
-  [/调研|research|论文|paper|article|综述/i, 'research'],
+  [/调研|research|论文|paper|article/i, 'research'],
   [/数据|data|分析|analysis|excel|csv|统计/i, 'data-analysis'],
-  [/项目|project|开发|develop|架构|architecture/i, 'project'],
-  [/文件|file|整理|organize|归档|clean|folder|目录/i, 'file-management'],
-  [/文档|document|总结|summary|pdf|docx|报告|report/i, 'document'],
-  [/安装|install|配置|config|setup|环境|environment/i, 'setup'],
-  [/git|部署|deploy|发布|release|push/i, 'devops'],
-]
-
-/** Topics where each query is independent — default temporary. */
-const TEMPORARY_TOPICS: [RegExp, string][] = [
-  [/天气|weather|气温|temperature|forecast/i, 'weather'],
+  [/项目|project|开发|develop|架构/i, 'project'],
+  [/文件|file|整理|organize|归档|folder|目录/i, 'file-management'],
+  [/文档|document|总结|summary|pdf|报告/i, 'document'],
   [/翻译|translate|translation/i, 'translation'],
-  [/换算|convert|转换|多少.*等于|几.*是/i, 'conversion'],
-  [/几点|time|时间|日期|date/i, 'time'],
-  [/搜索|search|搜一下|查一下|look up/i, 'search'],
-  [/网页|web|网站|website|打开|open/i, 'web'],
+  [/搜索|search|查找|look up/i, 'search'],
+  [/安装|install|配置|config|setup|环境/i, 'setup'],
+  [/git|部署|deploy|发布|release/i, 'devops'],
+  [/写|write|创建|create|生成|generate|脚本/i, 'content-creation'],
 ]
 
-interface TopicInference {
-  topic: string
-  defaultType: 'persistent' | 'temporary'
-}
+/** Auto-cleanup: sessions not reused within this period are deleted. */
+const SESSION_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000  // 7 days
 
-function inferTopic(description: string): TopicInference {
-  // Check persistent topics first (higher value)
-  for (const [pattern, topic] of PERSISTENT_TOPICS) {
-    if (pattern.test(description)) return { topic, defaultType: 'persistent' }
+/**
+ * Infer a topic name from description. Used for session grouping/matching.
+ * Does NOT determine persistent vs temporary — everything defaults to persistent.
+ */
+function inferTopicName(description: string): string {
+  for (const [pattern, topic] of TOPIC_KEYWORDS) {
+    if (pattern.test(description)) return topic
   }
-  // Then temporary topics
-  for (const [pattern, topic] of TEMPORARY_TOPICS) {
-    if (pattern.test(description)) return { topic, defaultType: 'temporary' }
-  }
-  // Fallback: treat as persistent (benefit of the doubt)
   const words = description.replace(/[^\w\u4e00-\u9fff]+/g, ' ').trim().split(/\s+/).slice(0, 3)
-  return { topic: words.join('-').toLowerCase().substring(0, 30) || 'general', defaultType: 'persistent' }
+  return words.join('-').toLowerCase().substring(0, 30) || 'general'
 }
 
 const TASK_CHUNK_FLUSH_MS = 80
@@ -170,11 +160,9 @@ If the user's request is related to ANY existing session's topic, you MUST reuse
 - Completely new topic → create new session
 
 ### task_type
-- **"persistent"**: Tasks where previous context helps future work. The system auto-detects this for most topics.
-  Examples: code-review, research, data-analysis, project work, file management
-- **"temporary"**: Independent tasks where context doesn't carry over. The system auto-detects this too.
-  Examples: weather queries, translations, unit conversions, quick lookups
-- Usually you don't need to set task_type — the system infers it from the topic. Only override if the auto-detection is wrong.
+- Don't set task_type in most cases — everything defaults to **persistent**, which is correct.
+- Sessions auto-expire after 7 days if not reused, so there's no clutter problem.
+- Only set task_type="temporary" for trivially simple tasks like unit conversions or time lookups that definitely won't need context later.
 
 ### topic naming rules
 - Use lowercase English, hyphen-separated: "code-review", "weather", "data-analysis"
@@ -462,16 +450,12 @@ ${contextBlock}`
   }): Promise<CopilotTask> {
     const taskId = uuidv4().replace(/-/g, '').substring(0, 12)
 
-    // Infer topic and default task type from description
-    const inferred = inferTopic(args.description)
-    const topic = args.topic || inferred.topic
+    // Topic: LLM explicit > auto-inferred from description
+    const topic = args.topic || inferTopicName(args.description)
 
-    // Task type: LLM explicit > inferred default
-    // If LLM says temporary → temporary. If LLM says persistent → persistent.
-    // If LLM doesn't specify → use inferred default based on topic category.
-    const taskType: 'temporary' | 'persistent' = args.task_type
-      ? (args.task_type === 'temporary' ? 'temporary' : 'persistent')
-      : inferred.defaultType
+    // Everything persistent by default. LLM can explicitly mark temporary for
+    // trivially simple tasks, but we don't try to guess.
+    const taskType: 'temporary' | 'persistent' = args.task_type === 'temporary' ? 'temporary' : 'persistent'
     // Session routing: explicit reuse > auto-match by topic > new session
     let resolvedSessionId = args.reuse_session_id
 
