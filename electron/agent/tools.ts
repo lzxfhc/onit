@@ -6,6 +6,7 @@ import https from 'https'
 import http from 'http'
 import { URL } from 'url'
 import { AgentToolDef, ToolExecutionResult, RiskLevel } from './types'
+import { isExtractableFile, extractFileContent } from '../utils/file-extract'
 
 export const AGENT_TOOLS: AgentToolDef[] = [
   {
@@ -651,6 +652,16 @@ export async function executeTool(
         if (!fs.existsSync(filePath)) {
           return { success: false, output: `File not found: ${filePath}`, riskLevel }
         }
+
+        // Non-text files (PDF, DOCX, XLSX, images, etc.) → use unified extraction
+        if (isExtractableFile(filePath)) {
+          const result = await extractFileContent(filePath)
+          const output = result.content
+            ? `${result.header}\n\n${result.content}`
+            : result.header
+          return { success: !!result.content, output, riskLevel }
+        }
+
         const stat = fs.statSync(filePath)
 
         const maxLengthRaw = typeof args.max_length === 'number' && Number.isFinite(args.max_length)

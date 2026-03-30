@@ -9,6 +9,7 @@ import remarkGfm from 'remark-gfm'
 interface Props {
   message: Message
   isLast: boolean
+  sessionId?: string
 }
 
 interface RenderSegment {
@@ -56,7 +57,7 @@ function segmentBlocks(blocks: ContentBlock[]): RenderSegment[] {
   return segments.filter(s => s.blocks.length > 0 || s.type === 'tool-group')
 }
 
-const MessageBubble = memo(function MessageBubble({ message }: Props) {
+const MessageBubble = memo(function MessageBubble({ message, sessionId }: Props) {
   const t = useT()
   const isUser = message.role === 'user'
 
@@ -75,7 +76,7 @@ const MessageBubble = memo(function MessageBubble({ message }: Props) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <span className="text-xs font-semibold text-charcoal">
-              {isUser ? t.chat.you : t.chat.agent}
+              {isUser ? t.chat.you : (sessionId === 'copilot-main' ? 'Onit' : t.chat.agent)}
             </span>
             <span className="text-[10px] text-text-tertiary">
               {new Date(message.timestamp).toLocaleTimeString('en-US', {

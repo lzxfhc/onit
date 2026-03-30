@@ -7,6 +7,7 @@ import { SchedulerManager } from './agent/scheduler'
 import { SkillManager } from './agent/skills'
 import { SkillEvolutionManager } from './agent/skill-evolution'
 import { LocalModelManager } from './local-model/index'
+import { CopilotManager } from './copilot/index'
 import { runCLI, detectCLIMode, createCLIOutputHandler } from './cli'
 
 let mainWindow: BrowserWindow | null = null
@@ -15,6 +16,12 @@ let schedulerManager: SchedulerManager
 let skillManager: SkillManager
 let skillEvolutionManager: SkillEvolutionManager
 let localModelManager: LocalModelManager
+let copilotManager: CopilotManager
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+}
 
 const DATA_DIR = path.join(app.getPath('userData'), 'onit-data')
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions')
@@ -23,6 +30,8 @@ const ARTIFACTS_DIR = path.join(DATA_DIR, 'artifacts')
 const MODELS_DIR = path.join(DATA_DIR, 'models')
 const USER_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'user')
 const IMPORTED_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'imported')
+const COPILOT_DIR = path.join(DATA_DIR, 'copilot')
+const COPILOT_TASKS_DIR = path.join(DATA_DIR, 'copilot', 'tasks')
 
 function getPrebuiltSkillsDir(): string {
   // In packaged app: resources/skills/
@@ -34,7 +43,7 @@ function getPrebuiltSkillsDir(): string {
 }
 
 function ensureDirectories() {
-  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, ARTIFACTS_DIR, MODELS_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR]) {
+  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, ARTIFACTS_DIR, MODELS_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR, COPILOT_DIR, COPILOT_TASKS_DIR]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
     }
@@ -83,6 +92,23 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
+
+  // Prevent navigation to external URLs — open in system browser instead
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const appUrl = process.env.VITE_DEV_SERVER_URL || 'file://'
+    if (!url.startsWith(appUrl) && !url.startsWith('file://')) {
+      event.preventDefault()
+      shell.openExternal(url)
+    }
+  })
+
+  // Prevent new windows from opening — redirect to system browser
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
 
   mainWindow.on('closed', () => {
     mainWindow = null
@@ -393,87 +419,110 @@ function setupIPC() {
 
   // Get app data path
   ipcMain.handle('app:get-data-path', () => DATA_DIR)
+
+  // Copilot: start main agent
+  ipcMain.handle('copilot:start', async (_event, data: { message: string; runId: string; apiConfig: any; messages?: any[] }) => {
+    return copilotManager.startMainAgent(data.message, data.runId, data.apiConfig, data.messages || [])
+  })
+
+  // Copilot: stop main agent
+  ipcMain.handle('copilot:stop', async () => {
+    copilotManager.stopMainAgent()
+    return true
+  })
+
+  // Copilot: load persisted data
+  ipcMain.handle('copilot:load', async () => {
+    return copilotManager.loadData()
+  })
+
+  // Copilot: save data
+  ipcMain.handle('copilot:save', async (_event, data: { messages: any[]; tasks: any[] }) => {
+    await copilotManager.saveData(data.messages, data.tasks)
+    return true
+  })
 }
 
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   ensureDirectories()
   localModelManager = new LocalModelManager(MODELS_DIR)
   skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
   skillEvolutionManager = new SkillEvolutionManager(skillManager)
 
-  // Check for CLI mode
-  const cliArgs = detectCLIMode(app.isPackaged)
-
-  // Create AgentManager with appropriate output handler
-  const onRunComplete = (params: any) => {
-    const { sessionId, currentRunSkillNames, sessionSkillNames, messages, apiConfig } = params
-    for (const skillName of currentRunSkillNames) {
-      skillManager.recordSkillUsage(skillName)
-    }
-    for (const skillName of sessionSkillNames) {
-      skillEvolutionManager.recordUsage(skillName, sessionId, messages, apiConfig)
-        .catch((err: any) => {
-          console.error(`[SkillEvolution] Record usage error for ${skillName}:`, err)
-        })
-    }
-  }
-
-  if (cliArgs) {
-    // --- CLI Mode: no window, output to terminal ---
-    // Create a temporary AgentManager — the output handler will be set after creation
-    // using a mutable reference so the CLI handler can access the manager for permission responses
-    let cliOutputHandler: (channel: string, data: any) => void = () => {}
-
-    agentManager = new AgentManager((channel, data) => {
-      cliOutputHandler(channel, data)
-    }, {
-      artifactsDir: ARTIFACTS_DIR,
-      localModelManager,
-      onRunComplete,
-    })
-
-    // Now set the real handler (it needs agentManager reference for permission responses)
-    cliOutputHandler = createCLIOutputHandler(agentManager)
-
-    schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager, cliOutputHandler)
-
-    const exitCode = await runCLI(cliArgs, {
-      agentManager,
-      skillManager,
-      skillEvolutionManager,
-      schedulerManager,
-      localModelManager,
-      settingsPath: path.join(DATA_DIR, 'cli-config.json'),
-      sessionsDir: SESSIONS_DIR,
-      artifactsDir: ARTIFACTS_DIR,
-    })
-
-    app.exit(exitCode)
-  } else {
-    // --- GUI Mode: normal Electron window ---
-    agentManager = new AgentManager((channel, data) => {
-      mainWindow?.webContents.send(channel, data)
-    }, {
-      artifactsDir: ARTIFACTS_DIR,
-      localModelManager,
-      onRunComplete,
-    })
-    schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager, (channel, data) => {
-      mainWindow?.webContents.send(channel, data)
-    })
-
-    createWindow()
-    setupIPC()
-
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        createWindow()
+  // Wrap sendToRenderer to detect copilot worker completions (both success and error)
+  const workerSend = (channel: string, data: any) => {
+    mainWindow?.webContents.send(channel, data)
+    if (data.sessionId?.startsWith('copilot-task-')) {
+      if (channel === 'agent:stream') {
+        copilotManager?.onWorkerStream(data.sessionId, data.runId, data.chunk)
+      } else if (channel === 'agent:memory-update') {
+        copilotManager?.onWorkerMemoryUpdate(data.sessionId, data.runId, data.memory)
+      } else if (channel === 'agent:error') {
+        copilotManager?.onWorkerError(data.sessionId, data.runId, data.error || 'Unknown error')
+        copilotManager?.onWorkerComplete(data.sessionId, 'failed')
+      } else if (channel === 'agent:complete') {
+        copilotManager?.onWorkerComplete(data.sessionId, data.status || 'completed')
       }
-    })
+    }
   }
+
+  agentManager = new AgentManager(workerSend, {
+    artifactsDir: ARTIFACTS_DIR,
+    localModelManager,
+    onRunComplete: (params) => {
+      // Fire-and-forget: record usage counts and save evolution records
+      const { sessionId, currentRunSkillNames, sessionSkillNames, messages, apiConfig } = params
+
+      // Record usage counts (only for skills @-mentioned in this run)
+      for (const skillName of currentRunSkillNames) {
+        skillManager.recordSkillUsage(skillName)
+      }
+
+      // Record usage for evolution (all session skills within recording window)
+      // Saves formatted conversation log to EVOLUTION.json.
+      // May trigger LLM compression of old records if storage exceeds budget.
+      for (const skillName of sessionSkillNames) {
+        skillEvolutionManager.recordUsage(skillName, sessionId, messages, apiConfig)
+          .catch((err) => {
+            console.error(`[SkillEvolution] Record usage error for ${skillName}:`, err)
+          })
+      }
+    },
+  })
+  schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager, (channel, data) => {
+    mainWindow?.webContents.send(channel, data)
+  })
+
+  // Create CopilotManager with the worker AgentManager
+  copilotManager = new CopilotManager(
+    (channel, data) => {
+      mainWindow?.webContents.send(channel, data)
+    },
+    agentManager,
+    { dataDir: DATA_DIR, localModelManager, skillManager },
+  )
+
+  createWindow()
+  setupIPC()
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow()
+    }
+  })
+})
+
+app.on('second-instance', () => {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
+  mainWindow.show()
+  mainWindow.focus()
 })
 
 app.on('window-all-closed', () => {
+  copilotManager?.stopMainAgent()
   schedulerManager?.shutdown()
   agentManager?.stopAll()
   if (process.platform !== 'darwin') {

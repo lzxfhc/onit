@@ -129,6 +129,48 @@ const api = {
     ipcRenderer.on('local-model:status-change', listener)
     return () => ipcRenderer.removeListener('local-model:status-change', listener)
   },
+
+  // Copilot
+  startCopilot: (data: { message: string; runId: string; apiConfig: any; messages?: any[] }) =>
+    ipcRenderer.invoke('copilot:start', data),
+  stopCopilot: (data?: any) =>
+    ipcRenderer.invoke('copilot:stop', data),
+  loadCopilotData: () =>
+    ipcRenderer.invoke('copilot:load'),
+  saveCopilotData: (data: { messages: any[]; tasks: any[] }) =>
+    ipcRenderer.invoke('copilot:save', data),
+
+  // Copilot Events
+  onCopilotStream: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:stream', listener)
+    return () => ipcRenderer.removeListener('copilot:stream', listener)
+  },
+  onCopilotComplete: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:complete', listener)
+    return () => ipcRenderer.removeListener('copilot:complete', listener)
+  },
+  onCopilotError: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:error', listener)
+    return () => ipcRenderer.removeListener('copilot:error', listener)
+  },
+  onCopilotTaskEvent: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:task-event', listener)
+    return () => ipcRenderer.removeListener('copilot:task-event', listener)
+  },
+  onCopilotTaskResult: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:task-result', listener)
+    return () => ipcRenderer.removeListener('copilot:task-result', listener)
+  },
+  onCopilotAutoReport: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:auto-report', listener)
+    return () => ipcRenderer.removeListener('copilot:auto-report', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('electronAPI', api)

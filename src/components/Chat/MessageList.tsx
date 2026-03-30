@@ -127,11 +127,12 @@ export default function MessageList({ messages, isRunning, sessionId }: Props) {
         className="h-full overflow-y-auto pb-4"
       >
         <div className="max-w-3xl mx-auto px-6">
-          {messages.map((message, idx) => (
+          {messages.filter(m => !m.isSystem).map((message, idx, filtered) => (
             <MessageBubble
               key={message.id}
               message={message}
-              isLast={idx === messages.length - 1}
+              isLast={idx === filtered.length - 1}
+              sessionId={sessionId}
             />
           ))}
           <div ref={bottomRef} />

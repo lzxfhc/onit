@@ -70,6 +70,8 @@ export interface Message {
   isStreaming?: boolean
   contentBlocks?: ContentBlock[]
   iterationIndex?: number
+  /** System-generated message (hidden from UI, used for auto-report triggers) */
+  isSystem?: boolean
 }
 
 export type SessionStatus = 'idle' | 'running' | 'completed' | 'error' | 'waiting-input'
@@ -159,6 +161,32 @@ export interface PermissionRequest {
 }
 
 export type Language = 'zh' | 'en'
+
+// Copilot mode types
+export type AppMode = 'onit' | 'copilot'
+
+export type CopilotTaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+export interface CopilotTask {
+  id: string
+  name: string
+  description: string
+  status: CopilotTaskStatus
+  sessionId: string
+  taskType: 'temporary' | 'persistent'
+  topic?: string
+  createdAt: number
+  completedAt?: number
+  summary?: string
+  finalResponse?: string
+  workspace?: string
+  skills?: string[]
+  messages?: Message[]
+  sessionMemory?: SessionMemory | null
+  lastRunId?: string | null
+  lastAccessedAt?: number
+  accessCount?: number
+}
 
 export interface AppSettings {
   apiConfig: ApiConfig
