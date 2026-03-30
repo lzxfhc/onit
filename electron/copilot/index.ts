@@ -146,7 +146,7 @@ ALWAYS check the "Existing Sessions" list in Current Context below BEFORE callin
 If the user's request is related to ANY existing session, you MUST reuse it via reuse_session_id.
 
 ### topic (REQUIRED)
-You MUST always set the `topic` field. Use lowercase English, hyphen-separated.
+You MUST always set the topic field. Use lowercase English, hyphen-separated.
 - Be specific: "code-review", "research-ai", "data-analysis", "weather"
 - Be consistent: always use the SAME topic name for the same subject
 - Check existing sessions first and reuse their topic name
