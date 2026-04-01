@@ -5,6 +5,7 @@ import type {
   Message,
   SessionStatus,
   PermissionMode,
+  PlanModeVariant,
   TaskItem,
   WorkspaceFile,
   ToolCall,
@@ -36,7 +37,7 @@ interface SessionState {
   appendToLastMessage: (sessionId: string, content: string) => void
   setSessionStatus: (sessionId: string, status: SessionStatus) => void
   setWorkspace: (sessionId: string, path: string | null) => void
-  setPermissionMode: (sessionId: string, mode: PermissionMode) => void
+  setPermissionMode: (sessionId: string, mode: PermissionMode, planVariant?: PlanModeVariant) => void
   setModel: (sessionId: string, model: string) => void
   addAttachedFile: (sessionId: string, filePath: string) => void
   removeAttachedFile: (sessionId: string, filePath: string) => void
@@ -410,8 +411,14 @@ export const useSessionStore = create<SessionState>((set, get) => ({
     get().updateSession(sessionId, { workspacePath: path })
   },
 
-  setPermissionMode: (sessionId, mode) => {
-    get().updateSession(sessionId, { permissionMode: mode })
+  setPermissionMode: (sessionId, mode, planVariant?) => {
+    const update: any = { permissionMode: mode }
+    if (mode === 'plan') {
+      update.planModeVariant = planVariant || 'outline'
+    } else {
+      update.planModeVariant = undefined
+    }
+    get().updateSession(sessionId, update)
   },
 
   setModel: (sessionId, model) => {

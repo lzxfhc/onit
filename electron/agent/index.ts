@@ -5,10 +5,12 @@ import path from 'path'
 import os from 'os'
 import { URL } from 'url'
 import { v4 as uuidv4 } from 'uuid'
-import { executeTool, AGENT_TOOLS, getToolRiskLevel } from './tools'
+import { executeTool, AGENT_TOOLS, CORE_TOOLS, getToolRiskLevel, isToolConcurrencySafe } from './tools'
 import { AgentMessage } from './types'
 import { extractFileContent } from '../utils/file-extract'
 import type { LocalModelManager } from '../local-model/index'
+import { BrowserManager } from './browser'
+import { HooksManager } from './hooks'
 
 interface SkillData {
   name: string
@@ -75,6 +77,17 @@ const TOOL_CONTEXT_MAX_CHARS_LARGE_TEXT = 20000
 const TOOL_CONTEXT_MAX_CHARS_OLD_TOOL = 900
 const TOOL_CONTEXT_RECENT_GROUPS = 10
 const SESSION_MEMORY_MARKER = '[ONIT_SESSION_MEMORY]'
+
+// Micro-compaction: zero-cost replacement of old tool results with stubs
+const MICROCOMPACT_KEEP_RECENT = 5
+const MICROCOMPACT_CLEARED_MSG = '[Old tool result cleared]'
+const MICROCOMPACT_TOOLS = new Set([
+  'read_file', 'write_file', 'edit_file', 'execute_command',
+  'list_directory', 'search_files', 'search_content',
+  'web_search', 'web_fetch',
+  'browser_navigate', 'browser_action', 'browser_extract', 'browser_screenshot',
+  'notebook_edit', 'worktree_create', 'worktree_remove', 'find_symbol',
+])
 const SESSION_MEMORY_MAX_OUTPUT_TOKENS = 4000
 const SESSION_MEMORY_MERGE_SOURCE_MAX_TOKENS = 22000
 const SESSION_MEMORY_MAX_PASSES = 6
@@ -92,6 +105,22 @@ const MODEL_RECONNECT_BASE_DELAY_MS = 2000
 const MODEL_RECONNECT_MAX_DELAY_MS = 15000
 const MODEL_RECONNECT_JITTER_RATIO = 0.15
 
+// Streaming idle watchdog
+const STREAM_IDLE_TIMEOUT_MS = 90_000
+const STREAM_STALL_THRESHOLD_MS = 30_000
+
+// max_output_tokens recovery
+const MAX_OUTPUT_RECOVERY_LIMIT = 3
+const MAX_OUTPUT_RECOVERY_PROMPT = 'Your previous response was cut off due to output token limit. Resume directly from where you stopped — no apology, no recap, no re-stating what you already said. Pick up mid-thought or mid-code and continue.'
+
+// Compression circuit breaker + dual trigger
+const COMPRESSION_MAX_CONSECUTIVE_FAILURES = 3
+const COMPRESSION_INIT_TOKEN_THRESHOLD = 10_000
+const COMPRESSION_TOOL_CALL_THRESHOLD = 3
+
+// NOTE: Bash security patterns are consolidated in tools.ts getToolRiskLevel()
+// to avoid duplication. See the execute_command case there.
+
 interface AgentSession {
   sessionId: string
   runId: string
@@ -100,6 +129,7 @@ interface AgentSession {
   isRunning: boolean
   completionStatus: 'completed' | 'stopped' | 'error'
   permissionMode: string
+  planModeVariant: string  // 'interview' | 'outline'
   workspacePath: string | null
   model: string
   sessionMemory: SessionMemoryData | null
@@ -108,6 +138,12 @@ interface AgentSession {
   lastMemoryCompressionAt: number
   lastMemoryCompressionIteration: number
   isMemoryCompressionRunning: boolean
+  /** Circuit breaker: consecutive compression failures. Disabled after 3. */
+  compressionFailures: number
+  /** Tool calls since last compression (for dual-trigger). */
+  toolCallsSinceLastCompression: number
+  /** Total tokens ever seen (for initialization gate). */
+  totalTokensSeen: number
   apiConfig: {
     billingMode: string
     apiKey: string
@@ -124,6 +160,11 @@ interface AgentSession {
   /** Maps skill name → how many runs ago it was last @-mentioned (0 = this run). */
   usedSkillNames: Map<string, number>
   runPromise?: Promise<void>
+  browserManager?: BrowserManager
+  /** Tracks files read in this session for read-before-edit enforcement. */
+  readFiles: Set<string>
+  /** Pending answer texts for ask_user tool (keyed by requestId). */
+  pendingAnswers: Map<string, string>
 }
 
 export class AgentManager {
@@ -131,6 +172,12 @@ export class AgentManager {
   private sendToRenderer: (channel: string, data: any) => void
   private artifactsDir: string | null
   private localModelManager: LocalModelManager | null
+  /** Persisted "Always Allow" tools (shared across sessions, saved to disk). */
+  private persistedAllowedTools: Set<string> = new Set()
+  /** Content-level permission rules (tool + pattern → allow/deny). */
+  private permissionRules: Array<{ tool: string; pattern: string; behavior: string }> = []
+  /** Lifecycle hooks manager. */
+  private hooksManager = new HooksManager()
   private onRunComplete: ((params: {
     sessionId: string
     runId: string
@@ -165,6 +212,86 @@ export class AgentManager {
     this.toolsOverride = options?.toolsOverride || null
     this.toolExecutorOverride = options?.toolExecutorOverride || null
     this.systemPromptPrepend = options?.systemPromptPrepend || null
+    this.loadPersistedPermissions()
+  }
+
+  private getPermissionsFilePath(): string {
+    const dataDir = this.artifactsDir
+      ? path.dirname(this.artifactsDir)
+      : path.join(os.homedir(), 'Library', 'Application Support', 'onit', 'onit-data')
+    return path.join(dataDir, 'permissions.json')
+  }
+
+  private loadPersistedPermissions(): void {
+    try {
+      const filePath = this.getPermissionsFilePath()
+      if (fs.existsSync(filePath)) {
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+        if (Array.isArray(data.alwaysAllowedTools)) {
+          this.persistedAllowedTools = new Set(data.alwaysAllowedTools)
+        }
+        // Load permission rules
+        if (Array.isArray(data.rules)) {
+          this.permissionRules = data.rules
+        }
+      }
+    } catch {
+      // Non-fatal: start with empty set
+    }
+  }
+
+  private savePersistedPermissions(): void {
+    try {
+      const filePath = this.getPermissionsFilePath()
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(filePath, JSON.stringify({
+        alwaysAllowedTools: Array.from(this.persistedAllowedTools),
+        rules: this.permissionRules,
+        updatedAt: Date.now(),
+      }, null, 2), 'utf-8')
+    } catch {
+      // Non-fatal
+    }
+  }
+
+  /**
+   * Check content-level permission rules.
+   * Rules format: { tool: 'execute_command', pattern: 'git:*', behavior: 'allow' }
+   * Pattern matching: exact, prefix (ends with :*), or wildcard (* anywhere).
+   */
+  private checkPermissionRules(toolName: string, args: any): 'allow' | 'deny' | null {
+    if (!this.permissionRules || this.permissionRules.length === 0) return null
+
+    const content = toolName === 'execute_command'
+      ? (args.command || '')
+      : (args.path || args.url || '')
+
+    for (const rule of this.permissionRules) {
+      if (rule.tool !== toolName) continue
+
+      const pattern = rule.pattern || ''
+      let matches = false
+
+      if (pattern.endsWith(':*')) {
+        // Prefix match: "git:*" matches "git status", "git commit", etc.
+        const prefix = pattern.slice(0, -2)
+        matches = content.startsWith(prefix) || content.toLowerCase().startsWith(prefix.toLowerCase())
+      } else if (pattern.includes('*')) {
+        // Wildcard: convert glob to regex (escape all special chars except *, then replace * with .*)
+        try {
+          const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')
+          const regex = new RegExp('^' + escaped + '$', 'i')
+          matches = regex.test(content)
+        } catch { matches = false }
+      } else {
+        // Exact match
+        matches = content === pattern || content.toLowerCase() === pattern.toLowerCase()
+      }
+
+      if (matches) return rule.behavior as 'allow' | 'deny'
+    }
+
+    return null
   }
 
   async startAgent(sessionId: string, userMessage: string, runId: string, sessionData: any): Promise<boolean> {
@@ -210,6 +337,7 @@ export class AgentManager {
       sessionData.workspacePath,
       sessionData.permissionMode,
       enabledSkills,
+      sessionData.planModeVariant,
     )
     const systemPrompt = this.systemPromptPrepend
       ? this.systemPromptPrepend + '\n\n' + baseSystemPrompt
@@ -249,6 +377,7 @@ export class AgentManager {
       isRunning: true,
       completionStatus: 'completed',
       permissionMode: sessionData.permissionMode || 'accept-edit',
+      planModeVariant: sessionData.planModeVariant || 'outline',
       workspacePath: sessionData.workspacePath,
       model: sessionData.model || 'qianfan-code-latest',
       sessionMemory,
@@ -257,6 +386,9 @@ export class AgentManager {
       lastMemoryCompressionAt: 0,
       lastMemoryCompressionIteration: 0,
       isMemoryCompressionRunning: false,
+      compressionFailures: 0,
+      toolCallsSinceLastCompression: 0,
+      totalTokensSeen: 0,
       apiConfig: {
         billingMode: apiConfig.billingMode || 'coding-plan',
         apiKey: apiConfig.apiKey || '',
@@ -267,7 +399,9 @@ export class AgentManager {
         maxInputTokens: apiConfig.maxInputTokens,
         maxOutputTokens: apiConfig.maxOutputTokens,
       },
-      alwaysAllowedTools: agentSession?.alwaysAllowedTools || new Set(),
+      alwaysAllowedTools: agentSession?.alwaysAllowedTools || new Set(this.persistedAllowedTools),
+      readFiles: agentSession?.readFiles || new Set(),
+      pendingAnswers: new Map(),
       pendingPermissions: new Map(),
       enabledSkills,
       usedSkillNames: new Map<string, number>(),
@@ -316,6 +450,9 @@ export class AgentManager {
 
     this.sessions.set(sessionId, agentSession)
 
+    // Load lifecycle hooks for this workspace
+    this.hooksManager.loadHooks(agentSession.workspacePath)
+
     // Run the agent loop asynchronously
     agentSession.runPromise = this.runAgentLoop(agentSession).catch(error => {
       this.sendToRenderer('agent:error', {
@@ -338,6 +475,12 @@ export class AgentManager {
         pending.resolve(false)
       }
       session.pendingPermissions.clear()
+      session.pendingAnswers.clear()
+      // Close browser if open
+      if (session.browserManager) {
+        session.browserManager.close().catch(() => {})
+        session.browserManager = undefined
+      }
     }
     return true
   }
@@ -367,7 +510,11 @@ export class AgentManager {
         if (alwaysAllow && approved) {
           const parts = requestId.split(':')
           if (parts.length > 1) {
-            session.alwaysAllowedTools.add(parts[1])
+            const toolName = parts[1]
+            session.alwaysAllowedTools.add(toolName)
+            // Persist to disk for future sessions
+            this.persistedAllowedTools.add(toolName)
+            this.savePersistedPermissions()
           }
         }
         pending.resolve(approved)
@@ -691,16 +838,17 @@ export class AgentManager {
     workspacePath: string | null,
     permissionMode: string,
     enabledSkills: SkillData[],
+    planModeVariant?: string,
   ): string {
     const workspace = workspacePath
       ? `You are working in the directory: ${workspacePath}. All file operations should be relative to or within this workspace unless the user specifies otherwise.`
       : `No workspace directory is set. You can work with files anywhere the user specifies.`
 
-    // Environment awareness
+    // Environment awareness — memoize date at session-level granularity to
+    // avoid unnecessary prompt changes (improves cache stability).
     const now = new Date()
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
     const months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December']
-    const dateStr = `${days[now.getDay()]}, ${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}, ${now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`
+    const dateStr = `${months[now.getMonth()]} ${now.getDate()}, ${now.getFullYear()}`
     const osName = os.platform() === 'darwin' ? 'macOS' : os.platform() === 'win32' ? 'Windows' : 'Linux'
     const homeDir = os.homedir()
     const platformHint = os.platform() === 'win32'
@@ -718,26 +866,77 @@ export class AgentManager {
 
     return `You are Onit Agent, a highly capable AI assistant running on the user's desktop. You help users accomplish tasks by using the available tools.
 
-Current date and time: ${dateStr}
-Operating system: ${osName}
-Home directory: ${homeDir}
-${platformHint}
-${workspace}
+Current date: ${dateStr}
+OS: ${osName}
+Home: ${homeDir}
+${platformHint}${workspace}
 
-Core principles:
-- You represent the user and act on their behalf, never replacing their decisions
-- Be transparent about what you're doing and why
-- For complex tasks, break them down into clear steps using create_task_list
-- Always explain your reasoning before taking actions
-- Try to solve problems autonomously — only ask the user for help when you encounter truly insurmountable obstacles
-- Be efficient and precise in tool usage
+# Core principles
+- You represent the user and act on their behalf, never replacing their decisions.
+- Be transparent about what you're doing and why.
+- For complex tasks, break them down into clear steps using create_task_list.
+- Try to solve problems autonomously — only ask the user when truly stuck.
+- Be efficient and precise in tool usage.
 
-Current permission mode: ${permissionMode}
-${permissionMode === 'plan' ? 'In Plan mode: explain every step before executing and ask for confirmation on uncertain operations.' : ''}
-${permissionMode === 'accept-edit' ? 'In AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}
-${permissionMode === 'full-access' ? 'In Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
+# Tool usage
+- ALWAYS use read_file before edit_file. Never edit a file you haven't read in this session. The edit will be rejected otherwise.
+- edit_file requires old_string to be UNIQUE in the file. Include enough surrounding context (2-4 lines) to make it unambiguous.
+- Use search_content for finding text/patterns in files. Do NOT use execute_command to run grep, rg, find, or cat — use the dedicated tools instead:
+  - File search by name → search_files (NOT find or ls)
+  - Content search → search_content (NOT grep or rg)
+  - Read files → read_file (NOT cat, head, tail)
+  - Edit files → edit_file (NOT sed or awk)
+- For simple web content, use web_fetch. For JS-rendered pages or user interaction, use browser_navigate.
+- When processing tool results, write down important facts in your response text — old tool results may be cleared from context in future turns.
+- Call multiple independent read-only tools in parallel when possible for efficiency.
+- Some specialized tools (browser automation, notebook editing, git worktree, interactive questions) are not loaded by default. Use tool_search to discover and load them when needed.
 
-When providing final results, format them clearly with markdown. For code, use appropriate syntax highlighting.${skillsSection}`
+# Actions with care
+- Freely take local, reversible actions (reading files, running tests).
+- For hard-to-reverse actions (delete, force-push, overwrite), check with the user first.
+- If an approach fails, diagnose the root cause before switching tactics. Don't retry the identical action blindly.
+- Never use destructive actions as a shortcut to bypass obstacles.
+- For git operations: prefer new commits over amends, never force-push to main, never skip hooks.
+
+# Permission mode: ${permissionMode}
+${permissionMode === 'plan' ? `**Plan mode is active.** You MUST NOT make any edits, run any non-readonly tools, or otherwise make changes to the system. Only read-only tools and ask_user are allowed. This supercedes any other instructions.
+
+${planModeVariant === 'interview' ? `## Plan Mode: Interactive Interview
+Your goal is to thoroughly understand the user's requirements through iterative exploration and questioning before any implementation begins.
+
+### Workflow (repeat until plan is complete):
+1. **Explore** — Use read-only tools (read_file, search_files, search_content, list_directory) to understand the current codebase and context.
+2. **Ask** — Use ask_user to ask the user structured questions: clarify ambiguous requirements, confirm assumptions, offer design choices. Provide 2-4 concrete options with descriptions.
+3. **Update** — After each round of exploration and Q&A, state your updated understanding and plan in your response.
+4. **Iterate** — Repeat steps 1-3 until you have enough clarity to write a definitive plan.
+5. **Submit** — When ready, call exit_plan_mode with a summary and file list. The user will approve or send you back for refinement.
+
+### Guidelines:
+- Ask one focused question at a time rather than overwhelming with many questions.
+- Show that you've explored the code before asking — reference specific files, functions, and patterns.
+- If the user's answer reveals new complexity, explore it before asking the next question.
+- Build the plan incrementally — each Q&A round should visibly advance the plan.
+- When you've gathered enough information (typically 2-5 rounds), synthesize into a final plan and call exit_plan_mode.` : `## Plan Mode: Execution Outline
+Your goal is to produce a detailed, specific execution plan that the user can review and approve.
+
+### 5-Phase Workflow:
+1. **Explore**: Use read-only tools (read_file, search_files, search_content, list_directory, web_search) to understand the codebase and requirements thoroughly. Identify existing patterns, utilities, and functions that should be reused.
+2. **Design**: Based on exploration, design the implementation approach. Consider trade-offs (simplicity vs performance vs maintainability). If multiple valid approaches exist, use ask_user to let the user choose.
+3. **Review**: Read the critical files you plan to modify. Ensure your plan aligns with the user's original request. Use ask_user to clarify any remaining questions.
+4. **Write Plan**: State your final plan clearly:
+   - List each file to modify with a one-line description of the change
+   - Reference existing functions with file paths (e.g., \`src/utils/auth.ts:validateToken()\`)
+   - Include a verification step (how to test)
+   - Keep it concise — aim for under 40 lines
+5. **Submit**: Call exit_plan_mode with a brief summary and the file list. The user will approve or reject.
+
+### Guidelines:
+- Actively search for existing functions, utilities, and patterns to reuse — avoid proposing new code when suitable implementations already exist.
+- Be specific: file paths, function names, line numbers where possible.
+- Include only your recommended approach, not all alternatives (unless using ask_user to let the user decide).
+- The plan should be scannable — someone should understand what will change in 30 seconds.`}` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
+
+Format results clearly with markdown. Use syntax highlighting for code.${skillsSection}`
   }
 
   private getApiUrl(apiConfig: { billingMode: string; customBaseUrl?: string; codingPlanProvider?: string }): string {
@@ -1139,7 +1338,35 @@ When providing final results, format them clearly with markdown. For code, use a
     transcript: string,
   ): Promise<SessionMemoryData> {
     const existing = (currentMemory?.content || '').trim()
-    const systemPrompt = `You are Onit Session Memory.\n\nYour job is to compress long chat history into a high-signal, durable memory that helps the assistant work effectively in future turns.\n\nRules:\n- Preserve important facts, decisions, constraints, and user preferences.\n- Keep file paths, commands, URLs, IDs, and config values that matter.\n- Do NOT copy long logs or large code blocks; summarize them.\n- Deduplicate aggressively.\n- Output MUST be markdown.\n- Output ONLY the memory content (no preamble).\n\nRecommended structure:\n## Goals\n## User Preferences\n## Key Facts & Decisions\n## Work Done (artifacts/files)\n## Open Questions / Next Steps\n`
+    const systemPrompt = `You are Onit Session Memory.
+
+Your job is to compress long chat history into a high-signal, durable memory that helps the assistant work effectively in future turns.
+
+Rules:
+- Preserve important facts, decisions, constraints, and user preferences.
+- Keep file paths, commands, URLs, IDs, and config values that matter.
+- Do NOT copy long logs or large code blocks; summarize them.
+- Deduplicate aggressively.
+- Output MUST be markdown.
+- Output ONLY the memory content (no preamble).
+- Each section should be concise (max ~200 words). Total output should be under 2000 words.
+
+Required structure (keep all sections, leave empty if N/A):
+## Goals
+What the user is trying to accomplish.
+## Current State
+Where we are right now — last completed step, current blocker, active file.
+## Key Facts & Decisions
+Important constraints, user preferences, architectural decisions.
+## Files & Functions
+Paths, function names, config values that will be needed again.
+## Errors & Corrections
+Bugs hit, fixes applied, approaches that failed.
+## Work Done
+Summary of completed artifacts and changes.
+## Next Steps
+What remains to be done.
+`
 
     const userContent = `Existing memory (may be empty):\n\n${existing || '(none)'}\n\nNew transcript to merge:\n\n${transcript}\n`
 
@@ -1190,6 +1417,23 @@ When providing final results, format them clearly with markdown. For code, use a
     // Memory compression to stay within its smaller context window.
     if (billingMode !== 'local-model' && !agentSession.apiConfig.apiKey) return
     if (agentSession.isMemoryCompressionRunning) return
+
+    // Circuit breaker: stop trying after N consecutive failures
+    if (!options?.force && agentSession.compressionFailures >= COMPRESSION_MAX_CONSECUTIVE_FAILURES) return
+
+    // Initialization gate: don't compress short conversations
+    const currentTokens = this.estimateMessagesTokens(agentSession.messages)
+    agentSession.totalTokensSeen = Math.max(agentSession.totalTokensSeen, currentTokens)
+    if (!options?.force && agentSession.totalTokensSeen < COMPRESSION_INIT_TOKEN_THRESHOLD) return
+
+    // Dual trigger: require tool calls OR natural conversation break (soft only)
+    if (!options?.force && options?.throttle) {
+      const hasEnoughToolCalls = agentSession.toolCallsSinceLastCompression >= COMPRESSION_TOOL_CALL_THRESHOLD
+      // Check if last message is a content-only assistant response (natural break)
+      const lastMsg = agentSession.messages[agentSession.messages.length - 1]
+      const isNaturalBreak = lastMsg?.role === 'assistant' && !lastMsg.tool_calls?.length
+      if (!hasEnoughToolCalls && !isNaturalBreak) return
+    }
 
     let systemMessages: AgentMessage[] = []
     let nonSystemMessages: AgentMessage[] = []
@@ -1263,6 +1507,7 @@ When providing final results, format them clearly with markdown. For code, use a
       } catch {
         // Compression is best-effort: never fail the agent loop because a
         // memory merge request failed. Keep history as-is for now.
+        agentSession.compressionFailures++
         break
       } finally {
         agentSession.isMemoryCompressionRunning = false
@@ -1279,6 +1524,8 @@ When providing final results, format them clearly with markdown. For code, use a
     if (compressionRan) {
       agentSession.lastMemoryCompressionAt = Date.now()
       agentSession.lastMemoryCompressionIteration = iterationIndex
+      agentSession.compressionFailures = 0 // reset circuit breaker on success
+      agentSession.toolCallsSinceLastCompression = 0 // reset dual trigger
     }
 
     if (memoryChanged) {
@@ -1312,7 +1559,7 @@ When providing final results, format them clearly with markdown. For code, use a
       max_tokens?: number
     },
     onChunk?: (chunk: any) => void
-  ): Promise<{ content: string; toolCalls: any[] }> {
+  ): Promise<{ content: string; toolCalls: any[]; finishReason?: string | null }> {
     const url = this.getApiUrl(agentSession.apiConfig)
     const model = agentSession.apiConfig.billingMode === 'coding-plan'
       ? this.getCodingPlanModel(agentSession.apiConfig.codingPlanProvider)
@@ -1351,18 +1598,39 @@ When providing final results, format them clearly with markdown. For code, use a
           let errorBody = ''
           res.on('data', (chunk: Buffer) => { errorBody += chunk.toString() })
           res.on('end', () => {
-            reject(new Error(`API error (${res.statusCode}): ${errorBody.substring(0, 500)}`))
+            // Include Retry-After header in error message for upstream parsing
+            const retryAfter = res.headers['retry-after']
+            const retryHint = retryAfter ? ` [retry-after:${retryAfter}]` : ''
+            reject(new Error(`API error (${res.statusCode}): ${errorBody.substring(0, 500)}${retryHint}`))
           })
-          res.on('error', reject)
+          res.on('error', (err) => { clearInterval(idleTimer); reject(err) })
           return
         }
 
         let fullContent = ''
         let toolCalls: any[] = []
         let buffer = ''
+        let finishReason: string | null = null
+
+        // Stream idle watchdog: abort if no data for STREAM_IDLE_TIMEOUT_MS
+        let lastDataTime = Date.now()
+        const idleTimer = setInterval(() => {
+          const idle = Date.now() - lastDataTime
+          if (idle >= STREAM_IDLE_TIMEOUT_MS) {
+            clearInterval(idleTimer)
+            req.destroy()
+            reject(new Error(`Stream idle timeout: no data for ${Math.round(idle / 1000)}s`))
+          } else if (idle >= STREAM_STALL_THRESHOLD_MS) {
+            // Log stall but don't abort yet
+            console.warn(`[Agent] Stream stall: ${Math.round(idle / 1000)}s since last data`)
+          }
+        }, 5000)
 
         res.on('data', (chunk: Buffer) => {
+          lastDataTime = Date.now()
+
           if (!agentSession.isRunning) {
+            clearInterval(idleTimer)
             req.destroy()
             return
           }
@@ -1379,7 +1647,11 @@ When providing final results, format them clearly with markdown. For code, use a
 
             try {
               const parsed = JSON.parse(data)
-              const delta = parsed.choices?.[0]?.delta
+              const choice = parsed.choices?.[0]
+              const delta = choice?.delta
+
+              // Capture finish_reason when present
+              if (choice?.finish_reason) finishReason = choice.finish_reason
 
               if (!delta) continue
 
@@ -1416,6 +1688,7 @@ When providing final results, format them clearly with markdown. For code, use a
         })
 
         res.on('end', () => {
+          clearInterval(idleTimer)
           if (buffer.trim()) {
             const trimmed = buffer.trim()
             if (trimmed.startsWith('data:')) {
@@ -1452,17 +1725,18 @@ When providing final results, format them clearly with markdown. For code, use a
               }
             }
           }
-          resolve({ content: fullContent, toolCalls: toolCalls.filter(Boolean) })
+          resolve({ content: fullContent, toolCalls: toolCalls.filter(Boolean), finishReason })
         })
 
-        res.on('error', reject)
+        res.on('error', (err) => { clearInterval(idleTimer); reject(err) })
       })
 
-      req.on('error', reject)
+      req.on('error', (err) => { reject(err) })
 
       let abortHandler: (() => void) | null = null
       if (agentSession.abortController) {
         abortHandler = () => {
+          clearInterval(idleTimer)
           req.destroy()
           reject(new Error('Agent stopped'))
         }
@@ -1522,8 +1796,10 @@ When providing final results, format them clearly with markdown. For code, use a
     agentSession: AgentSession,
     iteration: number,
     onChunk: (chunk: any) => void
-  ): Promise<{ content: string; toolCalls: any[] }> {
-    const tools = this.toolsOverride || AGENT_TOOLS
+  ): Promise<{ content: string; toolCalls: any[]; finishReason?: string | null }> {
+    // Use CORE_TOOLS (not full AGENT_TOOLS) to reduce prompt size.
+    // Deferred tools are loaded on demand via tool_search.
+    const tools = this.toolsOverride || CORE_TOOLS
 
     if (agentSession.apiConfig.billingMode === 'local-model') {
       return this.requestCompletionLocal(
@@ -1669,6 +1945,11 @@ When providing final results, format them clearly with markdown. For code, use a
       return
     }
 
+    // Early-abort check: if already aborted, reject immediately
+    if (agentSession.abortController.signal.aborted) {
+      throw new Error('Agent stopped')
+    }
+
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
         cleanup()
@@ -1700,7 +1981,7 @@ When providing final results, format them clearly with markdown. For code, use a
     },
     options: { iteration: number },
     onChunk?: (chunk: any) => void,
-  ): Promise<{ content: string; toolCalls: any[] }> {
+  ): Promise<{ content: string; toolCalls: any[]; finishReason?: string | null }> {
     const MAX_BUDGET_ATTEMPTS = 4
     let lastError: unknown = null
     let budgetAttempts = 0
@@ -1790,7 +2071,14 @@ When providing final results, format them clearly with markdown. For code, use a
             throw error
           }
 
-          const delayMs = this.getReconnectDelayMs(reconnectAttempts)
+          // Parse Retry-After from error message if present
+          const retryAfterMatch = details.message.match(/\[retry-after:(\d+)\]/)
+          const retryAfterSec = retryAfterMatch ? parseInt(retryAfterMatch[1], 10) : 0
+          // If Retry-After > 30s, don't wait — throw so user sees the error
+          if (retryAfterSec > 30) throw error
+          const delayMs = retryAfterSec > 0
+            ? retryAfterSec * 1000
+            : this.getReconnectDelayMs(reconnectAttempts)
           const seconds = Math.max(1, Math.ceil(delayMs / 1000))
           const label = details.statusCode ? `HTTP ${details.statusCode}` : 'Network'
           const reason = (details.message || (error instanceof Error ? error.message : String(error))).trim()
@@ -1817,10 +2105,41 @@ When providing final results, format them clearly with markdown. For code, use a
       }
     }
 
+    // Safety net (unreachable under current control flow — the while(true)
+    // loop only exits via return or throw). Kept for defensive completeness.
     throw lastError instanceof Error ? lastError : new Error(String(lastError))
   }
 
+  /**
+   * Zero-cost micro-compaction: replace old tool results with stubs.
+   * Only targets specific compactable tools. Keeps the most recent N results
+   * intact. Mutates agentSession.messages in place.
+   */
+  private microcompactMessages(agentSession: AgentSession): void {
+    const messages = agentSession.messages
+    // Collect indices of compactable tool result messages (oldest first)
+    const compactableIndices: number[] = []
+    for (let i = 0; i < messages.length; i++) {
+      const msg = messages[i]
+      if (msg.role === 'tool' && msg.name && MICROCOMPACT_TOOLS.has(msg.name) && msg.content && msg.content !== MICROCOMPACT_CLEARED_MSG) {
+        compactableIndices.push(i)
+      }
+    }
+
+    // Nothing to compact if within keep-recent limit
+    if (compactableIndices.length <= MICROCOMPACT_KEEP_RECENT) return
+
+    // Replace all but the most recent N with a cleared stub
+    const toClear = compactableIndices.slice(0, compactableIndices.length - MICROCOMPACT_KEEP_RECENT)
+    for (const idx of toClear) {
+      messages[idx] = { ...messages[idx], content: MICROCOMPACT_CLEARED_MSG }
+    }
+  }
+
   private async prepareConversationForModelCall(agentSession: AgentSession, iteration: number): Promise<void> {
+    // 0) Zero-cost micro-compaction: replace old tool results with stubs.
+    this.microcompactMessages(agentSession)
+
     // 1) Prefer keeping calls within a soft working-set budget for speed.
     await this.maybeCompressSessionMemory(agentSession, {
       maxInputTokensOverride: this.getSoftWorkingSetTokens(agentSession),
@@ -1833,18 +2152,37 @@ When providing final results, format them clearly with markdown. For code, use a
       },
     })
 
-    // 2) Hard guardrail: if the prompt would exceed the configured max input
+    // 2) Zero-cost compression path: if we still exceed the hard budget but
+    // Session Memory is relatively fresh, use it as the compact summary and
+    // drop old messages without an extra LLM call.
+    const hardBudget = this.getEffectiveMaxInputTokens(agentSession)
+    const currentTokens = this.estimateMessagesTokens(agentSession.messages)
+    if (currentTokens > hardBudget && agentSession.sessionMemory?.content) {
+      const memoryAge = iteration - agentSession.lastMemoryCompressionIteration
+      if (memoryAge <= 5) {
+        // Memory is fresh enough — use it and drop old messages directly
+        this.pruneConversationForTokenBudget(agentSession, {
+          maxInputTokensOverride: hardBudget,
+        })
+        // Skip the LLM-based compression since we have fresh memory
+        if (this.estimateMessagesTokens(agentSession.messages) <= hardBudget) {
+          return
+        }
+      }
+    }
+
+    // 3) Hard guardrail: if the prompt would exceed the configured max input
     // tokens, compress history into memory instead of silently dropping it.
     await this.maybeCompressSessionMemory(agentSession, {
-      maxInputTokensOverride: this.getEffectiveMaxInputTokens(agentSession),
+      maxInputTokensOverride: hardBudget,
       iteration,
       force: true,
     })
 
-    // 3) Finally, prune tool output previews / attachments and keep the prompt
+    // 4) Finally, prune tool output previews / attachments and keep the prompt
     // within the hard budget before the model call.
     this.pruneConversationForTokenBudget(agentSession, {
-      maxInputTokensOverride: this.getEffectiveMaxInputTokens(agentSession),
+      maxInputTokensOverride: hardBudget,
     })
   }
 
@@ -1873,6 +2211,13 @@ When providing final results, format them clearly with markdown. For code, use a
     if (mode === 'accept-edit' && agentSession.alwaysAllowedTools.has(toolName)) {
       return true
     }
+
+    // Check content-level permission rules
+    let ruleArgs: any = {}
+    try { ruleArgs = JSON.parse(details) } catch {}
+    const ruleDecision = this.checkPermissionRules(toolName, ruleArgs)
+    if (ruleDecision === 'allow') return true
+    if (ruleDecision === 'deny') return false
 
     const requestId = `${uuidv4()}:${toolName}`
 
@@ -1907,9 +2252,110 @@ When providing final results, format them clearly with markdown. For code, use a
     return riskLevel === 'dangerous' ? 'system-config' : 'file-write'
   }
 
+  /**
+   * Ask the user structured questions via the permission dialog system.
+   * Returns a formatted string of answers.
+   */
+  private async requestUserAnswer(agentSession: AgentSession, questions: any[]): Promise<string> {
+    const requestId = `ask_user:${uuidv4()}`
+
+    return new Promise((resolve) => {
+      agentSession.pendingPermissions.set(requestId, {
+        resolve: (approved: boolean) => {
+          const answerText = agentSession.pendingAnswers.get(requestId)
+          agentSession.pendingAnswers.delete(requestId)
+          if (answerText) {
+            resolve(answerText)
+          } else {
+            resolve(approved ? 'User approved without specific answers.' : 'User skipped the questions.')
+          }
+        },
+      })
+
+      this.sendToRenderer('agent:permission-request', {
+        id: requestId,
+        sessionId: agentSession.sessionId,
+        runId: agentSession.runId,
+        type: 'user-question',
+        description: 'Agent is asking you a question',
+        details: JSON.stringify(questions),
+        toolName: 'ask_user',
+        questions,
+      })
+
+      // Timeout after 5 minutes
+      setTimeout(() => {
+        if (agentSession.pendingPermissions.has(requestId)) {
+          agentSession.pendingPermissions.delete(requestId)
+          resolve('User did not respond to the questions (timed out).')
+        }
+      }, 300000)
+    })
+  }
+
+  /**
+   * Request plan approval via the permission dialog system.
+   * Returns true if approved, false if rejected.
+   */
+  private async requestPlanApproval(agentSession: AgentSession, planSummary: string, filesToModify: string[]): Promise<{ approved: boolean; feedback?: string }> {
+    const requestId = `plan_approval:${uuidv4()}`
+
+    // Get the last assistant message content as the full plan
+    const lastAssistant = [...agentSession.messages].reverse().find(m => m.role === 'assistant')
+    const planContent = lastAssistant?.content || planSummary
+
+    return new Promise((resolve) => {
+      agentSession.pendingPermissions.set(requestId, {
+        resolve: (approved: boolean) => {
+          const feedback = agentSession.pendingAnswers.get(requestId)
+          agentSession.pendingAnswers.delete(requestId)
+          resolve({ approved, feedback: feedback || undefined })
+        },
+      })
+
+      this.sendToRenderer('agent:permission-request', {
+        id: requestId,
+        sessionId: agentSession.sessionId,
+        runId: agentSession.runId,
+        type: 'plan-approval',
+        description: planSummary,
+        details: JSON.stringify(filesToModify),
+        toolName: 'exit_plan_mode',
+        planContent,
+        planFiles: filesToModify,
+      })
+
+      // Timeout after 10 minutes (plans need more review time)
+      setTimeout(() => {
+        if (agentSession.pendingPermissions.has(requestId)) {
+          agentSession.pendingPermissions.delete(requestId)
+          resolve({ approved: false })
+        }
+      }, 600000)
+    })
+  }
+
+  /**
+   * Handle answer response from user (for ask_user tool).
+   * Called from main.ts IPC handler.
+   */
+  handleQuestionResponse(requestId: string, answerText: string): void {
+    for (const [, session] of this.sessions) {
+      const pending = session.pendingPermissions.get(requestId)
+      if (pending) {
+        session.pendingAnswers.set(requestId, answerText)
+        pending.resolve(true)
+        session.pendingPermissions.delete(requestId)
+        return
+      }
+    }
+  }
+
   private async runAgentLoop(agentSession: AgentSession): Promise<void> {
     const MAX_ITERATIONS = 200
     let iteration = 0
+
+    let maxOutputRecoveryCount = 0
 
     try {
       while (agentSession.isRunning && iteration < MAX_ITERATIONS) {
@@ -1928,7 +2374,7 @@ When providing final results, format them clearly with markdown. For code, use a
         await this.prepareConversationForModelCall(agentSession, iteration)
 
         // Call LLM
-        const { content, toolCalls } = await this.callLLM(agentSession, iteration, (chunk) => {
+        const { content, toolCalls, finishReason } = await this.callLLM(agentSession, iteration, (chunk) => {
           this.sendToRenderer('agent:stream', {
             sessionId: agentSession.sessionId,
             runId: agentSession.runId,
@@ -1938,12 +2384,24 @@ When providing final results, format them clearly with markdown. For code, use a
 
         if (!agentSession.isRunning) break
 
+        // max_output_tokens recovery: if truncated and no tool calls, inject
+        // a meta-prompt telling the model to resume
+        if (toolCalls.length === 0 && finishReason === 'length' && maxOutputRecoveryCount < MAX_OUTPUT_RECOVERY_LIMIT) {
+          maxOutputRecoveryCount++
+          agentSession.messages.push({ role: 'assistant', content: content || '' })
+          agentSession.messages.push({ role: 'user', content: MAX_OUTPUT_RECOVERY_PROMPT })
+          continue // retry the loop with the recovery prompt
+        }
+
         // If there's content and no tool calls, we're done
         if (toolCalls.length === 0) {
           agentSession.messages.push({ role: 'assistant', content: content || '' })
           agentSession.completionStatus = 'completed'
           break
         }
+
+        // Reset recovery counter on successful tool-use turns
+        maxOutputRecoveryCount = 0
 
         // Add assistant message with tool calls
         agentSession.messages.push({
@@ -1952,31 +2410,201 @@ When providing final results, format them clearly with markdown. For code, use a
           tool_calls: toolCalls,
         })
 
-        // Execute each tool call
+        // Partition tool calls into batches: consecutive concurrency-safe
+        // tools form parallel batches; non-safe tools run serially.
+        type ToolBatch = { concurrent: boolean; calls: typeof toolCalls }
+        const batches: ToolBatch[] = []
         for (const tc of toolCalls) {
+          const safe = isToolConcurrencySafe(tc.function.name)
+          const lastBatch = batches[batches.length - 1]
+          if (lastBatch && lastBatch.concurrent && safe) {
+            lastBatch.calls.push(tc) // merge into current concurrent batch
+          } else {
+            batches.push({ concurrent: safe, calls: [tc] })
+          }
+        }
+
+        // Execute batches
+        for (const batch of batches) {
           if (!agentSession.isRunning) break
 
-          const toolName = tc.function.name
-          const toolArgs = tc.function.arguments
+          const executeSingleTool = async (tc: typeof toolCalls[0]) => {
+            const toolName = tc.function.name
+            const toolArgs = tc.function.arguments
 
-          this.sendToRenderer('agent:stream', {
-            sessionId: agentSession.sessionId,
-            runId: agentSession.runId,
-            chunk: { type: 'tool-call-start', toolCall: { id: tc.id, name: toolName, arguments: toolArgs, status: 'running' } },
-          })
+            this.sendToRenderer('agent:stream', {
+              sessionId: agentSession.sessionId,
+              runId: agentSession.runId,
+              chunk: { type: 'tool-call-start', toolCall: { id: tc.id, name: toolName, arguments: toolArgs, status: 'running' } },
+            })
 
-          // Check permissions BEFORE executing
-          let args: any = {}
-          try { args = JSON.parse(toolArgs) } catch {}
-          const riskLevel = getToolRiskLevel(toolName, args)
+            // Check permissions BEFORE executing
+            let args: any = {}
+            try { args = JSON.parse(toolArgs) } catch {}
+            const riskLevel = getToolRiskLevel(toolName, args)
 
-          if (riskLevel !== 'safe') {
-            const description = `${toolName}: ${args.path || args.command || ''}`
-            const approved = await this.requestPermission(
-              agentSession, toolName, description, toolArgs, riskLevel
-            )
+            if (riskLevel !== 'safe') {
+              const description = `${toolName}: ${args.path || args.command || ''}`
+              const approved = await this.requestPermission(
+                agentSession, toolName, description, toolArgs, riskLevel
+              )
 
-            if (!approved) {
+              if (!approved) {
+                return {
+                  tc, toolName, toolArgs,
+                  result: { success: false, output: `Permission denied by user for: ${toolName}`, riskLevel: 'safe' as const },
+                  denied: true,
+                }
+              }
+            }
+
+            // --- Interactive tools: ask_user and exit_plan_mode ---
+            if (toolName === 'ask_user') {
+              try {
+                const askArgs = JSON.parse(toolArgs)
+                const questions = askArgs.questions || []
+                const answer = await this.requestUserAnswer(agentSession, questions)
+                return {
+                  tc, toolName, toolArgs,
+                  result: { success: true, output: answer, riskLevel: 'safe' as const },
+                  denied: false,
+                }
+              } catch (e: any) {
+                return {
+                  tc, toolName, toolArgs,
+                  result: { success: false, output: `Failed to ask user: ${e.message}`, riskLevel: 'safe' as const },
+                  denied: false,
+                }
+              }
+            }
+
+            if (toolName === 'exit_plan_mode' && !this.toolExecutorOverride) {
+              try {
+                const planArgs = JSON.parse(toolArgs)
+                const planResult = await this.requestPlanApproval(agentSession, planArgs.planSummary || '', planArgs.filesToModify || [])
+                if (planResult.approved) {
+                  // Switch permission mode from 'plan' to 'accept-edit'
+                  agentSession.permissionMode = 'accept-edit'
+                  return {
+                    tc, toolName, toolArgs,
+                    result: { success: true, output: 'User approved your plan. You can now start implementing. Permission mode switched to accept-edit.', riskLevel: 'safe' as const },
+                    denied: false,
+                  }
+                } else {
+                  const feedbackMsg = planResult.feedback
+                    ? `User rejected the plan with feedback: "${planResult.feedback}". Refine your plan based on this feedback.`
+                    : 'User rejected the plan. Continue refining — ask the user what they want changed.'
+                  return {
+                    tc, toolName, toolArgs,
+                    result: { success: false, output: feedbackMsg, riskLevel: 'safe' as const },
+                    denied: false,
+                  }
+                }
+              } catch (e: any) {
+                return {
+                  tc, toolName, toolArgs,
+                  result: { success: false, output: `Plan approval failed: ${e.message}`, riskLevel: 'safe' as const },
+                  denied: false,
+                }
+              }
+            }
+
+            // --- Plan mode: enforce read-only (except plan file) ---
+            if (agentSession.permissionMode === 'plan' && !this.toolExecutorOverride) {
+              const readOnlyTools = new Set([
+                'read_file', 'list_directory', 'search_files', 'search_content',
+                'create_task_list', 'web_search', 'web_fetch',
+                'browser_navigate', 'browser_extract', 'browser_screenshot', 'browser_close',
+                'ask_user', 'exit_plan_mode', 'find_symbol', 'tool_search',
+              ])
+              if (!readOnlyTools.has(toolName)) {
+                return {
+                  tc, toolName, toolArgs,
+                  result: { success: false, output: `Tool "${toolName}" is not allowed in plan mode. Only read-only tools, ask_user, and exit_plan_mode are permitted. Use exit_plan_mode to submit your plan for approval before making changes.`, riskLevel: 'safe' as const },
+                  denied: false,
+                }
+              }
+            }
+
+            // Read-before-edit enforcement: reject edits to files not read in this session
+            if (toolName === 'edit_file' && !this.toolExecutorOverride) {
+              try {
+                const editArgs = JSON.parse(toolArgs)
+                if (editArgs.path && !agentSession.readFiles.has(path.resolve(editArgs.path))) {
+                  return {
+                    tc, toolName, toolArgs,
+                    result: { success: false, output: `You must read_file "${editArgs.path}" before editing it. This prevents edits based on stale or hallucinated content.`, riskLevel: 'safe' as const },
+                    denied: false,
+                  }
+                }
+              } catch {}
+            }
+
+            // Run preToolUse hooks
+            const hookCtx = { toolName, toolArgs, sessionId: agentSession.sessionId, workspacePath: agentSession.workspacePath }
+            if (this.hooksManager.hasHooks()) {
+              const hookDecision = await this.hooksManager.runPreToolUse(hookCtx)
+              if (hookDecision === 'deny') {
+                return {
+                  tc, toolName, toolArgs,
+                  result: { success: false, output: `Blocked by preToolUse hook`, riskLevel: 'safe' as const },
+                  denied: true,
+                }
+              }
+            }
+
+            // Execute the tool
+            let result: any
+            if (toolName.startsWith('browser_') && !this.toolExecutorOverride) {
+              if (!agentSession.browserManager) {
+                agentSession.browserManager = new BrowserManager({
+                  apiConfig: agentSession.apiConfig,
+                  artifactsDir: this.artifactsDir || undefined,
+                  sessionId: agentSession.sessionId,
+                })
+              }
+              result = await agentSession.browserManager.handleToolCall(toolName, toolArgs)
+            } else {
+              const executeToolFn = this.toolExecutorOverride || executeTool
+              result = await executeToolFn(toolName, toolArgs, agentSession.workspacePath, {
+                signal: agentSession.abortController?.signal,
+              })
+            }
+
+            // Track read files for read-before-edit enforcement
+            if (toolName === 'read_file' && result.success) {
+              try {
+                const readArgs = JSON.parse(toolArgs)
+                if (readArgs.path) agentSession.readFiles.add(path.resolve(readArgs.path))
+              } catch {}
+            }
+
+            // Run postToolUse hooks (fire-and-forget)
+            if (this.hooksManager.hasHooks()) {
+              this.hooksManager.runPostToolUse({ ...hookCtx, toolResult: result.output }).catch(() => {})
+            }
+
+            return { tc, toolName, toolArgs, result, denied: false }
+          }
+
+          // Run batch: parallel for concurrent-safe (>1), serial otherwise
+          let results: Awaited<ReturnType<typeof executeSingleTool>>[]
+          if (batch.concurrent && batch.calls.length > 1) {
+            results = await Promise.all(batch.calls.map(executeSingleTool))
+          } else {
+            results = []
+            for (const tc of batch.calls) {
+              if (!agentSession.isRunning) break
+              results.push(await executeSingleTool(tc))
+            }
+          }
+
+          // Process results in original order
+          for (const r of results) {
+            if (!r) continue
+            const { tc, toolName, toolArgs, result, denied } = r
+
+            if (denied) {
               agentSession.messages.push({
                 role: 'tool',
                 content: `Permission denied by user for: ${toolName}`,
@@ -1993,78 +2621,75 @@ When providing final results, format them clearly with markdown. For code, use a
               })
               continue
             }
-          }
 
-          // Execute the tool (use override if provided, e.g. for Copilot orchestrator)
-          const executeToolFn = this.toolExecutorOverride || executeTool
-          const result = await executeToolFn(toolName, toolArgs, agentSession.workspacePath, {
-            signal: agentSession.abortController?.signal,
-          })
+            // Handle task list updates
+            if (toolName === 'create_task_list') {
+              try {
+                const tasks = JSON.parse(result.output)
+                this.sendToRenderer('agent:task-update', {
+                  sessionId: agentSession.sessionId,
+                  runId: agentSession.runId,
+                  tasks,
+                })
+              } catch {}
+            }
 
-          // Handle task list updates
-          if (toolName === 'create_task_list') {
-            try {
-              const tasks = JSON.parse(result.output)
-              this.sendToRenderer('agent:task-update', {
-                sessionId: agentSession.sessionId,
-                runId: agentSession.runId,
-                tasks,
-              })
-            } catch {}
-          }
+            // Update workspace files if file operations were performed
+            if (['write_file', 'delete_file', 'edit_file'].includes(toolName) && agentSession.workspacePath) {
+              this.updateWorkspaceFiles(agentSession)
+            }
 
-          // Update workspace files if file operations were performed
-          if (['write_file', 'delete_file', 'edit_file'].includes(toolName) && agentSession.workspacePath) {
-            this.updateWorkspaceFiles(agentSession)
-          }
+            const shouldPersistArtifact = result.output.length > TOOL_CONTEXT_MAX_CHARS_DEFAULT
+            const artifact = shouldPersistArtifact
+              ? this.persistToolOutputArtifact({
+                  sessionId: agentSession.sessionId,
+                  toolCallId: tc.id,
+                  toolName,
+                  output: result.output,
+                })
+              : null
 
-          const shouldPersistArtifact = result.output.length > TOOL_CONTEXT_MAX_CHARS_DEFAULT
-          const artifact = shouldPersistArtifact
-            ? this.persistToolOutputArtifact({
-                sessionId: agentSession.sessionId,
-                toolCallId: tc.id,
-                toolName,
-                output: result.output,
-              })
-            : null
+            const contextMaxChars = ['read_file', 'web_fetch'].includes(toolName)
+              ? TOOL_CONTEXT_MAX_CHARS_LARGE_TEXT
+              : TOOL_CONTEXT_MAX_CHARS_DEFAULT
 
-          const contextMaxChars = ['read_file', 'web_fetch'].includes(toolName)
-            ? TOOL_CONTEXT_MAX_CHARS_LARGE_TEXT
-            : TOOL_CONTEXT_MAX_CHARS_DEFAULT
+            const toolContent = (() => {
+              const preview = this.slimToolContentForContext(result.output, contextMaxChars)
+              if (!artifact) return preview
+              const suffix = artifact.truncated ? ' (truncated)' : ''
+              return `[Full output saved to: ${artifact.filePath}${suffix}]\n\n${preview}`
+            })()
 
-          const toolContent = (() => {
-            const preview = this.slimToolContentForContext(result.output, contextMaxChars)
-            if (!artifact) return preview
-            const suffix = artifact.truncated ? ' (truncated)' : ''
-            return `[Full output saved to: ${artifact.filePath}${suffix}]\n\n${preview}`
-          })()
+            // Add tool result to conversation (bounded for context window)
+            agentSession.messages.push({
+              role: 'tool',
+              content: toolContent,
+              tool_call_id: tc.id,
+              name: toolName,
+            })
 
-          // Add tool result to conversation (bounded for context window)
-          agentSession.messages.push({
-            role: 'tool',
-            content: toolContent,
-            tool_call_id: tc.id,
-            name: toolName,
-          })
-
-          // Notify about tool call completion
-          this.sendToRenderer('agent:stream', {
-            sessionId: agentSession.sessionId,
-            runId: agentSession.runId,
-            chunk: {
-              type: 'tool-call-result',
-              toolCall: {
-                id: tc.id,
-                name: toolName,
-                arguments: toolArgs,
-                status: result.success ? 'completed' : 'error',
-                result: this.slimToolContentForContext(result.output, 2000),
-                error: result.success ? undefined : this.slimToolContentForContext(result.output, 2000),
-                resultFilePath: artifact?.filePath,
+            // Notify about tool call completion
+            this.sendToRenderer('agent:stream', {
+              sessionId: agentSession.sessionId,
+              runId: agentSession.runId,
+              chunk: {
+                type: 'tool-call-result',
+                toolCall: {
+                  id: tc.id,
+                  name: toolName,
+                  arguments: toolArgs,
+                  status: result.success ? 'completed' : 'error',
+                  result: this.slimToolContentForContext(result.output, 2000),
+                  error: result.success ? undefined : this.slimToolContentForContext(result.output, 2000),
+                  resultFilePath: artifact?.filePath,
+                },
               },
-            },
-          })
+            })
+          }
         }
+
+        // Track tool calls for dual-trigger compression
+        agentSession.toolCallsSinceLastCompression += toolCalls.length
 
         // Send iteration-end signal for UI collapse
         this.sendToRenderer('agent:stream', {
@@ -2084,6 +2709,13 @@ When providing final results, format them clearly with markdown. For code, use a
       }
     } finally {
       agentSession.isRunning = false
+
+      // Close browser if it was used in this session
+      if (agentSession.browserManager) {
+        agentSession.browserManager.close().catch(() => {})
+        agentSession.browserManager = undefined
+      }
+
       if (agentSession.completionStatus !== 'error') {
         this.sendToRenderer('agent:complete', {
           sessionId: agentSession.sessionId,
@@ -2114,6 +2746,17 @@ When providing final results, format them clearly with markdown. For code, use a
           })
         } catch { /* never let evolution tracking break the main flow */ }
       }
+
+      // Schedule session cleanup: remove from map after 10 minutes of inactivity
+      // to prevent memory leaks. If startAgent is called again for this sessionId,
+      // the session will be re-created.
+      const cleanupSessionId = agentSession.sessionId
+      setTimeout(() => {
+        const current = this.sessions.get(cleanupSessionId)
+        if (current && !current.isRunning) {
+          this.sessions.delete(cleanupSessionId)
+        }
+      }, 10 * 60 * 1000)
     }
   }
 

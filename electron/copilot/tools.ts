@@ -96,6 +96,8 @@ export const COPILOT_TOOLS: AgentToolDef[] = [
   },
   // Reuse exact web_search definition from agent/tools.ts
   webSearchTool,
+  // Reuse ask_user from agent/tools.ts — orchestrator needs to clarify requirements with user
+  AGENT_TOOLS.find(t => t.function.name === 'ask_user')!,
 ]
 
 /**
@@ -111,6 +113,11 @@ export async function executeCopilotTool(
   // web_search delegates to the existing agent tool implementation
   if (toolName === 'web_search') {
     return executeTool(toolName, argsStr, workspacePath, { signal: options.signal })
+  }
+
+  // ask_user is handled by AgentManager directly (intercepted in runAgentLoop before reaching here)
+  if (toolName === 'ask_user') {
+    return { success: false, output: 'ask_user should be handled by AgentManager, not executeCopilotTool', riskLevel: 'safe' }
   }
 
   const manager = options.copilotManager

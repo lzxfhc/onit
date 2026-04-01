@@ -60,6 +60,7 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 700,
     backgroundColor: '#FAFAFA',
+    icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -159,8 +160,13 @@ function setupIPC() {
   })
 
   // Agent: permission response
-  ipcMain.on('agent:permission-response', (_event, data: { requestId: string; approved: boolean; alwaysAllow?: boolean }) => {
-    agentManager.handlePermissionResponse(data.requestId, data.approved, data.alwaysAllow)
+  ipcMain.on('agent:permission-response', (_event, data: { requestId: string; approved: boolean; alwaysAllow?: boolean; answerText?: string }) => {
+    // Route question/plan answers to the dedicated handler
+    if (data.answerText && (data.requestId.startsWith('ask_user:') || data.requestId.startsWith('plan_approval:'))) {
+      agentManager.handleQuestionResponse(data.requestId, data.answerText)
+    } else {
+      agentManager.handlePermissionResponse(data.requestId, data.approved, data.alwaysAllow)
+    }
   })
 
   // Sessions: save

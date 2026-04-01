@@ -17,6 +17,7 @@
     "node-llama-cpp": "^3.18.0",
     "node-schedule": "^2.1.1",
     "officeparser": "^6.0.7",
+    "playwright-core": "^1.58.2",
     "uuid": "^9.0.0"
   },
   "devDependencies": {
@@ -51,7 +52,7 @@
     "icon": "build/icon.png",
     "mac": {
       "icon": "build/icon.icns",
-     "target": [
+      "target": [
         {
           "target": "dmg",
           "arch": [

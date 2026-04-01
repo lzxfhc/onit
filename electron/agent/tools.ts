@@ -6,7 +6,13 @@ import https from 'https'
 import http from 'http'
 import { URL } from 'url'
 import { AgentToolDef, ToolExecutionResult, RiskLevel } from './types'
+
+// WebFetch URL cache (15-minute TTL, max 50 entries)
+const WEB_FETCH_CACHE_TTL_MS = 15 * 60 * 1000
+const WEB_FETCH_CACHE_MAX_ENTRIES = 50
+const webFetchCache = new Map<string, { text: string; timestamp: number }>()
 import { isExtractableFile, extractFileContent } from '../utils/file-extract'
+import { fileReadCache } from '../utils/file-cache'
 
 export const AGENT_TOOLS: AgentToolDef[] = [
   {
@@ -45,13 +51,14 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     type: 'function',
     function: {
       name: 'edit_file',
-      description: 'Edit a file by replacing a specific string with a new string. The old_string must be unique in the file.',
+      description: 'Edit a file by replacing a specific string with a new string. The old_string MUST be unique in the file — if it appears multiple times, the edit will fail. Include enough surrounding context to make old_string unambiguous. You MUST read_file before editing. Use replace_all=true only for renaming variables across the entire file.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Absolute path to the file to edit' },
-          old_string: { type: 'string', description: 'The exact string to find and replace' },
+          old_string: { type: 'string', description: 'The exact string to find and replace (must be unique in the file unless replace_all=true)' },
           new_string: { type: 'string', description: 'The string to replace it with' },
+          replace_all: { type: 'boolean', description: 'Replace ALL occurrences instead of requiring uniqueness (default: false). Use for variable renames.' },
         },
         required: ['path', 'old_string', 'new_string'],
       },
@@ -197,7 +204,269 @@ export const AGENT_TOOLS: AgentToolDef[] = [
       },
     },
   },
+  // --- Browser tools ---
+  {
+    type: 'function',
+    function: {
+      name: 'browser_navigate',
+      description: 'Open a URL in the browser. Returns the page title and a list of interactive elements (buttons, links, inputs, etc.). Use this for pages that need JavaScript rendering or user interaction. For simple text content, prefer web_fetch.',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The URL to navigate to (must start with http:// or https://)' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_action',
+      description: 'Perform an action on the current browser page. You can click buttons, type in inputs, select options, scroll, press keys, or wait. Specify the target element by natural language description (e.g., "login button", "search box") or CSS selector.',
+      parameters: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['click', 'type', 'select', 'scroll', 'hover', 'press_key', 'wait'], description: 'The action to perform' },
+          element: { type: 'string', description: 'Natural language description of the element (e.g., "登录按钮", "search input"). Can also use element index like "[3]".' },
+          selector: { type: 'string', description: 'CSS selector for precise element targeting. Takes priority over "element".' },
+          value: { type: 'string', description: 'Value for type (text to enter), select (option), press_key (key name like "Enter"), scroll ("up"/"down"), or wait (milliseconds).' },
+          description: { type: 'string', description: 'Human-readable description of what this action does (shown in permission dialog)' },
+        },
+        required: ['action'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_extract',
+      description: 'Extract content from the current browser page. Supports: "text" (clean text), "html" (raw HTML), "selector" (text from CSS selector matches), "structured" (tables and lists).',
+      parameters: {
+        type: 'object',
+        properties: {
+          mode: { type: 'string', enum: ['text', 'html', 'selector', 'structured'], description: 'Extraction mode (default: text)' },
+          selector: { type: 'string', description: 'CSS selector (required for "selector" mode)' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_screenshot',
+      description: 'Take a screenshot of the current browser page. Returns the file path to the saved PNG image.',
+      parameters: {
+        type: 'object',
+        properties: {
+          fullPage: { type: 'boolean', description: 'Capture the full scrollable page instead of just the viewport (default: false)' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'browser_close',
+      description: 'Close the browser and release resources. Call this when you are done with browser operations.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  // --- Notebook tool ---
+  {
+    type: 'function',
+    function: {
+      name: 'notebook_edit',
+      description: 'Edit a Jupyter notebook (.ipynb) file by cell index. Can insert, replace, or delete cells. Use read_file first to see the notebook structure. Each cell has a type (code/markdown) and source content.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Absolute path to the .ipynb file' },
+          action: { type: 'string', enum: ['insert', 'replace', 'delete'], description: 'What to do: insert a new cell, replace an existing cell, or delete a cell' },
+          cell_index: { type: 'number', description: 'Cell index (0-based). For insert: index to insert BEFORE (use -1 to append). For replace/delete: the target cell.' },
+          cell_type: { type: 'string', enum: ['code', 'markdown'], description: 'Cell type (required for insert and replace)' },
+          source: { type: 'string', description: 'Cell content (required for insert and replace)' },
+        },
+        required: ['path', 'action', 'cell_index'],
+      },
+    },
+  },
+  // --- Git worktree tools ---
+  {
+    type: 'function',
+    function: {
+      name: 'worktree_create',
+      description: 'Create a git worktree for isolated parallel development. Creates a new working directory on a separate branch without affecting the main working tree. Useful when you need to work on multiple branches simultaneously or want to isolate changes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          branch: { type: 'string', description: 'Branch name for the worktree. Created from HEAD if it does not exist.' },
+          path: { type: 'string', description: 'Path where the worktree will be created (optional — defaults to ../repo-branch)' },
+        },
+        required: ['branch'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'worktree_remove',
+      description: 'Remove a git worktree and clean up its directory. Use when you are done with isolated work.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Path of the worktree to remove' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  // --- Code intelligence tool ---
+  {
+    type: 'function',
+    function: {
+      name: 'find_symbol',
+      description: 'Find where a symbol (function, class, variable, type) is defined or referenced in the codebase. More precise than text search — understands code structure. Works best for TypeScript/JavaScript projects. For other languages, falls back to pattern-based search.',
+      parameters: {
+        type: 'object',
+        properties: {
+          symbol: { type: 'string', description: 'The symbol name to find (e.g., "validateToken", "UserProfile", "handleSubmit")' },
+          directory: { type: 'string', description: 'Root directory to search in' },
+          mode: { type: 'string', enum: ['definition', 'references', 'all'], description: 'What to find: "definition" (where defined), "references" (where used), "all" (both). Default: "all"' },
+        },
+        required: ['symbol', 'directory'],
+      },
+    },
+  },
+  // --- Tool search (deferred loading) ---
+  {
+    type: 'function',
+    function: {
+      name: 'tool_search',
+      description: 'Search for and load additional tools that are not in the default tool set. Some specialized tools (browser automation, notebook editing, git worktree, interactive questions, plan mode) are deferred — call this tool to load their schemas before using them. Use "select:tool_name" for exact matches or keywords for search.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query. Use "select:browser_navigate,browser_action" for exact selection, or keywords like "browser" or "notebook jupyter"' },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  // --- Interactive tools ---
+  {
+    type: 'function',
+    function: {
+      name: 'ask_user',
+      description: 'Ask the user one or more structured questions with selectable options. Use this to gather preferences, clarify requirements, get decisions on implementation choices, or offer direction options. Users can always provide custom text via an "Other" option that is automatically added. If you recommend a specific option, make it the first in the list and add "(Recommended)" to its label.',
+      parameters: {
+        type: 'object',
+        properties: {
+          questions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                question: { type: 'string', description: 'The complete question to ask' },
+                options: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string', description: 'Short display text (1-8 words)' },
+                      description: { type: 'string', description: 'Explanation of what this option means' },
+                    },
+                    required: ['label'],
+                  },
+                  description: 'Available options (2-4). An "Other" free-text option is always added automatically.',
+                },
+                multiSelect: { type: 'boolean', description: 'Allow multiple selections (default: false)' },
+              },
+              required: ['question', 'options'],
+            },
+            description: 'Array of questions to ask (1-4 questions)',
+          },
+        },
+        required: ['questions'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'exit_plan_mode',
+      description: 'Signal that your plan is complete and ready for user review. Call this ONLY when in plan mode and you have finished writing the plan. The user will see your plan and can approve it (which exits plan mode and lets you start implementing) or reject it (which keeps you in plan mode to refine). Include the plan summary and the list of files you intend to modify.',
+      parameters: {
+        type: 'object',
+        properties: {
+          planSummary: { type: 'string', description: 'Brief summary of the plan (1-3 sentences)' },
+          filesToModify: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'List of file paths that will be created or modified',
+          },
+        },
+        required: ['planSummary'],
+      },
+    },
+  },
 ]
+
+/**
+ * Core tools (always loaded into prompt) vs deferred tools (loaded on demand via tool_search).
+ * This reduces prompt size by ~30% when advanced tools aren't needed.
+ */
+const DEFERRED_TOOL_NAMES = new Set([
+  'browser_navigate', 'browser_action', 'browser_extract', 'browser_screenshot', 'browser_close',
+  'notebook_edit', 'worktree_create', 'worktree_remove',
+  'ask_user', 'exit_plan_mode',
+])
+
+/** Core tools — always included in the prompt. */
+export const CORE_TOOLS: AgentToolDef[] = AGENT_TOOLS.filter(t => !DEFERRED_TOOL_NAMES.has(t.function.name))
+
+/** Deferred tools — loaded on demand when agent calls tool_search. */
+export const DEFERRED_TOOLS: AgentToolDef[] = AGENT_TOOLS.filter(t => DEFERRED_TOOL_NAMES.has(t.function.name))
+
+/** Get tool schema by name (searches both core and deferred). */
+export function getToolByName(name: string): AgentToolDef | undefined {
+  return AGENT_TOOLS.find(t => t.function.name === name)
+}
+
+/** Search deferred tools by query. Returns matching tool definitions. */
+export function searchTools(query: string): AgentToolDef[] {
+  const q = query.toLowerCase()
+
+  // Exact select: "select:browser_navigate,notebook_edit"
+  if (q.startsWith('select:')) {
+    const names = q.slice(7).split(',').map(s => s.trim())
+    return DEFERRED_TOOLS.filter(t => names.includes(t.function.name))
+  }
+
+  // Keyword search across name + description
+  return DEFERRED_TOOLS.filter(t => {
+    const text = `${t.function.name} ${t.function.description}`.toLowerCase()
+    return q.split(/\s+/).every(word => text.includes(word))
+  })
+}
+
+/** Tools that can safely run concurrently (read-only, no side effects). */
+export const CONCURRENCY_SAFE_TOOLS = new Set([
+  'read_file', 'list_directory', 'search_files', 'search_content',
+  'create_task_list', 'web_search', 'web_fetch',
+  'ask_user', 'exit_plan_mode', 'tool_search', 'find_symbol',
+  // NOTE: browser_* tools are NOT concurrency-safe — they share a mutable page object
+])
+
+export function isToolConcurrencySafe(toolName: string): boolean {
+  return CONCURRENCY_SAFE_TOOLS.has(toolName)
+}
 
 export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
   switch (toolName) {
@@ -208,7 +477,23 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
     case 'create_task_list':
     case 'web_search':
     case 'web_fetch':
+    case 'browser_navigate':
+    case 'browser_extract':
+    case 'browser_screenshot':
+    case 'browser_close':
+    case 'ask_user':
+    case 'exit_plan_mode':
+    case 'tool_search':
+    case 'find_symbol':
       return 'safe'
+    case 'notebook_edit':
+      return 'moderate'
+    case 'worktree_create':
+      return 'moderate'
+    case 'worktree_remove':
+      return 'dangerous'
+    case 'browser_action':
+      return 'moderate'
     case 'write_file':
       return 'moderate'
     case 'edit_file':
@@ -218,8 +503,10 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
       return 'dangerous'
     case 'execute_command': {
       const cmd = (args.command || '').toLowerCase()
+      const rawCmd = args.command || ''
       const dangerousKeywords = [
         'rmdir', 'format', 'pkill', 'shutdown', 'reboot',
+        'eval ', 'exec ', 'sudo ', 'su ',
         // Windows dangerous
         'del /f /s /q', 'del /s /q', 'rd /s /q', 'rmdir /s /q',
         'remove-item -recurse -force', 'format-volume',
@@ -235,9 +522,20 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
         /\bkill\s+-9\b/i,
         /\b(python|ruby|perl|node)\s+-(e|c)\b/i,
         /\b(bash|sh|zsh)\s+-c\b/i,
+        // Shell injection patterns (fail-closed)
+        /\$\(/,                            // command substitution
+        /`[^`]*`/,                         // backtick substitution
+        /<\(/,                             // process substitution
+        />\(/,                             // process substitution
+        /[\x00-\x08\x0e-\x1f\x7f]/,      // control characters
+        /[\u200b-\u200f\u2028-\u202f\ufeff]/, // Unicode invisible chars
       ]
+      // Zsh-specific dangerous commands
+      const zshDangerous = ['zmodload', 'emulate', 'sysopen', 'sysread', 'syswrite', 'zpty', 'ztcp', 'zsocket']
+      if (zshDangerous.some(z => cmd.includes(z))) return 'dangerous'
+
       if (dangerousKeywords.some(p => cmd.includes(p))) return 'dangerous'
-      if (dangerousRegexes.some(r => r.test(cmd))) return 'dangerous'
+      if (dangerousRegexes.some(r => r.test(rawCmd))) return 'dangerous'
       const moderatePatterns = [
         'rm ', 'mv ', 'cp ', 'install', 'uninstall',
         'pip', 'npm', 'brew', 'curl', 'wget',
@@ -626,6 +924,78 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): P
   })
 }
 
+/**
+ * Try to use ripgrep (rg) for content search. Returns formatted results or null
+ * if rg is not available. ~10-100x faster than manual traversal.
+ */
+async function tryRipgrepSearch(
+  searchRoot: string,
+  query: string,
+  opts: { filePattern?: string; maxResults: number; maxDepth: number; signal?: AbortSignal }
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    const rgArgs = [
+      '--no-heading', '--line-number', '--color=never',
+      '--max-count=5',                   // max matches per file
+      `--max-depth=${opts.maxDepth}`,
+      `--max-filesize=4M`,
+      '-g', '!node_modules', '-g', '!.git', '-g', '!*.min.*',
+    ]
+    if (opts.filePattern) rgArgs.push('-g', opts.filePattern)
+    rgArgs.push('--', query, searchRoot)
+
+    let stdout = ''
+    let timedOut = false
+    const proc = spawn('rg', rgArgs, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 30000,
+      env: { ...process.env, RIPGREP_CONFIG_PATH: '' },
+    })
+
+    proc.on('error', () => resolve(null)) // rg not found → fallback
+
+    proc.stdout?.on('data', (chunk: Buffer) => {
+      if (stdout.length < 200000) stdout += chunk.toString()
+    })
+
+    if (opts.signal) {
+      const onAbort = () => { proc.kill(); resolve(null) }
+      opts.signal.addEventListener('abort', onAbort, { once: true })
+      proc.on('close', () => opts.signal?.removeEventListener('abort', onAbort))
+    }
+
+    proc.on('close', (code) => {
+      if (code === 2) { resolve(null); return } // rg error → fallback
+      if (!stdout.trim()) {
+        resolve(`No matches for "${query}" in ${searchRoot}`)
+        return
+      }
+
+      // Parse rg output: group by file, limit to maxResults files
+      const lines = stdout.split('\n').filter(Boolean)
+      const fileMap = new Map<string, string[]>()
+      for (const line of lines) {
+        const sep = line.indexOf(':')
+        if (sep < 0) continue
+        const file = line.substring(0, sep)
+        const rest = line.substring(sep + 1)
+        if (!fileMap.has(file)) {
+          if (fileMap.size >= opts.maxResults) break
+          fileMap.set(file, [])
+        }
+        fileMap.get(file)!.push(rest)
+      }
+
+      const output = Array.from(fileMap.entries()).map(([file, matches]) => {
+        const rel = path.relative(searchRoot, file)
+        return `${rel}:\n${matches.map(m => `  ${m}`).join('\n')}`
+      }).join('\n\n')
+
+      resolve(`Found matches in ${fileMap.size} files:\n${output}`)
+    })
+  })
+}
+
 export async function executeTool(
   toolName: string,
   argsStr: string,
@@ -663,6 +1033,19 @@ export async function executeTool(
         }
 
         const stat = fs.statSync(filePath)
+
+        // Try file read cache for small text files (common case)
+        const wantsLineRangeEarly = args.start_line != null || args.end_line != null
+        if (!wantsLineRangeEarly && stat.size <= 5 * 1024 * 1024) {
+          const cached = fileReadCache.read(filePath)
+          if (cached !== null) {
+            const maxLen = typeof args.max_length === 'number' ? Math.min(args.max_length, 240000) : 20000
+            const output = cached.length > maxLen
+              ? `${cached.substring(0, maxLen)}\n\n[File truncated — showing first ${maxLen} of ${cached.length} chars]`
+              : cached
+            return { success: true, output, riskLevel }
+          }
+        }
 
         const maxLengthRaw = typeof args.max_length === 'number' && Number.isFinite(args.max_length)
           ? Math.max(1, Math.floor(args.max_length))
@@ -736,6 +1119,7 @@ export async function executeTool(
           fs.mkdirSync(dir, { recursive: true })
         }
         fs.writeFileSync(args.path, args.content, 'utf-8')
+        fileReadCache.invalidate(args.path)
         return { success: true, output: `File written successfully: ${args.path}`, riskLevel }
       }
 
@@ -753,9 +1137,23 @@ export async function executeTool(
         if (!content.includes(args.old_string)) {
           return { success: false, output: `String not found in file: "${args.old_string.substring(0, 100)}"`, riskLevel }
         }
-        content = content.replace(args.old_string, () => args.new_string)
+        // Uniqueness check: old_string must appear exactly once (unless replace_all)
+        const occurrences = content.split(args.old_string).length - 1
+        if (occurrences > 1 && !args.replace_all) {
+          return {
+            success: false,
+            output: `The old_string appears ${occurrences} times in the file. Either provide a larger unique context to match exactly once, or set replace_all=true to replace all occurrences.`,
+            riskLevel,
+          }
+        }
+        if (args.replace_all) {
+          content = content.split(args.old_string).join(args.new_string)
+        } else {
+          content = content.replace(args.old_string, () => args.new_string)
+        }
         fs.writeFileSync(args.path, content, 'utf-8')
-        return { success: true, output: `File edited successfully: ${args.path}`, riskLevel }
+        fileReadCache.invalidate(args.path)
+        return { success: true, output: `File edited successfully: ${args.path}${args.replace_all ? ` (${occurrences} replacements)` : ''}`, riskLevel }
       }
 
       case 'delete_file': {
@@ -825,8 +1223,23 @@ export async function executeTool(
       }
 
       case 'search_content': {
-        const results: string[] = []
         const searchRoot = typeof args.directory === 'string' ? args.directory : workspacePath || ''
+        const maxResults = clampNumber(args.max_results, 1, 500, SEARCH_MAX_CONTENT_RESULTS)
+        const maxDepth = clampNumber(args.max_depth, 0, 64, SEARCH_MAX_CONTENT_DEPTH)
+
+        // Fast path: use ripgrep if available (10-100x faster than manual traversal)
+        const rgResult = await tryRipgrepSearch(searchRoot, args.query, {
+          filePattern: args.file_pattern,
+          maxResults,
+          maxDepth,
+          signal: options?.signal,
+        })
+        if (rgResult !== null) {
+          return { success: true, output: rgResult, riskLevel }
+        }
+
+        // Fallback: manual traversal (when rg is not installed)
+        const results: string[] = []
         const inWorkspace = workspacePath ? isSubPath(workspacePath, searchRoot) : false
         const defaultTimeoutMs = inWorkspace ? SEARCH_CONTENT_TIMEOUT_MS_WORKSPACE : SEARCH_CONTENT_TIMEOUT_MS
         const defaultMaxEntries = inWorkspace ? SEARCH_MAX_VISITED_ENTRIES_CONTENT_WORKSPACE : SEARCH_MAX_VISITED_ENTRIES_CONTENT
@@ -835,8 +1248,6 @@ export async function executeTool(
 
         const timeoutMs = clampNumber(args.timeout_ms, SEARCH_MIN_TIMEOUT_MS, SEARCH_MAX_TIMEOUT_MS, defaultTimeoutMs)
         const maxEntries = clampNumber(args.max_entries, 1000, 5_000_000, defaultMaxEntries)
-        const maxDepth = clampNumber(args.max_depth, 0, 64, SEARCH_MAX_CONTENT_DEPTH)
-        const maxResults = clampNumber(args.max_results, 1, 500, SEARCH_MAX_CONTENT_RESULTS)
         const maxFiles = clampNumber(args.max_files, 10, 500_000, defaultMaxFiles)
         const maxReadBytes = clampNumber(args.max_read_bytes, 1024, SEARCH_MAX_READ_BYTES, defaultMaxReadBytes)
 
@@ -853,7 +1264,7 @@ export async function executeTool(
 
         await searchContentRecursive(searchRoot, searchRoot, args.query, args.file_pattern, results, state, {
           maxDepth,
-          maxResults,
+          maxResults: maxResults,
           maxReadBytes,
         })
         const elapsedMs = Date.now() - state.startedAt
@@ -905,6 +1316,15 @@ export async function executeTool(
           const targetUrl = args.url || ''
           const maxLength = args.max_length || 20000
 
+          // Check URL cache (15-minute TTL)
+          const cached = webFetchCache.get(targetUrl)
+          if (cached && Date.now() - cached.timestamp < WEB_FETCH_CACHE_TTL_MS) {
+            let text = cached.text
+            if (text.length > maxLength) text = text.substring(0, maxLength) + '\n\n[Content truncated]'
+            resolve({ success: true, output: `Content from ${targetUrl} (cached):\n\n${text}`, riskLevel })
+            return
+          }
+
           fetchUrl(targetUrl, 5, (err, body) => {
             if (err) {
               resolve({ success: false, output: `Failed to fetch URL: ${err}`, riskLevel })
@@ -931,6 +1351,14 @@ export async function executeTool(
             if (!text) {
               resolve({ success: false, output: `No readable content found at: ${targetUrl}`, riskLevel })
             } else {
+              // Cache the clean text for future requests (delete+set to update insertion order for LRU)
+              webFetchCache.delete(targetUrl)
+              webFetchCache.set(targetUrl, { text, timestamp: Date.now() })
+              // Evict oldest entries if cache is too large
+              if (webFetchCache.size > WEB_FETCH_CACHE_MAX_ENTRIES) {
+                const oldest = webFetchCache.keys().next().value
+                if (oldest) webFetchCache.delete(oldest)
+              }
               resolve({ success: true, output: `Content from ${targetUrl}:\n\n${text}`, riskLevel })
             }
           })
@@ -939,6 +1367,148 @@ export async function executeTool(
 
       case 'create_task_list': {
         return { success: true, output: JSON.stringify(args.tasks), riskLevel: 'safe' }
+      }
+
+      case 'find_symbol': {
+        const symbol = args.symbol
+        const dir = args.directory || workspacePath || ''
+        const mode = args.mode || 'all'
+        if (!symbol) return { success: false, output: 'Symbol name is required', riskLevel: 'safe' }
+        if (!fs.existsSync(dir)) return { success: false, output: `Directory not found: ${dir}`, riskLevel: 'safe' }
+
+        // Escape regex special chars to prevent injection
+        const esc = symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+        const results: string[] = []
+
+        // Definition patterns: function/class/const/let/var/type/interface/export declarations
+        if (mode === 'definition' || mode === 'all') {
+          const defPatterns = [
+            `(function|class|const|let|var|type|interface|enum)\\s+${esc}\\b`,
+            `export\\s+(default\\s+)?(function|class|const|let|var|type|interface|enum)\\s+${esc}\\b`,
+            `${esc}\\s*[:=]\\s*(function|\\()`,  // obj.method = function / method: (
+            `def\\s+${esc}\\s*\\(`,               // Python
+          ]
+          for (const pat of defPatterns) {
+            const defResult = await tryRipgrepSearch(dir, pat, {
+              maxResults: 10, maxDepth: 20, signal: options?.signal,
+            })
+            if (defResult && !defResult.includes('No matches')) {
+              results.push(`## Definitions\n${defResult}`)
+              break
+            }
+          }
+        }
+
+        // Reference patterns: all occurrences (excluding definitions)
+        if (mode === 'references' || mode === 'all') {
+          const refResult = await tryRipgrepSearch(dir, `\\b${esc}\\b`, {
+            maxResults: 20, maxDepth: 20, signal: options?.signal,
+          })
+          if (refResult && !refResult.includes('No matches')) {
+            results.push(`## References\n${refResult}`)
+          }
+        }
+
+        if (results.length === 0) {
+          // Fallback to simple text search
+          const fallback = await tryRipgrepSearch(dir, symbol, {
+            maxResults: 15, maxDepth: 20, signal: options?.signal,
+          })
+          return { success: true, output: fallback || `Symbol "${symbol}" not found in ${dir}`, riskLevel: 'safe' }
+        }
+
+        return { success: true, output: results.join('\n\n'), riskLevel: 'safe' }
+      }
+
+      case 'tool_search': {
+        const results = searchTools(args.query || '')
+        if (results.length === 0) {
+          return { success: true, output: `No tools found matching "${args.query}". Available deferred tools: ${DEFERRED_TOOLS.map(t => t.function.name).join(', ')}`, riskLevel: 'safe' }
+        }
+        const schemas = results.map(t => JSON.stringify({ type: t.type, function: t.function }, null, 2))
+        return { success: true, output: `Found ${results.length} tool(s):\n\n${schemas.join('\n\n')}`, riskLevel: 'safe' }
+      }
+
+      case 'notebook_edit': {
+        const nbPath = args.path
+        if (!fs.existsSync(nbPath)) {
+          return { success: false, output: `Notebook not found: ${nbPath}`, riskLevel }
+        }
+        if (workspacePath) {
+          const resolved = path.resolve(nbPath)
+          if (!resolved.startsWith(path.resolve(workspacePath) + path.sep) && resolved !== path.resolve(workspacePath)) {
+            return { success: false, output: `Path outside workspace: ${nbPath}`, riskLevel }
+          }
+        }
+        try {
+          const raw = fs.readFileSync(nbPath, 'utf-8')
+          const nb = JSON.parse(raw)
+          if (!Array.isArray(nb.cells)) {
+            return { success: false, output: 'Invalid notebook: no cells array', riskLevel }
+          }
+          const action = args.action
+          const idx = typeof args.cell_index === 'number' ? args.cell_index : -1
+          if (action === 'delete') {
+            if (idx < 0 || idx >= nb.cells.length) {
+              return { success: false, output: `Cell index ${idx} out of range (0-${nb.cells.length - 1})`, riskLevel }
+            }
+            nb.cells.splice(idx, 1)
+          } else if (action === 'insert') {
+            const cell = { cell_type: args.cell_type || 'code', source: (args.source || '').split('\n').map((l: string) => l + '\n'), metadata: {}, outputs: [] }
+            if (idx < 0 || idx >= nb.cells.length) {
+              nb.cells.push(cell) // append
+            } else {
+              nb.cells.splice(idx, 0, cell)
+            }
+          } else if (action === 'replace') {
+            if (idx < 0 || idx >= nb.cells.length) {
+              return { success: false, output: `Cell index ${idx} out of range (0-${nb.cells.length - 1})`, riskLevel }
+            }
+            nb.cells[idx].cell_type = args.cell_type || nb.cells[idx].cell_type
+            nb.cells[idx].source = (args.source || '').split('\n').map((l: string) => l + '\n')
+            nb.cells[idx].outputs = [] // clear outputs on replace
+          } else {
+            return { success: false, output: `Unknown action: ${action}`, riskLevel }
+          }
+          fs.writeFileSync(nbPath, JSON.stringify(nb, null, 1), 'utf-8')
+          fileReadCache.invalidate(nbPath)
+          return { success: true, output: `Notebook ${action}ed cell at index ${idx}. Total cells: ${nb.cells.length}`, riskLevel }
+        } catch (e: any) {
+          return { success: false, output: `Notebook edit failed: ${e.message}`, riskLevel }
+        }
+      }
+
+      case 'worktree_create': {
+        const branch = args.branch
+        if (!branch || !/^[\w./-]+$/.test(branch)) {
+          return { success: false, output: `Invalid branch name: ${branch}`, riskLevel }
+        }
+        const repoRoot = workspacePath || process.cwd()
+        const wtPath = args.path || path.join(path.dirname(repoRoot), `${path.basename(repoRoot)}-${branch}`)
+        try {
+          // Use execFileSync (not execSync) to avoid shell injection
+          const { execFileSync } = require('child_process')
+          execFileSync('git', ['rev-parse', '--git-dir'], { cwd: repoRoot, stdio: 'pipe' })
+          // Create branch if it doesn't exist
+          try { execFileSync('git', ['branch', branch], { cwd: repoRoot, stdio: 'pipe' }) } catch {}
+          // Create worktree
+          execFileSync('git', ['worktree', 'add', wtPath, branch], { cwd: repoRoot, stdio: 'pipe' })
+          return { success: true, output: `Worktree created at: ${wtPath}\nBranch: ${branch}\n\nYou can now use this path as a workspace for isolated work.`, riskLevel }
+        } catch (e: any) {
+          return { success: false, output: `Worktree creation failed: ${e.message}`, riskLevel }
+        }
+      }
+
+      case 'worktree_remove': {
+        const wtPath = args.path
+        if (!wtPath) return { success: false, output: 'Path is required', riskLevel }
+        try {
+          const { execFileSync } = require('child_process')
+          execFileSync('git', ['worktree', 'remove', wtPath, '--force'], { cwd: workspacePath || process.cwd(), stdio: 'pipe' })
+          return { success: true, output: `Worktree removed: ${wtPath}`, riskLevel }
+        } catch (e: any) {
+          return { success: false, output: `Worktree removal failed: ${e.message}`, riskLevel }
+        }
       }
 
       default:

@@ -1,10 +1,13 @@
 import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { User, Bot, ChevronRight, Terminal, CheckCircle2, XCircle, Loader2, Brain, FileText, Search, Globe, ListTodo } from 'lucide-react'
+import { User, Bot, ChevronRight, Terminal, CheckCircle2, XCircle, Loader2, Brain, FileText, Search, Globe, ListTodo, Monitor, MessageCircleQuestion, ClipboardList, BookOpen, GitBranch, Code2, Wrench } from 'lucide-react'
 import type { Message, ToolCall, ContentBlock } from '../../types'
 import { useT } from '../../i18n'
 import type { Translations } from '../../i18n/zh'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import { Copy, Check as CheckIcon } from 'lucide-react'
 
 interface Props {
   message: Message
@@ -109,6 +112,60 @@ const MessageBubble = memo(function MessageBubble({ message, sessionId }: Props)
   )
 }, (prevProps, nextProps) => prevProps.message === nextProps.message)
 
+/** Code block with syntax highlighting, language label, and copy button. */
+function CodeBlock({ language, children }: { language?: string; children: string }) {
+  const [copied, setCopied] = useState(false)
+  const lang = language || ''
+  const code = String(children).replace(/\n$/, '')
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(code).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }).catch(() => {})
+  }
+
+  return (
+    <div className="relative group rounded overflow-hidden mb-3">
+      {/* Language label + copy button */}
+      <div className="flex items-center justify-between px-3 py-1.5 bg-[#1a1b26] text-[10px]">
+        <span className="text-gray-400 font-mono">{lang || 'code'}</span>
+        <button
+          onClick={handleCopy}
+          className="flex items-center gap-1 text-gray-500 hover:text-gray-300 transition-colors"
+          title="Copy"
+        >
+          {copied ? <CheckIcon className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+          <span>{copied ? 'Copied' : 'Copy'}</span>
+        </button>
+      </div>
+      <SyntaxHighlighter
+        style={oneDark}
+        language={lang || 'text'}
+        PreTag="div"
+        customStyle={{ margin: 0, borderRadius: 0, fontSize: '12px', padding: '12px 16px' }}
+        wrapLongLines
+      >
+        {code}
+      </SyntaxHighlighter>
+    </div>
+  )
+}
+
+/** Custom components for ReactMarkdown with syntax highlighting. */
+const markdownComponents = {
+  code({ className, children, ...props }: any) {
+    const match = /language-(\w+)/.exec(className || '')
+    const isInline = !match && !className
+
+    if (isInline) {
+      return <code className={className} {...props}>{children}</code>
+    }
+
+    return <CodeBlock language={match?.[1]}>{String(children)}</CodeBlock>
+  },
+}
+
 const MarkdownText = memo(function MarkdownText({ content, isStreaming }: {
   content: string
   isStreaming?: boolean
@@ -118,7 +175,7 @@ const MarkdownText = memo(function MarkdownText({ content, isStreaming }: {
 
   return (
     <div className="markdown-content">
-      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS}>
+      <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={markdownComponents}>
         {renderedContent}
       </ReactMarkdown>
     </div>
@@ -271,6 +328,18 @@ function getToolSummaryLabel(name: string, t: Translations): string {
     create_task_list: t.chat.toolTaskList,
     web_search: t.chat.toolWebSearch,
     web_fetch: t.chat.toolFetchPage,
+    browser_navigate: t.chat.toolBrowserNavigate,
+    browser_action: t.chat.toolBrowserAction,
+    browser_extract: t.chat.toolBrowserExtract,
+    browser_screenshot: t.chat.toolBrowserScreenshot,
+    browser_close: t.chat.toolBrowserClose,
+    ask_user: t.chat.toolAskUser,
+    exit_plan_mode: t.chat.toolExitPlanMode,
+    notebook_edit: t.chat.toolNotebookEdit || 'Edit notebook',
+    worktree_create: t.chat.toolWorktreeCreate || 'Create worktree',
+    worktree_remove: t.chat.toolWorktreeRemove || 'Remove worktree',
+    tool_search: t.chat.toolSearch || 'Search tools',
+    find_symbol: t.chat.toolFindSymbol || 'Find symbol',
   }
   return labels[name] || name
 }
@@ -327,7 +396,7 @@ const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: Tool
   const toolPath = useMemo(() => {
     try {
       const args = JSON.parse(toolCall.arguments)
-      return args.path || args.command || args.directory || args.query || args.url || ''
+      return args.path || args.command || args.directory || args.query || args.url || args.element || args.action || args.mode || args.branch || args.symbol || ''
     } catch {
       return ''
     }
@@ -380,6 +449,21 @@ const ToolCallBlock = memo(function ToolCallBlock({ toolCall }: { toolCall: Tool
                 <pre className="mt-1 text-[11px] bg-terminal text-gray-200 rounded p-2 overflow-x-auto font-mono max-h-48 overflow-y-auto">
                   {toolCall.result}
                 </pre>
+                {toolCall.name === 'browser_screenshot' && (() => {
+                  try {
+                    const data = JSON.parse(toolCall.result)
+                    if (data.filePath) {
+                      return (
+                        <img
+                          src={`file://${data.filePath}`}
+                          alt="Screenshot"
+                          className="mt-2 rounded border border-border-subtle max-w-full max-h-64 object-contain"
+                        />
+                      )
+                    }
+                  } catch {}
+                  return null
+                })()}
               </div>
             )}
             {toolCall.error && (
@@ -410,6 +494,18 @@ function getToolLabel(name: string, t: Translations) {
     create_task_list: t.chat.toolTaskList,
     web_search: t.chat.toolWebSearch,
     web_fetch: t.chat.toolFetchPage,
+    browser_navigate: t.chat.toolBrowserNavigate,
+    browser_action: t.chat.toolBrowserAction,
+    browser_extract: t.chat.toolBrowserExtract,
+    browser_screenshot: t.chat.toolBrowserScreenshot,
+    browser_close: t.chat.toolBrowserClose,
+    ask_user: t.chat.toolAskUser,
+    exit_plan_mode: t.chat.toolExitPlanMode,
+    notebook_edit: t.chat.toolNotebookEdit || 'Edit notebook',
+    worktree_create: t.chat.toolWorktreeCreate || 'Create worktree',
+    worktree_remove: t.chat.toolWorktreeRemove || 'Remove worktree',
+    tool_search: t.chat.toolSearch || 'Search tools',
+    find_symbol: t.chat.toolFindSymbol || 'Find symbol',
   }
   return labels[name] || name
 }
@@ -426,11 +522,19 @@ function getToolCategoryIcon(name: string) {
   const fileTools = ['read_file', 'write_file', 'edit_file', 'delete_file']
   const searchTools = ['list_directory', 'search_files', 'search_content']
   const webTools = ['web_search', 'web_fetch']
+  const browserTools = ['browser_navigate', 'browser_action', 'browser_extract', 'browser_screenshot', 'browser_close']
 
   if (fileTools.includes(name)) return <FileText className="w-3.5 h-3.5 text-text-tertiary" />
   if (searchTools.includes(name)) return <Search className="w-3.5 h-3.5 text-text-tertiary" />
   if (webTools.includes(name)) return <Globe className="w-3.5 h-3.5 text-text-tertiary" />
+  if (browserTools.includes(name)) return <Monitor className="w-3.5 h-3.5 text-text-tertiary" />
   if (name === 'create_task_list') return <ListTodo className="w-3.5 h-3.5 text-text-tertiary" />
+  if (name === 'ask_user') return <MessageCircleQuestion className="w-3.5 h-3.5 text-text-tertiary" />
+  if (name === 'exit_plan_mode') return <ClipboardList className="w-3.5 h-3.5 text-text-tertiary" />
+  if (name === 'notebook_edit') return <BookOpen className="w-3.5 h-3.5 text-text-tertiary" />
+  if (name === 'worktree_create' || name === 'worktree_remove') return <GitBranch className="w-3.5 h-3.5 text-text-tertiary" />
+  if (name === 'find_symbol') return <Code2 className="w-3.5 h-3.5 text-text-tertiary" />
+  if (name === 'tool_search') return <Wrench className="w-3.5 h-3.5 text-text-tertiary" />
   return <Terminal className="w-3.5 h-3.5 text-text-tertiary" />
 }
 
