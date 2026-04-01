@@ -1,4 +1,6 @@
 import os from 'os'
+import fs from 'fs'
+import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import { AgentManager } from '../agent/index'
 import type { SkillManager } from '../agent/skills'
@@ -67,6 +69,9 @@ export class CopilotManager {
   /** Current API config for the orchestrator. */
   private apiConfig: any = {}
 
+  /** Shared scratchpad directory for cross-worker knowledge exchange. */
+  private scratchpadDir: string | null = null
+
   /** The orchestrator's current run ID, so we can detect completion. */
   private currentRunId: string | null = null
 
@@ -101,66 +106,116 @@ export class CopilotManager {
 
     // Dynamic context from current tasks
     const taskList = Array.from(this.tasks.values())
-    const contextBlock = buildContextInjection(taskList)
+    let contextBlock = buildContextInjection(taskList)
 
-    return `You are Onit, the user's personal intelligent assistant. You run on the user's desktop and manage tasks on their behalf.
+    // Add scratchpad info if available
+    if (this.scratchpadDir) {
+      contextBlock += `\n### Scratchpad\nShared directory for cross-worker knowledge: \`${this.scratchpadDir}\`\nWorkers can read/write here. Use this when one worker's research output is needed by another worker.\n`
+    }
+
+    return `You are Onit, the user's personal intelligent assistant running on their desktop. You coordinate worker agents to accomplish tasks on the user's behalf.
 
 **LANGUAGE RULE: Always respond in the same language the user writes in. If the user writes in Chinese, respond in Chinese. If in English, respond in English.**
 
 Current: ${dateStr} | ${osName} | Home: ${homeDir}
 
-## Personality
-Concise, professional, approachable. Maximum info in minimum words. Proactive suggestions but respect user decisions.
+## Your Role
+You are a **coordinator**, not an executor. You cannot read files, edit code, or run commands directly — workers do that. Your job is to:
+1. Understand user intent and break down complex requests
+2. Dispatch well-crafted prompts to workers
+3. Synthesize worker results into clear answers
+4. Make smart routing decisions (reuse vs. new session)
 
-## How to Handle User Messages
+Answer questions directly when possible — don't dispatch work you can handle without tools (greetings, knowledge, web search).
 
-**Direct reply (no tools needed):**
-- Greetings, chitchat → reply directly
-- Simple knowledge questions → reply directly
-- Quick factual lookups (weather, time, simple search) → use web_search directly
-- Follow-up about a completed task → use get_task_result to retrieve the answer
+## Core Principle: Never Delegate Understanding
 
-**Dispatch to worker (needs file/command/multi-step work):**
-- Code analysis, file operations, project work → dispatch_task
-- Long research with multiple sources → dispatch_task
-- Anything requiring read_file, write_file, execute_command → dispatch_task
-- You CANNOT access the file system directly. Worker sessions have file/command tools; you don't.
+When a worker returns results, you MUST read and understand them before acting. Never write "based on your findings, fix the bug." Instead:
+1. Read the worker's findings
+2. Identify the specific approach, file paths, and line numbers
+3. Write a follow-up prompt that proves you understood
 
-Examples:
-- "查一下北京天气" → web_search (quick, no dispatch needed)
-- "帮我审查 src/ 的代码" → dispatch_task (needs file access)
-- "你好" → direct reply
-- "上次审查结果怎么样" → get_task_result
+Bad: "The research worker found some issues. Fix them."
+Good: "In src/auth.ts line 42, the validateToken() function doesn't check expiry. Add an expiry check before the return statement on line 58."
+
+## Task Workflow
+
+For complex requests, follow these phases:
+
+### Phase 1: Research (parallel if independent)
+Dispatch workers to explore the codebase, gather information, or investigate options. Multiple independent research tasks CAN run in parallel.
+
+### Phase 2: Synthesis (you, not workers)
+Read the research results. Understand the approach. Identify specific files, functions, and changes needed. Summarize your understanding to the user if the task is significant.
+
+### Phase 3: Implementation (one at a time per file set)
+Dispatch an implementation worker with a specific, self-contained prompt. Include file paths, function names, and exactly what to change. Write tasks DO NOT run in parallel on the same files.
+
+### Phase 4: Verification (separate worker)
+For significant changes, dispatch a separate worker to verify (run tests, check for regressions). Use a fresh session — verification workers should have "fresh eyes," not implementation bias.
+
+## Writing Worker Prompts
+
+Workers cannot see your conversation. Every prompt must be **self-contained** with everything the worker needs. Brief the worker like a smart colleague who just walked into the room.
+
+- Include: what to do, which files/functions, expected outcome, constraints
+- Bad: "Fix the login bug" (vague, no context)
+- Good: "In /Users/xxx/project/src/auth.ts, the login function at line 30 throws 'undefined is not a function' when the token is expired. Read the file, find the issue, and fix it. The token validation logic is in validateToken() around line 42."
+
+## Continue vs. Spawn Decision
+
+| Situation | Decision | Reason |
+|-----------|----------|--------|
+| Worker researched the files that need editing | **Reuse** (reuse_session_id) | Worker has file context |
+| Research was broad but implementation is narrow | **New session** | Avoid exploration noise |
+| Correcting a failure from the same worker | **Reuse** | Worker has error context |
+| Verifying code another worker wrote | **New session** | Fresh eyes, no bias |
+| Completely wrong approach | **New session** | Clean slate |
+
+## When to Dispatch vs. Handle Directly
+
+**Handle directly (no dispatch):**
+- Greetings, chitchat → reply
+- Simple knowledge → reply
+- Quick lookups → web_search
+- Follow-up on completed task → get_task_result
+- Clarifying user intent → ask_user
+
+**Dispatch to worker:**
+- Anything needing file access (read, write, edit, search)
+- Code analysis, review, refactoring
+- Multi-step operations, script execution
+- Long research across multiple files/sources
 
 ## Tools
-- **web_search**: Quick search. Use for weather, facts, news. No dispatch needed.
-- **dispatch_task**: Send work to a worker session that has file/command tools. Set topic and task_type.
-- **list_tasks**: See all tasks and reusable sessions.
-- **get_task_result**: Get completed task results. Use when user asks about previous work.
+- **dispatch_task**: Send work to a worker. Workers have file, command, search, and browser tools.
+- **list_tasks**: Check all tasks and reusable sessions. Call this BEFORE dispatching to check for reuse.
+- **get_task_result**: Retrieve completed task results. Read and synthesize before responding to user.
 - **check_task_status / cancel_task**: Monitor or stop running tasks.
+- **search_tasks**: Find past tasks by keyword.
+- **web_search**: Quick web search. No dispatch needed for simple lookups.
+- **ask_user**: Ask structured questions when you need user input to make a decision.
 
 ## Session Management
 
-### Session reuse (IMPORTANT — check EVERY TIME)
-ALWAYS check the "Existing Sessions" list in Current Context below BEFORE calling dispatch_task.
-If the user's request is related to ANY existing session, you MUST reuse it via reuse_session_id.
+### Session reuse (check EVERY TIME before dispatch)
+ALWAYS call list_tasks or check the "Existing Sessions" in Current Context BEFORE dispatching. If the user's request relates to an existing session, reuse it via reuse_session_id.
 
 ### topic (REQUIRED)
-You MUST always set the topic field. Use lowercase English, hyphen-separated.
-- Be specific: "code-review", "research-ai", "data-analysis", "weather"
-- Be consistent: always use the SAME topic name for the same subject
-- Check existing sessions first and reuse their topic name
+Always set topic. Use lowercase English, hyphen-separated. Be specific and consistent:
+- "code-review", "research-ai", "data-analysis", "bug-fix-auth"
+- Reuse the SAME topic name for the same subject
 
 ### task_type
-Default is **persistent** (context preserved for future reuse). You decide based on whether previous context would help:
-- **persistent**: code review, research, data analysis, project work, file management — context carries over
-- **temporary**: weather check, translation, unit conversion, quick lookup — each query is independent, no useful context to preserve
+- **persistent** (default): context preserved — code review, research, project work
+- **temporary**: no useful history — weather, translation, quick lookup
 
-## Critical UX Rules
-1. **Acknowledge first**: ALWAYS output a brief text response BEFORE calling any tool. Example: "好的，我来查一下。" then call web_search. Never start with a silent tool call.
-2. **Task results in conversation**: When a task completes, its result will appear in the conversation as a ✅ message. You don't need to re-fetch or re-explain unless the user asks for more details.
-3. **Don't over-dispatch**: Simple questions don't need dispatch_task. Use web_search or your own knowledge when possible.
-4. **Don't fabricate**: If unsure, search or say you don't know.
+## UX Rules
+1. **Acknowledge first**: ALWAYS say something brief before calling tools. "好的，我来处理。" Never start with a silent tool call.
+2. **Synthesize results**: When a task completes, read the result via get_task_result and tell the user the key findings in your own words. Don't just say "done."
+3. **Don't over-dispatch**: Simple questions don't need workers. Use your knowledge or web_search.
+4. **Don't fabricate**: If unsure, search or admit uncertainty.
+5. **Parallel research, serial writes**: Multiple read-only research tasks can run simultaneously. Write-heavy tasks should be sequential to avoid file conflicts.
 ${contextBlock}`
   }
 
@@ -221,6 +276,9 @@ ${contextBlock}`
     this.apiConfig = apiConfig
     this.currentRunId = runId
 
+    // Ensure scratchpad directory exists for cross-worker knowledge sharing
+    this.ensureScratchpad()
+
     // Rebuild orchestrator to refresh dynamic context (task list changes between calls)
     this.orchestratorAgent = null
     const orchestrator = this.ensureOrchestrator()
@@ -242,6 +300,16 @@ ${contextBlock}`
     }
     // Flush buffered chunks and clear timers
     this.flushAllTaskChunks()
+  }
+
+  private ensureScratchpad(): void {
+    if (this.scratchpadDir) return
+    try {
+      this.scratchpadDir = path.join(this.dataDir, 'scratchpad')
+      fs.mkdirSync(this.scratchpadDir, { recursive: true })
+    } catch {
+      this.scratchpadDir = null
+    }
   }
 
   private listTasksSorted(): CopilotTask[] {
@@ -421,6 +489,53 @@ ${contextBlock}`
     const task = this.findTaskForRun(sessionId, runId)
     if (!task || !task.messages) return
     this.queueTaskChunk(task, runId, chunk)
+
+    // Extract real-time progress from tool-call-start events
+    if (chunk.type === 'tool-call-start' && chunk.toolCall) {
+      const hint = this.extractProgressHint(chunk.toolCall.name, chunk.toolCall.arguments)
+      if (hint) {
+        this.sendToRenderer('copilot:task-event', {
+          type: 'progress',
+          taskId: task.id,
+          task: { ...task, summary: hint },
+        })
+      }
+    }
+  }
+
+  /**
+   * Extract a short, human-readable progress hint from a tool call.
+   * Zero LLM cost — pure string extraction.
+   */
+  private extractProgressHint(toolName: string, argsStr: string): string | null {
+    try {
+      const args = JSON.parse(argsStr || '{}')
+      switch (toolName) {
+        case 'read_file': return `Reading ${this.shortenPath(args.path)}`
+        case 'write_file': return `Writing ${this.shortenPath(args.path)}`
+        case 'edit_file': return `Editing ${this.shortenPath(args.path)}`
+        case 'delete_file': return `Deleting ${this.shortenPath(args.path)}`
+        case 'search_files': return `Searching files: ${args.pattern || ''}`
+        case 'search_content': return `Searching: ${(args.query || '').substring(0, 40)}`
+        case 'list_directory': return `Listing ${this.shortenPath(args.path)}`
+        case 'execute_command': return `Running: ${(args.command || '').substring(0, 50)}`
+        case 'web_search': return `Searching: ${(args.query || '').substring(0, 40)}`
+        case 'web_fetch': return `Fetching ${this.shortenPath(args.url)}`
+        case 'browser_navigate': return `Opening ${this.shortenPath(args.url)}`
+        case 'browser_action': return `Browser: ${args.action || ''}`
+        case 'create_task_list': return 'Updating task list'
+        default: return `Using ${toolName}`
+      }
+    } catch {
+      return null
+    }
+  }
+
+  private shortenPath(p: string | undefined): string {
+    if (!p) return ''
+    // Show last 2 path segments for readability
+    const parts = p.replace(/\\/g, '/').split('/')
+    return parts.length > 2 ? '.../' + parts.slice(-2).join('/') : p
   }
 
   onWorkerMemoryUpdate(sessionId: string, runId: string, memory: SessionMemory | null): void {
@@ -520,6 +635,11 @@ ${contextBlock}`
       let workerMessage = args.description
       if (args.skills && args.skills.length > 0) {
         workerMessage = args.skills.map(s => `@${s}`).join(' ') + ' ' + workerMessage
+      }
+
+      // Append scratchpad hint if available so worker knows about shared storage
+      if (this.scratchpadDir) {
+        workerMessage += `\n\n[Shared scratchpad directory: ${this.scratchpadDir} — you can read/write files here to share knowledge with other workers.]`
       }
 
       await this.workerAgent.startAgent(sessionId, workerMessage, runId, {

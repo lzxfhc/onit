@@ -189,6 +189,10 @@ export const en: Translations = {
     attach: 'Attach',
     planMode: 'Plan Mode',
     planModeDesc: 'Confirm all operations',
+    planInterview: 'Plan: Interview',
+    planInterviewDesc: 'Iterative Q&A to understand requirements before implementation',
+    planOutline: 'Plan: Outline',
+    planOutlineDesc: 'Structured 5-phase workflow to produce an execution plan',
     acceptEdit: 'AcceptEdit',
     acceptEditDesc: 'Smart confirmations',
     fullAccess: 'Full Access',
@@ -215,6 +219,49 @@ export const en: Translations = {
     toolTaskList: 'Updated tasks',
     toolWebSearch: 'Searched the web',
     toolFetchPage: 'Fetched web page',
+    toolBrowserNavigate: 'Opened page',
+    toolBrowserAction: 'Browser action',
+    toolBrowserExtract: 'Extracted content',
+    toolBrowserScreenshot: 'Screenshot',
+    toolBrowserClose: 'Closed browser',
+    toolAskUser: 'Asked user',
+    toolExitPlanMode: 'Submitted plan',
+    toolNotebookEdit: 'Edited notebook',
+    toolWorktreeCreate: 'Created worktree',
+    toolWorktreeRemove: 'Removed worktree',
+    toolSearch: 'Searched tools',
+    toolFindSymbol: 'Found symbol',
+  },
+
+  // Interactive questions
+  question: {
+    title: 'Agent is asking you',
+    questionOf: 'Question',
+    otherPlaceholder: 'Other (type your answer)',
+    prev: 'Previous',
+    next: 'Next',
+    skip: 'Skip',
+    submit: 'Submit',
+  },
+
+  // Plan approval
+  plan: {
+    approvalTitle: 'Plan Ready for Review',
+    approvalSubtitle: 'Review the plan below and approve to start implementation',
+    filesToModify: 'Files to modify:',
+    approve: 'Approve & Start',
+    reject: 'Needs Changes',
+    submitFeedback: 'Send Feedback',
+    feedbackPlaceholder: 'Tell the agent what to change...',
+  },
+
+  // Error boundary
+  error: {
+    title: 'Something went wrong',
+    description: 'An unexpected error occurred while rendering.',
+    tryAgain: 'Try Again',
+    persistentError: 'This error persists. Try restarting the app.',
+    reload: 'Reload App',
   },
 
   // Top bar

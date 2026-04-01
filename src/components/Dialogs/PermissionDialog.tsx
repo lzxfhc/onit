@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { AlertTriangle, Shield, FileWarning, Terminal, X } from 'lucide-react'
 import { useT } from '../../i18n'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -17,6 +18,8 @@ interface Props {
 export default function PermissionDialog({ request }: Props) {
   const t = useT()
   const { removePermissionRequest } = useSettingsStore()
+
+  const isEditFile = request.type === 'file-overwrite' || request.toolName === 'edit_file'
 
   const handleResponse = (approved: boolean, alwaysAllow?: boolean) => {
     window.electronAPI.sendPermissionResponse({
@@ -106,13 +109,19 @@ export default function PermissionDialog({ request }: Props) {
             <p className="text-xs font-medium text-charcoal">{request.description}</p>
           </div>
 
-          {/* Details */}
+          {/* Details — show diff for edit_file, formatted JSON for others */}
           {request.details && (
             <div className="mb-4">
-              <span className="text-[10px] text-text-tertiary font-medium">{t.permission.details}</span>
-              <pre className="mt-1 text-[11px] bg-terminal text-gray-200 rounded p-3 overflow-x-auto font-mono max-h-48 overflow-y-auto">
-                {formatDetails(request.details)}
-              </pre>
+              {isEditFile ? (
+                <EditFileDiff details={request.details} />
+              ) : (
+                <>
+                  <span className="text-[10px] text-text-tertiary font-medium">{t.permission.details}</span>
+                  <pre className="mt-1 text-[11px] bg-terminal text-gray-200 rounded p-3 overflow-x-auto font-mono max-h-48 overflow-y-auto">
+                    {formatDetails(request.details)}
+                  </pre>
+                </>
+              )}
             </div>
           )}
         </div>
@@ -139,6 +148,61 @@ export default function PermissionDialog({ request }: Props) {
           >
             {t.permission.allow}
           </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Diff view for edit_file permission requests. Shows old (red) → new (green). */
+function EditFileDiff({ details }: { details: string }) {
+  const parsed = useMemo(() => {
+    try {
+      const args = JSON.parse(details)
+      return { path: args.path, oldStr: args.old_string, newStr: args.new_string, replaceAll: args.replace_all }
+    } catch { return null }
+  }, [details])
+
+  if (!parsed || !parsed.oldStr || !parsed.newStr) {
+    // Fallback to raw JSON
+    return (
+      <>
+        <span className="text-[10px] text-text-tertiary font-medium">Details</span>
+        <pre className="mt-1 text-[11px] bg-terminal text-gray-200 rounded p-3 overflow-x-auto font-mono max-h-48 overflow-y-auto">
+          {(() => { try { return JSON.stringify(JSON.parse(details), null, 2) } catch { return details } })()}
+        </pre>
+      </>
+    )
+  }
+
+  const oldLines = parsed.oldStr.split('\n')
+  const newLines = parsed.newStr.split('\n')
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-1.5">
+        <span className="text-[10px] text-text-tertiary font-medium">Changes in</span>
+        <span className="text-[10px] font-mono text-charcoal bg-gray-100 px-1.5 py-0.5 rounded">{parsed.path}</span>
+        {parsed.replaceAll && <span className="text-[9px] text-warning font-medium">(all occurrences)</span>}
+      </div>
+      <div className="rounded overflow-hidden border border-border-subtle">
+        {/* Removed lines */}
+        <div className="bg-red-50/80 border-b border-border-subtle">
+          {oldLines.map((line: string, i: number) => (
+            <div key={`old-${i}`} className="flex text-[11px] font-mono leading-5">
+              <span className="shrink-0 w-6 text-center text-red-400 select-none">-</span>
+              <span className="text-red-700 px-2 whitespace-pre-wrap break-all">{line}</span>
+            </div>
+          ))}
+        </div>
+        {/* Added lines */}
+        <div className="bg-green-50/80">
+          {newLines.map((line: string, i: number) => (
+            <div key={`new-${i}`} className="flex text-[11px] font-mono leading-5">
+              <span className="shrink-0 w-6 text-center text-green-500 select-none">+</span>
+              <span className="text-green-700 px-2 whitespace-pre-wrap break-all">{line}</span>
+            </div>
+          ))}
         </div>
       </div>
     </div>

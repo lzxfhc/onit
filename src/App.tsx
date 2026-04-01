@@ -10,6 +10,9 @@ import TopBar from './components/TopBar'
 import ChatView from './components/Chat'
 import CopilotView from './components/CopilotView'
 import PermissionDialog from './components/Dialogs/PermissionDialog'
+import QuestionDialog from './components/Dialogs/QuestionDialog'
+import PlanApprovalDialog from './components/Dialogs/PlanApprovalDialog'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import type { Message, ScheduledSessionCreatedEvent, Session, StreamChunk } from './types'
 
 interface PendingCopilotChunks {
@@ -268,17 +271,21 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col min-w-0 pt-12">
-        {isCopilot ? (
-          <CopilotView />
-        ) : (
-          <ChatView rightPanelOpen={rightPanelOpen} />
-        )}
+        <ErrorBoundary>
+          {isCopilot ? (
+            <CopilotView />
+          ) : (
+            <ChatView rightPanelOpen={rightPanelOpen} />
+          )}
+        </ErrorBoundary>
       </main>
 
-      {/* Permission dialogs */}
-      {permissionRequests.map(req => (
-        <PermissionDialog key={req.id} request={req} />
-      ))}
+      {/* Permission / Question / Plan dialogs */}
+      {permissionRequests.map(req => {
+        if (req.type === 'user-question') return <QuestionDialog key={req.id} request={req} />
+        if (req.type === 'plan-approval') return <PlanApprovalDialog key={req.id} request={req} />
+        return <PermissionDialog key={req.id} request={req} />
+      })}
     </div>
   )
 }

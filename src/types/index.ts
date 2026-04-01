@@ -39,6 +39,9 @@ export interface ApiConfig {
 
 export type PermissionMode = 'plan' | 'accept-edit' | 'full-access'
 
+/** Plan mode variant: interview (iterative Q&A) or outline (structured 5-phase). */
+export type PlanModeVariant = 'interview' | 'outline'
+
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 
 export interface ToolCall {
@@ -96,6 +99,7 @@ export interface Session {
   status: SessionStatus
   activeRunId?: string | null
   permissionMode: PermissionMode
+  planModeVariant?: PlanModeVariant
   workspacePath: string | null
   attachedFiles: string[]
   model: string
@@ -153,11 +157,32 @@ export interface PermissionRequest {
   id: string
   sessionId: string
   runId?: string
-  type: 'file-write' | 'file-delete' | 'file-overwrite' | 'command-execute' | 'system-config' | 'send-message' | 'task-plan'
+  type: 'file-write' | 'file-delete' | 'file-overwrite' | 'command-execute' | 'system-config' | 'send-message' | 'task-plan' | 'user-question' | 'plan-approval'
   description: string
   details: string
   toolName?: string
   resolve?: (approved: boolean, alwaysAllow?: boolean) => void
+  /** Structured questions for ask_user tool */
+  questions?: UserQuestion[]
+  /** Plan content for exit_plan_mode approval */
+  planContent?: string
+  planFiles?: string[]
+}
+
+export interface UserQuestionOption {
+  label: string
+  description?: string
+}
+
+export interface UserQuestion {
+  question: string
+  options: UserQuestionOption[]
+  multiSelect?: boolean
+}
+
+export interface UserQuestionAnswer {
+  question: string
+  answer: string
 }
 
 export type Language = 'zh' | 'en'

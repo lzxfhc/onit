@@ -187,6 +187,10 @@ export const zh = {
     attach: '附件',
     planMode: 'Plan 模式',
     planModeDesc: '所有操作都需确认',
+    planInterview: 'Plan: 交互访谈',
+    planInterviewDesc: '通过反复提问澄清需求，再开始实施',
+    planOutline: 'Plan: 执行大纲',
+    planOutlineDesc: '5 阶段结构化流程，生成可审批的执行计划',
     acceptEdit: 'AcceptEdit',
     acceptEditDesc: '智能确认',
     fullAccess: '完全访问',
@@ -213,6 +217,49 @@ export const zh = {
     toolTaskList: '更新任务',
     toolWebSearch: '搜索网页',
     toolFetchPage: '获取网页',
+    toolBrowserNavigate: '打开网页',
+    toolBrowserAction: '浏览器操作',
+    toolBrowserExtract: '提取内容',
+    toolBrowserScreenshot: '截取页面',
+    toolBrowserClose: '关闭浏览器',
+    toolAskUser: '询问用户',
+    toolExitPlanMode: '提交计划',
+    toolNotebookEdit: '编辑笔记本',
+    toolWorktreeCreate: '创建工作树',
+    toolWorktreeRemove: '移除工作树',
+    toolSearch: '搜索工具',
+    toolFindSymbol: '查找符号',
+  },
+
+  // Interactive questions
+  question: {
+    title: 'Agent 想问你几个问题',
+    questionOf: '问题',
+    otherPlaceholder: '其他（请输入你的答案）',
+    prev: '上一题',
+    next: '下一题',
+    skip: '跳过',
+    submit: '提交',
+  },
+
+  // Plan approval
+  plan: {
+    approvalTitle: '计划已准备好',
+    approvalSubtitle: '请审核以下计划，批准后开始实施',
+    filesToModify: '将要修改的文件：',
+    approve: '批准并开始',
+    reject: '需要修改',
+    submitFeedback: '发送反馈',
+    feedbackPlaceholder: '告诉 Agent 需要怎么修改...',
+  },
+
+  // Error boundary
+  error: {
+    title: '出了点问题',
+    description: '渲染时发生了意外错误。',
+    tryAgain: '重试',
+    persistentError: '错误持续存在，请尝试重启应用。',
+    reload: '重新加载',
   },
 
   // Top bar

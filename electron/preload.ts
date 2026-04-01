@@ -10,7 +10,7 @@ const api = {
     ipcRenderer.invoke('agent:start', data),
   stopAgent: (data: { sessionId: string }) =>
     ipcRenderer.invoke('agent:stop', data),
-  sendPermissionResponse: (data: { requestId: string; approved: boolean; alwaysAllow?: boolean }) =>
+  sendPermissionResponse: (data: { requestId: string; approved: boolean; alwaysAllow?: boolean; answerText?: string }) =>
     ipcRenderer.send('agent:permission-response', data),
 
   // Sessions
