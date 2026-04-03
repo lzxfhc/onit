@@ -84,20 +84,17 @@
 | LLM API | 千帆 / 火山方舟 / 百炼 / 自定义 |
 | 国际化 | 中文 / English |
 
-## 安装
+## 下载安装
 
 ### macOS (Apple Silicon)
 
-应用以 `.dmg` 文件分发。未签名，需绕过 Gatekeeper：
+> **[下载最新版 Onit DMG](https://github.com/lzxfhc/onit/releases/latest)**
 
-1. 双击 `.dmg` 挂载
-2. 右键点击 `安装 Onit.command`，选择 **打开**
-3. 系统设置 → 隐私与安全性 → 点击 **"仍要打开"**
+1. 从 [Releases](https://github.com/lzxfhc/onit/releases) 页面下载 `Onit-x.x.x-arm64.dmg`
+2. 双击 `.dmg` 挂载，将 Onit 拖入 Applications 文件夹
+3. 首次打开：右键 Onit → **打开**，然后在系统设置 → 隐私与安全性 → **"仍要打开"**
 
-### Windows (x64)
-
-1. 下载解压 Windows 构建包
-2. 运行 `install-onit.bat`
+> ⚠️ 应用未签名，macOS 会弹出安全提示，按上面步骤操作即可。
 
 ## 本地开发
 
@@ -156,6 +153,10 @@ src/                         # React 渲染进程
 
 | 版本 | 日期 | 主要更新 |
 |------|------|---------|
+| v1.4.2 | 2026-04 | Plan Mode 统一策略（参考 Claude Code）、bug 修复 |
+| v1.4.1 | 2026-04 | Browser Use、Agent 引擎全面优化、Plan Mode、AskUserQuestion、Hooks 系统 |
+| v1.4.0 | 2026-03 | Copilot 模式（Meta-Agent 任务编排）、多文件类型支持、语音输入 |
+| v1.3.2 | 2026-03 | @Skill 交互优化、定时任务修复、空 session 防重复 |
 | v1.3.1 | 2026-03 | Skill Memory 自进化、中英文切换、全代码库安全加固 |
 | v1.3.0 | 2026-03 | 本地模型支持（Qwen3.5 + llama.cpp） |
 | v1.2.3 | 2026-03 | UI 细节打磨 |
@@ -240,16 +241,13 @@ Set up recurring tasks (hourly / daily / weekly / weekdays). Onit runs them in t
 
 ### macOS (Apple Silicon)
 
-Distributed as `.dmg`. Not code-signed — bypass Gatekeeper:
+> **[Download Latest Onit DMG](https://github.com/lzxfhc/onit/releases/latest)**
 
-1. Double-click `.dmg` to mount
-2. Right-click `安装 Onit.command` → **Open**
-3. System Settings → Privacy & Security → **"Open Anyway"**
+1. Download `Onit-x.x.x-arm64.dmg` from [Releases](https://github.com/lzxfhc/onit/releases)
+2. Double-click `.dmg` to mount, drag Onit into Applications
+3. First launch: Right-click Onit → **Open**, then System Settings → Privacy & Security → **"Open Anyway"**
 
-### Windows (x64)
-
-1. Download and extract the Windows build
-2. Run `install-onit.bat`
+> ⚠️ The app is not code-signed. macOS will show a security warning — follow the steps above.
 
 ## Development
 
@@ -271,6 +269,10 @@ npm run build:win
 
 | Version | Date | Highlights |
 |---------|------|-----------|
+| v1.4.2 | 2026-04 | Unified Plan Mode (Claude Code style), bug fixes |
+| v1.4.1 | 2026-04 | Browser Use, Agent engine overhaul, Plan Mode, AskUserQuestion, Hooks system |
+| v1.4.0 | 2026-03 | Copilot mode (Meta-Agent orchestration), multi-file type support, voice input |
+| v1.3.2 | 2026-03 | @Skill interaction, scheduled task fix, empty session dedup |
 | v1.3.1 | 2026-03 | Skill Memory self-evolution, i18n (zh/en), full codebase security hardening |
 | v1.3.0 | 2026-03 | Local model support (Qwen3.5 + llama.cpp) |
 | v1.2.3 | 2026-03 | UI polish |

@@ -129,7 +129,6 @@ interface AgentSession {
   isRunning: boolean
   completionStatus: 'completed' | 'stopped' | 'error'
   permissionMode: string
-  planModeVariant: string  // 'interview' | 'outline'
   workspacePath: string | null
   model: string
   sessionMemory: SessionMemoryData | null
@@ -337,7 +336,6 @@ export class AgentManager {
       sessionData.workspacePath,
       sessionData.permissionMode,
       enabledSkills,
-      sessionData.planModeVariant,
     )
     const systemPrompt = this.systemPromptPrepend
       ? this.systemPromptPrepend + '\n\n' + baseSystemPrompt
@@ -377,7 +375,6 @@ export class AgentManager {
       isRunning: true,
       completionStatus: 'completed',
       permissionMode: sessionData.permissionMode || 'accept-edit',
-      planModeVariant: sessionData.planModeVariant || 'outline',
       workspacePath: sessionData.workspacePath,
       model: sessionData.model || 'qianfan-code-latest',
       sessionMemory,
@@ -838,7 +835,6 @@ export class AgentManager {
     workspacePath: string | null,
     permissionMode: string,
     enabledSkills: SkillData[],
-    planModeVariant?: string,
   ): string {
     const workspace = workspacePath
       ? `You are working in the directory: ${workspacePath}. All file operations should be relative to or within this workspace unless the user specifies otherwise.`
@@ -901,40 +897,33 @@ ${platformHint}${workspace}
 # Permission mode: ${permissionMode}
 ${permissionMode === 'plan' ? `**Plan mode is active.** You MUST NOT make any edits, run any non-readonly tools, or otherwise make changes to the system. Only read-only tools and ask_user are allowed. This supercedes any other instructions.
 
-${planModeVariant === 'interview' ? `## Plan Mode: Interactive Interview
-Your goal is to thoroughly understand the user's requirements through iterative exploration and questioning before any implementation begins.
+## Plan Mode Workflow
 
-### Workflow (repeat until plan is complete):
-1. **Explore** — Use read-only tools (read_file, search_files, search_content, list_directory) to understand the current codebase and context.
-2. **Ask** — Use ask_user to ask the user structured questions: clarify ambiguous requirements, confirm assumptions, offer design choices. Provide 2-4 concrete options with descriptions.
-3. **Update** — After each round of exploration and Q&A, state your updated understanding and plan in your response.
-4. **Iterate** — Repeat steps 1-3 until you have enough clarity to write a definitive plan.
-5. **Submit** — When ready, call exit_plan_mode with a summary and file list. The user will approve or send you back for refinement.
+You decide the best approach based on the task:
 
-### Guidelines:
-- Ask one focused question at a time rather than overwhelming with many questions.
-- Show that you've explored the code before asking — reference specific files, functions, and patterns.
-- If the user's answer reveals new complexity, explore it before asking the next question.
-- Build the plan incrementally — each Q&A round should visibly advance the plan.
-- When you've gathered enough information (typically 2-5 rounds), synthesize into a final plan and call exit_plan_mode.` : `## Plan Mode: Execution Outline
-Your goal is to produce a detailed, specific execution plan that the user can review and approve.
+### Phase 1: Initial Understanding
+Explore the codebase using read-only tools (read_file, search_files, search_content, list_directory, find_symbol). Actively search for existing functions, utilities, and patterns that can be reused. If the task is unclear or has multiple valid approaches, use ask_user to clarify with the user — provide 2-4 concrete options with descriptions.
 
-### 5-Phase Workflow:
-1. **Explore**: Use read-only tools (read_file, search_files, search_content, list_directory, web_search) to understand the codebase and requirements thoroughly. Identify existing patterns, utilities, and functions that should be reused.
-2. **Design**: Based on exploration, design the implementation approach. Consider trade-offs (simplicity vs performance vs maintainability). If multiple valid approaches exist, use ask_user to let the user choose.
-3. **Review**: Read the critical files you plan to modify. Ensure your plan aligns with the user's original request. Use ask_user to clarify any remaining questions.
-4. **Write Plan**: State your final plan clearly:
-   - List each file to modify with a one-line description of the change
-   - Reference existing functions with file paths (e.g., \`src/utils/auth.ts:validateToken()\`)
-   - Include a verification step (how to test)
-   - Keep it concise — aim for under 40 lines
-5. **Submit**: Call exit_plan_mode with a brief summary and the file list. The user will approve or reject.
+### Phase 2: Design
+Based on your exploration, design the implementation approach. Consider trade-offs. If you need more information, go back to Phase 1 — explore more code or ask more questions. Don't rush to a plan with insufficient understanding.
 
-### Guidelines:
-- Actively search for existing functions, utilities, and patterns to reuse — avoid proposing new code when suitable implementations already exist.
-- Be specific: file paths, function names, line numbers where possible.
-- Include only your recommended approach, not all alternatives (unless using ask_user to let the user decide).
-- The plan should be scannable — someone should understand what will change in 30 seconds.`}` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
+### Phase 3: Final Plan
+When you have enough clarity, state your plan clearly:
+- List each file to modify with a one-line description of the change
+- Reference existing functions with file paths (e.g., \`src/utils/auth.ts:validateToken()\`)
+- Include a verification step (how to test the changes)
+- Keep it concise and scannable
+
+### Phase 4: Submit
+Call exit_plan_mode with a brief summary and the list of files you plan to modify. The user will review and either approve (starts implementation) or reject with feedback (you refine the plan).
+
+### Guidelines
+- Explore before you plan. Read the actual code — don't guess at file structure or function names.
+- Ask when uncertain. One focused question is better than a plan built on wrong assumptions.
+- Iterate naturally. Simple tasks may need only one explore→plan cycle. Complex tasks may need 2-5 rounds of explore→ask→refine.
+- Be specific. File paths, function names, line numbers. The plan should be actionable.
+- Search for reuse. Prefer extending existing code over writing new code.
+- Your turn should end with either ask_user (if you need input) or exit_plan_mode (if the plan is ready). Don't stop for other reasons.` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
 
 Format results clearly with markdown. Use syntax highlighting for code.${skillsSection}`
   }
