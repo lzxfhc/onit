@@ -10,7 +10,7 @@ import {
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { AVAILABLE_MODELS, AVAILABLE_LOCAL_MODELS } from '../../types'
-import type { PermissionMode, PlanModeVariant, Skill } from '../../types'
+import type { PermissionMode, Skill } from '../../types'
 
 interface Props {
   onSend: (content: string) => void | Promise<void>
@@ -115,7 +115,6 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
       id: sessionId,
       workspacePath: current?.workspacePath || null,
       permissionMode: current?.permissionMode || 'accept-edit',
-      planModeVariant: current?.planModeVariant || 'outline',
       attachedFiles: current?.attachedFiles || [],
       model: current?.model || 'qianfan-code-latest',
       setWorkspace: state.setWorkspace,
@@ -359,17 +358,13 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
     return selected ? selected.name : session.model
   }
 
-  const permissionModes: { id: PermissionMode; label: string; desc: string; icon: React.ReactNode; planVariant?: PlanModeVariant }[] = [
-    { id: 'plan', planVariant: 'interview', label: t.chat.planInterview || 'Plan: Interview', desc: t.chat.planInterviewDesc || 'Iterative Q&A to understand requirements before implementation', icon: <Shield className="w-3.5 h-3.5" /> },
-    { id: 'plan', planVariant: 'outline', label: t.chat.planOutline || 'Plan: Outline', desc: t.chat.planOutlineDesc || 'Structured 5-phase workflow to produce an execution plan', icon: <Shield className="w-3.5 h-3.5" /> },
+  const permissionModes: { id: PermissionMode; label: string; desc: string; icon: React.ReactNode }[] = [
+    { id: 'plan', label: t.chat.planMode, desc: t.chat.planModeDesc, icon: <Shield className="w-3.5 h-3.5" /> },
     { id: 'accept-edit', label: t.chat.acceptEdit, desc: t.chat.acceptEditDesc, icon: <ShieldCheck className="w-3.5 h-3.5" /> },
     { id: 'full-access', label: t.chat.fullAccess, desc: t.chat.fullAccessDesc, icon: <ShieldOff className="w-3.5 h-3.5" /> },
   ]
 
-  const currentPerm = permissionModes.find(item =>
-    item.id === session.permissionMode &&
-    (!item.planVariant || item.planVariant === (session.planModeVariant || 'outline'))
-  ) || permissionModes[2] // default to accept-edit
+  const currentPerm = permissionModes.find(item => item.id === session.permissionMode) || permissionModes[1]
 
   return (
     <div className="border-t border-border-subtle bg-surface px-4 py-3">
@@ -521,15 +516,15 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
                 </button>
                 {showPermissionPicker && (
                   <div className="absolute bottom-full right-0 mb-1 bg-surface border border-border-subtle rounded shadow-card-hover py-1 min-w-[200px] z-50 animate-fade-in">
-                    {permissionModes.map((mode, mIdx) => (
+                    {permissionModes.map(mode => (
                       <button
-                        key={`${mode.id}-${mode.planVariant || mIdx}`}
+                        key={mode.id}
                         onClick={() => {
-                          session.setPermissionMode(session.id, mode.id, mode.planVariant)
+                          session.setPermissionMode(session.id, mode.id)
                           setShowPermissionPicker(false)
                         }}
                         className={`w-full text-left px-3 py-2 transition-colors ${
-                          session.permissionMode === mode.id && (!mode.planVariant || session.planModeVariant === mode.planVariant) ? 'bg-accent-50' : 'hover:bg-gray-50'
+                          session.permissionMode === mode.id ? 'bg-accent-50' : 'hover:bg-gray-50'
                         }`}
                       >
                         <div className="flex items-center gap-2">

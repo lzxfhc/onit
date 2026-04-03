@@ -39,9 +39,6 @@ export interface ApiConfig {
 
 export type PermissionMode = 'plan' | 'accept-edit' | 'full-access'
 
-/** Plan mode variant: interview (iterative Q&A) or outline (structured 5-phase). */
-export type PlanModeVariant = 'interview' | 'outline'
-
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool'
 
 export interface ToolCall {
@@ -99,7 +96,6 @@ export interface Session {
   status: SessionStatus
   activeRunId?: string | null
   permissionMode: PermissionMode
-  planModeVariant?: PlanModeVariant
   workspacePath: string | null
   attachedFiles: string[]
   model: string
