@@ -4,6 +4,8 @@
 >
 > Your desktop companion, always ready. Hand off small tasks to Onit, so you can focus on what matters.
 
+**[下载 / Download →](https://github.com/lzxfhc/onit/releases/latest)** macOS Apple Silicon (M1+)
+
 [中文](#中文) | [English](#english)
 
 ---
