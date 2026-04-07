@@ -901,29 +901,34 @@ ${permissionMode === 'plan' ? `**Plan mode is active.** You MUST NOT make any ed
 
 You decide the best approach based on the task:
 
-### Phase 1: Initial Understanding
-Explore the codebase using read-only tools (read_file, search_files, search_content, list_directory, find_symbol). Actively search for existing functions, utilities, and patterns that can be reused. If the task is unclear or has multiple valid approaches, use ask_user to clarify with the user — provide 2-4 concrete options with descriptions.
+### Phase 1: Understand
+Explore and gather information using read-only tools:
+- For code tasks: read_file, search_files, search_content, list_directory, find_symbol
+- For research tasks: web_search, web_fetch, browser_navigate, browser_extract
+- For any task: ask_user to clarify requirements, preferences, or constraints — provide 2-4 concrete options with descriptions
 
 ### Phase 2: Design
-Based on your exploration, design the implementation approach. Consider trade-offs. If you need more information, go back to Phase 1 — explore more code or ask more questions. Don't rush to a plan with insufficient understanding.
+Based on your exploration, design the approach. Consider trade-offs and alternatives. If you need more information, go back to Phase 1 — explore more or ask more questions. Don't rush to a plan with insufficient understanding.
 
-### Phase 3: Final Plan
+### Phase 3: Present Plan
 When you have enough clarity, state your plan clearly:
-- List each file to modify with a one-line description of the change
-- Reference existing functions with file paths (e.g., \`src/utils/auth.ts:validateToken()\`)
-- Include a verification step (how to test the changes)
+- What you will do, step by step
+- For code: which files to modify, which functions to change
+- For research/content: what sources to use, what structure and format
+- For automation: what tools in what sequence, how to handle errors
+- Include a verification step (how to confirm success)
 - Keep it concise and scannable
 
 ### Phase 4: Submit
-Call exit_plan_mode with a brief summary and the list of files you plan to modify. The user will review and either approve (starts implementation) or reject with feedback (you refine the plan).
+Call exit_plan_mode with a brief summary. The user will review and either approve (you start executing) or reject with feedback (you refine the plan).
 
 ### Guidelines
-- Explore before you plan. Read the actual code — don't guess at file structure or function names.
+- Explore before you plan. Gather real information — don't guess or assume.
 - Ask when uncertain. One focused question is better than a plan built on wrong assumptions.
-- Iterate naturally. Simple tasks may need only one explore→plan cycle. Complex tasks may need 2-5 rounds of explore→ask→refine.
-- Be specific. File paths, function names, line numbers. The plan should be actionable.
-- Search for reuse. Prefer extending existing code over writing new code.
-- Your turn should end with either ask_user (if you need input) or exit_plan_mode (if the plan is ready). Don't stop for other reasons.` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
+- Iterate naturally. Simple tasks: one explore→plan cycle. Complex tasks: 2-5 rounds of explore→ask→refine.
+- Be specific and actionable. The plan should tell the user exactly what will happen.
+- Your turn should end with either ask_user (if you need input) or exit_plan_mode (if the plan is ready). Don't stop for other reasons.` : ''}${permissionMode === 'accept-edit' ? `AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.
+For complex, multi-step, or ambiguous tasks, proactively call enter_plan_mode to plan first. For simple, clear, single-step tasks, just do them directly.` : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
 
 Format results clearly with markdown. Use syntax highlighting for code.${skillsSection}`
   }
@@ -2283,10 +2288,38 @@ What remains to be done.
   }
 
   /**
+   * Request user approval to enter plan mode.
+   */
+  private async requestEnterPlanMode(agentSession: AgentSession, reason: string): Promise<boolean> {
+    const requestId = `enter_plan:${uuidv4()}`
+
+    return new Promise((resolve) => {
+      agentSession.pendingPermissions.set(requestId, { resolve })
+
+      this.sendToRenderer('agent:permission-request', {
+        id: requestId,
+        sessionId: agentSession.sessionId,
+        runId: agentSession.runId,
+        type: 'task-plan',
+        description: reason,
+        details: '{}',
+        toolName: 'enter_plan_mode',
+      })
+
+      setTimeout(() => {
+        if (agentSession.pendingPermissions.has(requestId)) {
+          agentSession.pendingPermissions.delete(requestId)
+          resolve(false)
+        }
+      }, 300000)
+    })
+  }
+
+  /**
    * Request plan approval via the permission dialog system.
    * Returns true if approved, false if rejected.
    */
-  private async requestPlanApproval(agentSession: AgentSession, planSummary: string, filesToModify: string[]): Promise<{ approved: boolean; feedback?: string }> {
+  private async requestPlanApproval(agentSession: AgentSession, planSummary: string, keyActions: string[]): Promise<{ approved: boolean; feedback?: string }> {
     const requestId = `plan_approval:${uuidv4()}`
 
     // Get the last assistant message content as the full plan
@@ -2308,10 +2341,10 @@ What remains to be done.
         runId: agentSession.runId,
         type: 'plan-approval',
         description: planSummary,
-        details: JSON.stringify(filesToModify),
+        details: JSON.stringify(keyActions),
         toolName: 'exit_plan_mode',
         planContent,
-        planFiles: filesToModify,
+        planFiles: keyActions,
       })
 
       // Timeout after 10 minutes (plans need more review time)
@@ -2447,7 +2480,41 @@ What remains to be done.
               }
             }
 
-            // --- Interactive tools: ask_user and exit_plan_mode ---
+            // --- Interactive tools: enter_plan_mode, ask_user, exit_plan_mode ---
+            if (toolName === 'enter_plan_mode' && !this.toolExecutorOverride) {
+              if (agentSession.permissionMode === 'plan') {
+                return {
+                  tc, toolName, toolArgs,
+                  result: { success: true, output: 'Already in plan mode.', riskLevel: 'safe' as const },
+                  denied: false,
+                }
+              }
+              try {
+                const planArgs = JSON.parse(toolArgs)
+                const approved = await this.requestEnterPlanMode(agentSession, planArgs.reason || 'Task requires planning')
+                if (approved) {
+                  agentSession.permissionMode = 'plan'
+                  return {
+                    tc, toolName, toolArgs,
+                    result: { success: true, output: 'User approved entering plan mode. You are now in plan mode — only read-only tools and ask_user are allowed. Explore the codebase, ask clarifying questions, then call exit_plan_mode with your plan.', riskLevel: 'safe' as const },
+                    denied: false,
+                  }
+                } else {
+                  return {
+                    tc, toolName, toolArgs,
+                    result: { success: false, output: 'User declined to enter plan mode. Proceed with implementation directly.', riskLevel: 'safe' as const },
+                    denied: false,
+                  }
+                }
+              } catch (e: any) {
+                return {
+                  tc, toolName, toolArgs,
+                  result: { success: false, output: `Failed: ${e.message}`, riskLevel: 'safe' as const },
+                  denied: false,
+                }
+              }
+            }
+
             if (toolName === 'ask_user') {
               try {
                 const askArgs = JSON.parse(toolArgs)
@@ -2470,7 +2537,7 @@ What remains to be done.
             if (toolName === 'exit_plan_mode' && !this.toolExecutorOverride) {
               try {
                 const planArgs = JSON.parse(toolArgs)
-                const planResult = await this.requestPlanApproval(agentSession, planArgs.planSummary || '', planArgs.filesToModify || [])
+                const planResult = await this.requestPlanApproval(agentSession, planArgs.planSummary || '', planArgs.keyActions || planArgs.filesToModify || [])
                 if (planResult.approved) {
                   // Switch permission mode from 'plan' to 'accept-edit'
                   agentSession.permissionMode = 'accept-edit'

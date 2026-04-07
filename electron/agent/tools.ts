@@ -82,11 +82,13 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     type: 'function',
     function: {
       name: 'list_directory',
-      description: 'List the contents of a directory, showing files and subdirectories.',
+      description: 'List the contents of a directory, showing files and subdirectories. Use depth > 1 to see the tree structure without multiple calls.',
       parameters: {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'Absolute path to the directory to list' },
+          depth: { type: 'number', description: 'How many levels deep to list (default 1, max 4). Use 2-3 to see project structure quickly.' },
+          include_hidden: { type: 'boolean', description: 'Include dotfiles like .gitignore, .env.example (default false)' },
         },
         required: ['path'],
       },
@@ -137,12 +139,13 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     type: 'function',
     function: {
       name: 'execute_command',
-      description: 'Execute a shell command and return its output. Use for running scripts, installing packages, git operations, etc.',
+      description: 'Execute a shell command and return its output. Use for running scripts, installing packages, git operations, etc. Default timeout is 60 seconds — increase timeout_ms for long-running commands like npm install, builds, or test suites.',
       parameters: {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'The shell command to execute' },
           working_directory: { type: 'string', description: 'Working directory for the command (optional)' },
+          timeout_ms: { type: 'number', description: 'Timeout in milliseconds (default 60000, max 600000). Increase for long commands like npm install or test suites.' },
         },
         required: ['command'],
       },
@@ -400,16 +403,71 @@ export const AGENT_TOOLS: AgentToolDef[] = [
   {
     type: 'function',
     function: {
+      name: 'enter_plan_mode',
+      description: `Request to enter plan mode. Use this proactively before starting non-trivial work. In plan mode you explore with read-only tools, clarify with ask_user, then present a plan via exit_plan_mode for user approval.
+
+## Decision Framework
+
+Ask yourself three questions. If ANY answer points to "plan", enter plan mode:
+
+**1. Confidence — Do I know exactly what to do?**
+- High confidence → just do it. ("Fix the typo in line 42" — obvious what to do.)
+- Low confidence → plan first. ("Make the app faster" — need to investigate before acting.)
+- Rule of thumb: if you would need to explore or research before your first action, plan.
+
+**2. Reversibility — If I do it wrong, is it easy to undo?**
+- Easy to undo → try and iterate. ("Add a console.log" — trivial to revert.)
+- Hard to undo → plan first. ("Migrate the database" / "批量重命名500个文件" — mistakes are costly.)
+- Rule of thumb: if the user would lose work, time, or data from a wrong approach, plan.
+
+**3. Alignment — Does the user need to make a choice here?**
+- No choice needed → just do it. ("Run the tests" — only one way.)
+- Simple choice → use ask_user instead. ("用中文还是英文写？" — quick question, no exploration needed.)
+- Complex choice requiring exploration → plan. ("重构认证系统" — need to explore the codebase to even know what the options are.)
+
+## ask_user vs enter_plan_mode
+
+- **ask_user**: You already understand the task but need the user to pick between a few options. Lightweight, one question, no exploration needed.
+- **enter_plan_mode**: You need to explore, research, or think before you can even formulate the options. Heavy, involves investigation before presenting a plan.
+
+## Examples
+
+Plan first:
+- "帮我做个竞品分析然后出报告" — low confidence (what dimensions?), needs user alignment (what format?)
+- "Add user authentication to the app" — low confidence (what approach?), hard to undo (touches many files)
+- "整理我桌面上的文件" — needs alignment (by date? by type?), somewhat hard to undo
+- "帮我把这个项目部署上线" — hard to undo, multi-step with dependencies
+
+Just do it:
+- "这个文件什么内容？" — high confidence, trivially reversible
+- "Fix the typo in README" — high confidence, trivially reversible
+- "Run the tests" — high confidence, no choice needed
+- "帮我搜一下天气" — single step, no alignment needed
+- "把第42行的 foo 改成 bar" — explicit instruction, no ambiguity
+
+If unsure, err on the side of planning.`,
+      parameters: {
+        type: 'object',
+        properties: {
+          reason: { type: 'string', description: 'Brief explanation of why planning is needed (1-2 sentences)' },
+        },
+        required: ['reason'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'exit_plan_mode',
-      description: 'Signal that your plan is complete and ready for user review. Call this ONLY when in plan mode and you have finished writing the plan. The user will see your plan and can approve it (which exits plan mode and lets you start implementing) or reject it (which keeps you in plan mode to refine). Include the plan summary and the list of files you intend to modify.',
+      description: 'Signal that your plan is complete and ready for user review. Call this ONLY when in plan mode. The user will see your plan and can approve (exits plan mode, you start executing) or reject with feedback (you stay in plan mode to refine). Your last assistant message before calling this should contain the full plan.',
       parameters: {
         type: 'object',
         properties: {
           planSummary: { type: 'string', description: 'Brief summary of the plan (1-3 sentences)' },
-          filesToModify: {
+          keyActions: {
             type: 'array',
             items: { type: 'string' },
-            description: 'List of file paths that will be created or modified',
+            description: 'List of key actions in the plan (files to modify, URLs to visit, commands to run, etc.)',
           },
         },
         required: ['planSummary'],
@@ -425,7 +483,7 @@ export const AGENT_TOOLS: AgentToolDef[] = [
 const DEFERRED_TOOL_NAMES = new Set([
   'browser_navigate', 'browser_action', 'browser_extract', 'browser_screenshot', 'browser_close',
   'notebook_edit', 'worktree_create', 'worktree_remove',
-  'ask_user', 'exit_plan_mode',
+  'ask_user', 'enter_plan_mode', 'exit_plan_mode',
 ])
 
 /** Core tools — always included in the prompt. */
@@ -482,6 +540,7 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
     case 'browser_screenshot':
     case 'browser_close':
     case 'ask_user':
+    case 'enter_plan_mode':
     case 'exit_plan_mode':
     case 'tool_search':
     case 'find_symbol':
@@ -650,6 +709,49 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   })
 }
 
+/** Add line numbers to text content (e.g., "  1 | line content"). */
+function addLineNumbers(content: string, startLine: number): string {
+  const lines = content.split('\n')
+  const maxLineNum = startLine + lines.length - 1
+  const padWidth = String(maxLineNum).length
+  return lines.map((line, i) => {
+    const num = String(startLine + i).padStart(padWidth, ' ')
+    return `${num} | ${line}`
+  }).join('\n')
+}
+
+/**
+ * Generate a short unified diff showing what changed in an edit.
+ * Context: 3 lines before/after the change. Capped to ~40 lines.
+ */
+function generateSimpleDiff(filePath: string, oldStr: string, newStr: string, originalContent: string): string {
+  const lines = originalContent.split('\n')
+  const oldLines = oldStr.split('\n')
+  const newLines = newStr.split('\n')
+
+  // Find the line number where the old_string starts
+  const joinedBefore = originalContent.indexOf(oldStr)
+  if (joinedBefore === -1) return ''
+  const startLine = originalContent.substring(0, joinedBefore).split('\n').length
+
+  const CONTEXT = 2
+  const contextBefore = lines.slice(Math.max(0, startLine - 1 - CONTEXT), startLine - 1)
+  const contextAfter = lines.slice(startLine - 1 + oldLines.length, startLine - 1 + oldLines.length + CONTEXT)
+
+  const diffLines: string[] = []
+  diffLines.push(`--- ${path.basename(filePath)}`)
+  diffLines.push(`+++ ${path.basename(filePath)}`)
+  diffLines.push(`@@ -${Math.max(1, startLine - CONTEXT)},${contextBefore.length + oldLines.length + contextAfter.length} +${Math.max(1, startLine - CONTEXT)},${contextBefore.length + newLines.length + contextAfter.length} @@`)
+  for (const l of contextBefore) diffLines.push(` ${l}`)
+  for (const l of oldLines) diffLines.push(`-${l}`)
+  for (const l of newLines) diffLines.push(`+${l}`)
+  for (const l of contextAfter) diffLines.push(` ${l}`)
+
+  // Cap output
+  const result = diffLines.join('\n')
+  return result.length > 2000 ? result.substring(0, 2000) + '\n[diff truncated]' : result
+}
+
 function isSubPath(parentPath: string, childPath: string): boolean {
   const parent = path.resolve(parentPath)
   const child = path.resolve(childPath)
@@ -804,8 +906,12 @@ async function searchContentRecursive(
 
     const lines = excerpt.content.split('\n')
     const matches: string[] = []
+    // Support regex: try to compile query as regex, fallback to literal includes
+    let queryRegex: RegExp | null = null
+    try { queryRegex = new RegExp(query, 'i') } catch { queryRegex = null }
     lines.forEach((line, idx) => {
-      if (line.includes(query)) {
+      const hit = queryRegex ? queryRegex.test(line) : line.includes(query)
+      if (hit) {
         matches.push(`  Line ${idx + 1}: ${line.trim().substring(0, 200)}`)
       }
     })
@@ -823,7 +929,45 @@ async function searchContentRecursive(
 }
 
 const MAX_COMMAND_OUTPUT_LENGTH = 120000
-const COMMAND_TIMEOUT_MS = 60000
+const COMMAND_DEFAULT_TIMEOUT_MS = 60000
+const COMMAND_MAX_TIMEOUT_MS = 600000
+
+/**
+ * Commands where exit code 1 is a normal result, not an error.
+ * grep/rg: 1 = no matches found
+ * diff: 1 = differences found
+ * test/[: 1 = condition false
+ */
+const EXPECTED_EXIT1_COMMANDS = ['grep', 'egrep', 'fgrep', 'rg', 'ripgrep', 'diff', 'test', '[']
+
+function getBaseCommand(command: string): string {
+  // Extract the base command from a potentially piped/chained command
+  // Use the FIRST command in the pipeline (leftmost)
+  const firstCmd = command.split(/[|;&]/).pop()?.trim() || command.trim()
+  const parts = firstCmd.split(/\s+/)
+  // Skip env var prefixes like "FOO=bar cmd"
+  const cmdPart = parts.find(p => !p.includes('=')) || parts[0] || ''
+  return path.basename(cmdPart)
+}
+
+function isExpectedNonZeroExit(command: string): boolean {
+  const base = getBaseCommand(command)
+  return EXPECTED_EXIT1_COMMANDS.includes(base)
+}
+
+function getExitCodeHint(command: string): string {
+  const base = getBaseCommand(command)
+  switch (base) {
+    case 'grep': case 'egrep': case 'fgrep': case 'rg': case 'ripgrep':
+      return 'No matches found (exit code 1 is normal for grep)'
+    case 'diff':
+      return 'Differences found (exit code 1 is normal for diff)'
+    case 'test': case '[':
+      return 'Condition evaluated to false (exit code 1 is normal for test)'
+    default:
+      return ''
+  }
+}
 
 function appendOutputChunk(target: string[], state: { length: number; truncated: boolean }, chunk: string) {
   if (!chunk || state.length >= MAX_COMMAND_OUTPUT_LENGTH) {
@@ -843,7 +987,8 @@ function appendOutputChunk(target: string[], state: { length: number; truncated:
   state.length += chunk.length
 }
 
-async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): Promise<ToolExecutionResult> {
+async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, timeoutMs?: number): Promise<ToolExecutionResult> {
+  const effectiveTimeout = Math.min(Math.max(timeoutMs || COMMAND_DEFAULT_TIMEOUT_MS, 1000), COMMAND_MAX_TIMEOUT_MS)
   return new Promise((resolve) => {
     const stdoutChunks: string[] = []
     const stderrChunks: string[] = []
@@ -868,7 +1013,7 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): P
           child.kill('SIGKILL')
         } catch {}
       }, 5000)
-    }, COMMAND_TIMEOUT_MS)
+    }, effectiveTimeout)
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
       appendOutputChunk(stdoutChunks, outputState, chunk.toString())
@@ -895,8 +1040,8 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): P
 
       if (timedOut) {
         const timeoutMessage = combinedOutput
-          ? `${combinedOutput}${truncatedSuffix}\n\n[Command timed out after ${COMMAND_TIMEOUT_MS / 1000} seconds]`
-          : `Command timed out after ${COMMAND_TIMEOUT_MS / 1000} seconds`
+          ? `${combinedOutput}${truncatedSuffix}\n\n[Command timed out after ${effectiveTimeout / 1000} seconds]`
+          : `Command timed out after ${effectiveTimeout / 1000} seconds`
         resolve({ success: false, output: timeoutMessage, riskLevel })
         return
       }
@@ -905,6 +1050,20 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel): P
         resolve({
           success: true,
           output: combinedOutput ? `${combinedOutput}${truncatedSuffix}` : '(no output)',
+          riskLevel,
+        })
+        return
+      }
+
+      // Exit code semantics: some commands use exit 1 for normal results
+      const isNormalExit1 = code === 1 && isExpectedNonZeroExit(command)
+      if (isNormalExit1) {
+        const hint = getExitCodeHint(command)
+        resolve({
+          success: true,
+          output: combinedOutput
+            ? `${combinedOutput}${truncatedSuffix}${hint ? `\n\n[${hint}]` : ''}`
+            : hint || '(no output)',
           riskLevel,
         })
         return
@@ -1040,9 +1199,10 @@ export async function executeTool(
           const cached = fileReadCache.read(filePath)
           if (cached !== null) {
             const maxLen = typeof args.max_length === 'number' ? Math.min(args.max_length, 240000) : 20000
-            const output = cached.length > maxLen
-              ? `${cached.substring(0, maxLen)}\n\n[File truncated — showing first ${maxLen} of ${cached.length} chars]`
-              : cached
+            const numbered = addLineNumbers(cached, 1)
+            const output = numbered.length > maxLen
+              ? `${numbered.substring(0, maxLen)}\n\n[File truncated — showing first ${maxLen} of ${cached.length} chars]`
+              : numbered
             return { success: true, output, riskLevel }
           }
         }
@@ -1091,8 +1251,10 @@ export async function executeTool(
           const startLine = startLineRaw ?? 1
           const endLine = Math.min(endLineRaw ?? totalLines, totalLines)
 
-          output = lines.slice(startLine - 1, endLine).join('\n')
+          output = addLineNumbers(lines.slice(startLine - 1, endLine).join('\n'), startLine)
           notes.push(`[Showing lines ${startLine}-${endLine} of ${totalLines}]`)
+        } else {
+          output = addLineNumbers(output, 1)
         }
 
         if (output.length > maxLength) {
@@ -1133,12 +1295,12 @@ export async function executeTool(
         if (!fs.existsSync(args.path)) {
           return { success: false, output: `File not found: ${args.path}`, riskLevel }
         }
-        let content = fs.readFileSync(args.path, 'utf-8')
-        if (!content.includes(args.old_string)) {
+        const originalContent = fs.readFileSync(args.path, 'utf-8')
+        if (!originalContent.includes(args.old_string)) {
           return { success: false, output: `String not found in file: "${args.old_string.substring(0, 100)}"`, riskLevel }
         }
         // Uniqueness check: old_string must appear exactly once (unless replace_all)
-        const occurrences = content.split(args.old_string).length - 1
+        const occurrences = originalContent.split(args.old_string).length - 1
         if (occurrences > 1 && !args.replace_all) {
           return {
             success: false,
@@ -1146,14 +1308,18 @@ export async function executeTool(
             riskLevel,
           }
         }
+        let newContent: string
         if (args.replace_all) {
-          content = content.split(args.old_string).join(args.new_string)
+          newContent = originalContent.split(args.old_string).join(args.new_string)
         } else {
-          content = content.replace(args.old_string, () => args.new_string)
+          newContent = originalContent.replace(args.old_string, () => args.new_string)
         }
-        fs.writeFileSync(args.path, content, 'utf-8')
+        fs.writeFileSync(args.path, newContent, 'utf-8')
         fileReadCache.invalidate(args.path)
-        return { success: true, output: `File edited successfully: ${args.path}${args.replace_all ? ` (${occurrences} replacements)` : ''}`, riskLevel }
+
+        // Generate a short unified diff for agent self-verification
+        const diff = generateSimpleDiff(args.path, args.old_string, args.new_string, originalContent)
+        return { success: true, output: `File edited: ${args.path}${args.replace_all ? ` (${occurrences} replacements)` : ''}\n\n${diff}`, riskLevel }
       }
 
       case 'delete_file': {
@@ -1180,11 +1346,39 @@ export async function executeTool(
         if (!fs.existsSync(dirPath)) {
           return { success: false, output: `Directory not found: ${dirPath}`, riskLevel }
         }
-        const entries = fs.readdirSync(dirPath, { withFileTypes: true })
-        const items = entries
-          .filter(e => !e.name.startsWith('.'))
-          .map(e => `${e.isDirectory() ? '[DIR]' : '[FILE]'} ${e.name}`)
-          .sort()
+        const maxDepth = Math.min(Math.max(args.depth || 1, 1), 4)
+        const includeHidden = args.include_hidden || false
+        // Known config dotfiles that are always useful to show
+        const usefulDotfiles = new Set(['.gitignore', '.env.example', '.env.local', '.eslintrc', '.eslintrc.js', '.eslintrc.json', '.prettierrc', '.prettierrc.js', '.prettierrc.json', '.editorconfig', '.nvmrc', '.node-version', '.onit'])
+
+        function listDir(dir: string, prefix: string, depth: number): string[] {
+          if (depth > maxDepth) return []
+          try {
+            const entries = fs.readdirSync(dir, { withFileTypes: true })
+            const filtered = entries.filter(e => {
+              if (!e.name.startsWith('.')) return true
+              if (includeHidden) return true
+              return usefulDotfiles.has(e.name)
+            }).sort((a, b) => {
+              // Directories first
+              if (a.isDirectory() && !b.isDirectory()) return -1
+              if (!a.isDirectory() && b.isDirectory()) return 1
+              return a.name.localeCompare(b.name)
+            })
+            const lines: string[] = []
+            for (const e of filtered) {
+              const icon = e.isDirectory() ? '[DIR]' : '[FILE]'
+              lines.push(`${prefix}${icon} ${e.name}`)
+              if (e.isDirectory() && depth < maxDepth) {
+                const subLines = listDir(path.join(dir, e.name), prefix + '  ', depth + 1)
+                lines.push(...subLines)
+              }
+            }
+            return lines
+          } catch { return [] }
+        }
+
+        const items = listDir(dirPath, '', 1)
         return { success: true, output: `Contents of ${dirPath}:\n${items.join('\n')}`, riskLevel }
       }
 
@@ -1279,7 +1473,7 @@ export async function executeTool(
 
       case 'execute_command': {
         const cwd = args.working_directory || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
-        return runCommand(args.command, cwd, riskLevel)
+        return runCommand(args.command, cwd, riskLevel, args.timeout_ms)
       }
 
       case 'web_search': {
