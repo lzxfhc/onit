@@ -709,17 +709,6 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   })
 }
 
-/** Add line numbers to text content (e.g., "  1 | line content"). */
-function addLineNumbers(content: string, startLine: number): string {
-  const lines = content.split('\n')
-  const maxLineNum = startLine + lines.length - 1
-  const padWidth = String(maxLineNum).length
-  return lines.map((line, i) => {
-    const num = String(startLine + i).padStart(padWidth, ' ')
-    return `${num} | ${line}`
-  }).join('\n')
-}
-
 /**
  * Generate a short unified diff showing what changed in an edit.
  * Context: 3 lines before/after the change. Capped to ~40 lines.
@@ -941,9 +930,12 @@ const COMMAND_MAX_TIMEOUT_MS = 600000
 const EXPECTED_EXIT1_COMMANDS = ['grep', 'egrep', 'fgrep', 'rg', 'ripgrep', 'diff', 'test', '[']
 
 function getBaseCommand(command: string): string {
-  // Extract the base command from a potentially piped/chained command
-  // Use the FIRST command in the pipeline (leftmost)
-  const firstCmd = command.split(/[|;&]/).pop()?.trim() || command.trim()
+  // Extract the base command from a potentially piped/chained command.
+  // Use the FIRST non-empty command segment in the pipeline (leftmost).
+  const firstCmd = command
+    .split(/[|;&]/)
+    .map(part => part.trim())
+    .find(Boolean) || command.trim()
   const parts = firstCmd.split(/\s+/)
   // Skip env var prefixes like "FOO=bar cmd"
   const cmdPart = parts.find(p => !p.includes('=')) || parts[0] || ''
@@ -1199,10 +1191,9 @@ export async function executeTool(
           const cached = fileReadCache.read(filePath)
           if (cached !== null) {
             const maxLen = typeof args.max_length === 'number' ? Math.min(args.max_length, 240000) : 20000
-            const numbered = addLineNumbers(cached, 1)
-            const output = numbered.length > maxLen
-              ? `${numbered.substring(0, maxLen)}\n\n[File truncated — showing first ${maxLen} of ${cached.length} chars]`
-              : numbered
+            const output = cached.length > maxLen
+              ? `${cached.substring(0, maxLen)}\n\n[File truncated — showing first ${maxLen} of ${cached.length} chars]`
+              : cached
             return { success: true, output, riskLevel }
           }
         }
@@ -1251,10 +1242,8 @@ export async function executeTool(
           const startLine = startLineRaw ?? 1
           const endLine = Math.min(endLineRaw ?? totalLines, totalLines)
 
-          output = addLineNumbers(lines.slice(startLine - 1, endLine).join('\n'), startLine)
+          output = lines.slice(startLine - 1, endLine).join('\n')
           notes.push(`[Showing lines ${startLine}-${endLine} of ${totalLines}]`)
-        } else {
-          output = addLineNumbers(output, 1)
         }
 
         if (output.length > maxLength) {

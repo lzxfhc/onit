@@ -162,8 +162,8 @@ function setupIPC() {
   // Agent: permission response
   ipcMain.on('agent:permission-response', (_event, data: { requestId: string; approved: boolean; alwaysAllow?: boolean; answerText?: string }) => {
     // Route question/plan answers to the dedicated handler
-    if (data.answerText && (data.requestId.startsWith('ask_user:') || data.requestId.startsWith('plan_approval:'))) {
-      agentManager.handleQuestionResponse(data.requestId, data.answerText)
+    if (data.requestId.startsWith('ask_user:') || data.requestId.startsWith('plan_approval:')) {
+      agentManager.handleQuestionResponse(data.requestId, data.approved, data.answerText)
     } else {
       agentManager.handlePermissionResponse(data.requestId, data.approved, data.alwaysAllow)
     }

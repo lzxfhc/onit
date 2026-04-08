@@ -136,6 +136,18 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
       sessionStore.saveSession(sessionId)
     })
 
+    const unsubSessionUpdate = window.electronAPI.onAgentSessionUpdate((data: any) => {
+      const { sessionId, runId, updates } = data
+      flushRun(sessionId, runId)
+
+      const sessionStore = useSessionStore.getState()
+      const session = sessionStore.sessions.find(s => s.id === sessionId)
+      if (session?.activeRunId && runId && session.activeRunId !== runId) return
+
+      sessionStore.updateSession(sessionId, updates)
+      sessionStore.saveSession(sessionId)
+    })
+
     const unsubPermission = window.electronAPI.onPermissionRequest((data: any) => {
       if (!isCurrentRun(data.sessionId, data.runId)) return
       useSettingsStore.getState().addPermissionRequest(data)
@@ -161,6 +173,7 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
       unsubComplete()
       unsubError()
       unsubMemoryUpdate()
+      unsubSessionUpdate()
       unsubPermission()
       unsubTaskUpdate()
       unsubWorkspaceFiles()

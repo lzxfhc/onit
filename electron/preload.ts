@@ -89,6 +89,11 @@ const api = {
     ipcRenderer.on('agent:memory-update', listener)
     return () => ipcRenderer.removeListener('agent:memory-update', listener)
   },
+  onAgentSessionUpdate: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('agent:session-update', listener)
+    return () => ipcRenderer.removeListener('agent:session-update', listener)
+  },
   onPermissionRequest: (callback: (data: any) => void) => {
     const listener = (_event: any, data: any) => callback(data)
     ipcRenderer.on('agent:permission-request', listener)
