@@ -131,6 +131,8 @@ interface AgentSession {
   isRunning: boolean
   completionStatus: 'completed' | 'stopped' | 'error'
   permissionMode: string
+  /** Non-plan mode to restore after a temporary enter_plan_mode approval. */
+  returnPermissionMode: string | null
   workspacePath: string | null
   model: string
   sessionMemory: SessionMemoryData | null
@@ -334,14 +336,11 @@ export class AgentManager {
     const { contents: mentionedSkillContents, names: mentionedSkillNames } = this.extractMentionedSkills(userMessage, enabledSkills)
 
     // Build the system prompt
-    const baseSystemPrompt = this.buildSystemPrompt(
-      sessionData.workspacePath,
-      sessionData.permissionMode,
+    const systemPrompt = this.buildCurrentSystemPrompt({
+      workspacePath: sessionData.workspacePath,
+      permissionMode: sessionData.permissionMode || 'accept-edit',
       enabledSkills,
-    )
-    const systemPrompt = this.systemPromptPrepend
-      ? this.systemPromptPrepend + '\n\n' + baseSystemPrompt
-      : baseSystemPrompt
+    })
 
     // Restore conversation history from session
     const messages: AgentMessage[] = [
@@ -377,6 +376,7 @@ export class AgentManager {
       isRunning: true,
       completionStatus: 'completed',
       permissionMode: sessionData.permissionMode || 'accept-edit',
+      returnPermissionMode: agentSession?.returnPermissionMode || null,
       workspacePath: sessionData.workspacePath,
       model: sessionData.model || 'qianfan-code-latest',
       sessionMemory,
@@ -859,7 +859,7 @@ export class AgentManager {
       const skillsList = enabledSkills
         .map(s => `- **${s.displayName}** (\`@${s.name}\`): ${s.description}`)
         .join('\n')
-      skillsSection = `\n\n## Available Skills\nThe user can invoke these skills by mentioning them with @. When a skill is mentioned, follow its instructions.\n${skillsList}`
+      skillsSection = `\n\n## Available Skills\nYou and the user can invoke skills by mentioning them with @ in messages. When a task matches a skill's purpose, proactively use it — include @skill-name in your response text and the skill instructions will be loaded for the next step.\n${skillsList}`
     }
 
     return `You are Onit Agent, a highly capable AI assistant running on the user's desktop. You help users accomplish tasks by using the available tools.
@@ -931,7 +931,47 @@ Call exit_plan_mode with a brief summary. The user will review and either approv
 - Be specific and actionable. The plan should tell the user exactly what will happen.
 - Your turn should end with either ask_user (if you need input) or exit_plan_mode (if the plan is ready). Don't stop for other reasons.` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
 
-Format results clearly with markdown. Use syntax highlighting for code.${skillsSection}`
+    Format results clearly with markdown. Use syntax highlighting for code.${skillsSection}`
+  }
+
+  private buildCurrentSystemPrompt(params: {
+    workspacePath: string | null
+    permissionMode: string
+    enabledSkills?: SkillData[]
+  }): string {
+    const baseSystemPrompt = this.buildSystemPrompt(
+      params.workspacePath,
+      params.permissionMode,
+      params.enabledSkills || [],
+    )
+    return this.systemPromptPrepend
+      ? this.systemPromptPrepend + '\n\n' + baseSystemPrompt
+      : baseSystemPrompt
+  }
+
+  private refreshSessionSystemPrompt(agentSession: AgentSession): void {
+    const systemPrompt = this.buildCurrentSystemPrompt({
+      workspacePath: agentSession.workspacePath,
+      permissionMode: agentSession.permissionMode,
+      enabledSkills: agentSession.enabledSkills,
+    })
+
+    if (agentSession.messages.length > 0 && agentSession.messages[0].role === 'system') {
+      agentSession.messages[0] = { role: 'system', content: systemPrompt }
+    } else {
+      agentSession.messages.unshift({ role: 'system', content: systemPrompt })
+    }
+  }
+
+  private updatePermissionMode(agentSession: AgentSession, permissionMode: string, returnPermissionMode: string | null): void {
+    agentSession.permissionMode = permissionMode
+    agentSession.returnPermissionMode = returnPermissionMode
+    this.refreshSessionSystemPrompt(agentSession)
+    this.sendToRenderer('agent:session-update', {
+      sessionId: agentSession.sessionId,
+      runId: agentSession.runId,
+      updates: { permissionMode },
+    })
   }
 
   private getApiUrl(apiConfig: { billingMode: string; customBaseUrl?: string; codingPlanProvider?: string }): string {
@@ -2348,15 +2388,17 @@ What remains to be done.
   }
 
   /**
-   * Handle answer response from user (for ask_user tool).
+   * Handle interactive responses from the renderer (questions / plan approval).
    * Called from main.ts IPC handler.
    */
-  handleQuestionResponse(requestId: string, answerText: string): void {
+  handleQuestionResponse(requestId: string, approved: boolean, answerText?: string): void {
     for (const [, session] of this.sessions) {
       const pending = session.pendingPermissions.get(requestId)
       if (pending) {
-        session.pendingAnswers.set(requestId, answerText)
-        pending.resolve(true)
+        if (typeof answerText === 'string') {
+          session.pendingAnswers.set(requestId, answerText)
+        }
+        pending.resolve(approved)
         session.pendingPermissions.delete(requestId)
         return
       }
@@ -2379,6 +2421,27 @@ What remains to be done.
             role: 'system',
             content: 'You have been running for a while. Please summarize your progress so far and outline what remains to be done. If you are stuck in a loop, try a different approach.',
           })
+        }
+
+        // Check if the last assistant message mentioned any @skills — if so,
+        // inject the skill content so the agent can use it in the next turn.
+        if (agentSession.enabledSkills?.length) {
+          const lastAssistant = [...agentSession.messages].reverse().find(m => m.role === 'assistant')
+          if (lastAssistant?.content) {
+            const { contents: skillContents, names: skillNames } = this.extractMentionedSkills(lastAssistant.content, agentSession.enabledSkills)
+            for (let i = 0; i < skillContents.length; i++) {
+              const skillName = skillNames[i]
+              // Avoid duplicate: check if this specific skill is already injected
+              const marker = `[Skill: ${agentSession.enabledSkills.find(s => s.name === skillName)?.displayName || skillName}]`
+              const alreadyInjected = agentSession.messages.some(m => m.role === 'system' && m.content?.includes(marker))
+              if (!alreadyInjected) {
+                agentSession.messages.push({ role: 'system', content: skillContents[i] })
+              }
+            }
+            for (const name of skillNames) {
+              agentSession.usedSkillNames.set(name, 0)
+            }
+          }
         }
 
         // Keep prompt within budgets (soft working-set + hard cap) before each
@@ -2483,7 +2546,10 @@ What remains to be done.
                 const planArgs = JSON.parse(toolArgs)
                 const approved = await this.requestEnterPlanMode(agentSession, planArgs.reason || 'Task requires planning')
                 if (approved) {
-                  agentSession.permissionMode = 'plan'
+                  const previousMode = agentSession.permissionMode === 'plan'
+                    ? agentSession.returnPermissionMode
+                    : agentSession.permissionMode
+                  this.updatePermissionMode(agentSession, 'plan', previousMode)
                   return {
                     tc, toolName, toolArgs,
                     result: { success: true, output: 'User approved entering plan mode. You are now in plan mode — only read-only tools and ask_user are allowed. Explore the codebase, ask clarifying questions, then call exit_plan_mode with your plan.', riskLevel: 'safe' as const },
@@ -2529,11 +2595,13 @@ What remains to be done.
                 const planArgs = JSON.parse(toolArgs)
                 const planResult = await this.requestPlanApproval(agentSession, planArgs.planSummary || '', planArgs.keyActions || planArgs.filesToModify || [])
                 if (planResult.approved) {
-                  // Switch permission mode from 'plan' to 'accept-edit'
-                  agentSession.permissionMode = 'accept-edit'
+                  const nextMode = agentSession.returnPermissionMode && agentSession.returnPermissionMode !== 'plan'
+                    ? agentSession.returnPermissionMode
+                    : 'accept-edit'
+                  this.updatePermissionMode(agentSession, nextMode, null)
                   return {
                     tc, toolName, toolArgs,
-                    result: { success: true, output: 'User approved your plan. You can now start implementing. Permission mode switched to accept-edit.', riskLevel: 'safe' as const },
+                    result: { success: true, output: `User approved your plan. You can now start implementing. Permission mode switched to ${nextMode}.`, riskLevel: 'safe' as const },
                     denied: false,
                   }
                 } else {
