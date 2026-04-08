@@ -118,7 +118,7 @@ const MAX_OUTPUT_RECOVERY_PROMPT = 'Your previous response was cut off due to ou
 // Compression circuit breaker + dual trigger
 const COMPRESSION_MAX_CONSECUTIVE_FAILURES = 3
 const COMPRESSION_INIT_TOKEN_THRESHOLD = 10_000
-const COMPRESSION_TOOL_CALL_THRESHOLD = 3
+const COMPRESSION_TOOL_CALL_THRESHOLD = 2
 
 // Loop detection: detect when the agent repeats the same actions
 const LOOP_DETECTION_WINDOW = 20   // track last N tool calls
@@ -2167,34 +2167,16 @@ What remains to be done.
       },
     })
 
-    // 2) Zero-cost compression path: if we still exceed the hard budget but
-    // Session Memory is relatively fresh, use it as the compact summary and
-    // drop old messages without an extra LLM call.
-    const hardBudget = this.getEffectiveMaxInputTokens(agentSession)
-    const currentTokens = this.estimateMessagesTokens(agentSession.messages)
-    if (currentTokens > hardBudget && agentSession.sessionMemory?.content) {
-      const memoryAge = iteration - agentSession.lastMemoryCompressionIteration
-      if (memoryAge <= 5) {
-        // Memory is fresh enough — use it and drop old messages directly
-        this.pruneConversationForTokenBudget(agentSession, {
-          maxInputTokensOverride: hardBudget,
-        })
-        // Skip the LLM-based compression since we have fresh memory
-        if (this.estimateMessagesTokens(agentSession.messages) <= hardBudget) {
-          return
-        }
-      }
-    }
-
-    // 3) Hard guardrail: if the prompt would exceed the configured max input
+    // 2) Hard guardrail: if the prompt would exceed the configured max input
     // tokens, compress history into memory instead of silently dropping it.
+    const hardBudget = this.getEffectiveMaxInputTokens(agentSession)
     await this.maybeCompressSessionMemory(agentSession, {
       maxInputTokensOverride: hardBudget,
       iteration,
       force: true,
     })
 
-    // 4) Finally, prune tool output previews / attachments and keep the prompt
+    // 3) Finally, prune tool output previews / attachments and keep the prompt
     // within the hard budget before the model call.
     this.pruneConversationForTokenBudget(agentSession, {
       maxInputTokensOverride: hardBudget,
