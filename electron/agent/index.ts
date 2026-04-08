@@ -120,17 +120,6 @@ const COMPRESSION_MAX_CONSECUTIVE_FAILURES = 3
 const COMPRESSION_INIT_TOKEN_THRESHOLD = 10_000
 const COMPRESSION_TOOL_CALL_THRESHOLD = 2
 
-// Loop detection: detect when the agent repeats the same actions
-const LOOP_DETECTION_WINDOW = 20   // track last N tool calls
-const LOOP_DETECTION_THRESHOLD = 3 // same signature 3+ times = loop
-// Per-tool-type call limits: safety net only — the research strategy in the
-// system prompt should prevent the agent from ever hitting these.
-const TOOL_CALL_LIMITS: Record<string, number> = {
-  web_search: 15,
-  web_fetch: 15,
-  browser_navigate: 12,
-}
-
 // NOTE: Bash security patterns are consolidated in tools.ts getToolRiskLevel()
 // to avoid duplication. See the execute_command case there.
 
@@ -175,12 +164,6 @@ interface AgentSession {
   browserManager?: BrowserManager
   /** Tracks files read in this session for read-before-edit enforcement. */
   readFiles: Set<string>
-  /** Recent tool call signatures for loop detection. */
-  recentToolSignatures: string[]
-  /** Count of detected loops (used for escalating intervention). */
-  loopDetectionCount: number
-  /** Per-tool-type call counts for runaway prevention. */
-  toolCallCounts: Map<string, number>
   /** Pending answer texts for ask_user tool (keyed by requestId). */
   pendingAnswers: Map<string, string>
 }
@@ -417,9 +400,6 @@ export class AgentManager {
       },
       alwaysAllowedTools: agentSession?.alwaysAllowedTools || new Set(this.persistedAllowedTools),
       readFiles: agentSession?.readFiles || new Set(),
-      recentToolSignatures: [],
-      loopDetectionCount: 0,
-      toolCallCounts: new Map(),
       pendingAnswers: new Map(),
       pendingPermissions: new Map(),
       enabledSkills,
@@ -908,14 +888,6 @@ ${platformHint}${workspace}
 - When processing tool results, write down important facts in your response text — old tool results may be cleared from context in future turns.
 - Call multiple independent read-only tools in parallel when possible for efficiency.
 - Some specialized tools (browser automation, notebook editing, git worktree, interactive questions) are not loaded by default. Use tool_search to discover and load them when needed.
-
-# Research strategy
-When you need to search for information or explore:
-- Plan before searching. Decide what you need to find, then search with 2-3 targeted queries.
-- Searching has diminishing returns. If 3-5 searches haven't found what you need, the information is likely not easily available. Stop searching and work with what you have.
-- Work with imperfect information. You don't need 100% before starting the actual work. 60-70% is enough — note the gaps, deliver what you can, and tell the user what you couldn't find.
-- If critical information is missing after a few attempts, ask the user — they may have the answer or a better source.
-- The goal is the deliverable, not the search. Searching is a means to an end. Shift from "gather" to "produce" as soon as you have enough material.
 
 # Actions with care
 - Freely take local, reversible actions (reading files, running tests).
@@ -2392,7 +2364,7 @@ What remains to be done.
   }
 
   private async runAgentLoop(agentSession: AgentSession): Promise<void> {
-    const MAX_ITERATIONS = 50
+    const MAX_ITERATIONS = 200
     let iteration = 0
 
     let maxOutputRecoveryCount = 0
@@ -2401,11 +2373,11 @@ What remains to be done.
       while (agentSession.isRunning && iteration < MAX_ITERATIONS) {
         iteration++
 
-        // After 25 iterations, nudge the agent to produce output
-        if (iteration === 26) {
+        // After 50 iterations, add a hint to encourage progress summary
+        if (iteration === 51) {
           agentSession.messages.push({
             role: 'system',
-            content: 'You have been running for a while. Shift from gathering to producing — use the information you already have to deliver a result. If something is missing, note the gap and move on.',
+            content: 'You have been running for a while. Please summarize your progress so far and outline what remains to be done. If you are stuck in a loop, try a different approach.',
           })
         }
 
@@ -2471,18 +2443,6 @@ What remains to be done.
           const executeSingleTool = async (tc: typeof toolCalls[0]) => {
             const toolName = tc.function.name
             const toolArgs = tc.function.arguments
-
-            // Per-tool-type call limit: prevent runaway usage
-            const callCount = (agentSession.toolCallCounts.get(toolName) || 0) + 1
-            agentSession.toolCallCounts.set(toolName, callCount)
-            const limit = TOOL_CALL_LIMITS[toolName]
-            if (limit && callCount > limit) {
-              return {
-                tc, toolName, toolArgs,
-                result: { success: false, output: `Tool "${toolName}" has been called ${callCount} times (limit: ${limit}). You must stop using this tool and work with the information you already have. Summarize your findings so far and proceed to the next step, or tell the user what you found and what you couldn't find.`, riskLevel: 'safe' as const },
-                denied: false,
-              }
-            }
 
             this.sendToRenderer('agent:stream', {
               sessionId: agentSession.sessionId,
@@ -2776,38 +2736,6 @@ What remains to be done.
 
         // Track tool calls for dual-trigger compression
         agentSession.toolCallsSinceLastCompression += toolCalls.length
-
-        // --- Loop detection: check if agent is repeating the same actions ---
-        for (const tc of toolCalls) {
-          // Generate a signature from tool name + key argument (normalized)
-          let keyArg = ''
-          try {
-            const args = JSON.parse(tc.function.arguments)
-            keyArg = args.query || args.url || args.command || args.path || args.question || ''
-          } catch {}
-          const sig = `${tc.function.name}:${keyArg.substring(0, 100).toLowerCase().trim()}`
-          agentSession.recentToolSignatures.push(sig)
-        }
-        // Keep only the last N signatures
-        if (agentSession.recentToolSignatures.length > LOOP_DETECTION_WINDOW) {
-          agentSession.recentToolSignatures = agentSession.recentToolSignatures.slice(-LOOP_DETECTION_WINDOW)
-        }
-        // Count occurrences of each signature
-        const sigCounts = new Map<string, number>()
-        for (const sig of agentSession.recentToolSignatures) {
-          sigCounts.set(sig, (sigCounts.get(sig) || 0) + 1)
-        }
-        const maxCount = Math.max(...sigCounts.values())
-        if (maxCount >= LOOP_DETECTION_THRESHOLD) {
-          agentSession.loopDetectionCount++
-          const repeatedSig = [...sigCounts.entries()].find(([, c]) => c >= LOOP_DETECTION_THRESHOLD)?.[0] || ''
-          const loopMessage = agentSession.loopDetectionCount >= 2
-            ? `[LOOP DETECTED] You have repeated "${repeatedSig}" ${maxCount} times with the same results. You MUST stop this approach immediately. Summarize what you've tried, what failed, and either try a fundamentally different approach or tell the user you cannot complete this task with the available tools.`
-            : `[LOOP WARNING] You have called "${repeatedSig}" ${maxCount} times. The results are not changing. Before trying again, stop and think: why isn't this working? Try a different search query, a different tool, or a different approach entirely. If you're stuck, use ask_user to ask the user for guidance.`
-          agentSession.messages.push({ role: 'system', content: loopMessage })
-          // Clear signatures after intervention to give the agent a fresh start
-          agentSession.recentToolSignatures = []
-        }
 
         // Send iteration-end signal for UI collapse
         this.sendToRenderer('agent:stream', {
