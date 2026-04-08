@@ -79,13 +79,15 @@ const TOOL_CONTEXT_RECENT_GROUPS = 10
 const SESSION_MEMORY_MARKER = '[ONIT_SESSION_MEMORY]'
 
 // Micro-compaction: zero-cost replacement of old tool results with stubs
-const MICROCOMPACT_KEEP_RECENT = 5
+const MICROCOMPACT_KEEP_RECENT = 8
 const MICROCOMPACT_CLEARED_MSG = '[Old tool result cleared]'
+// Only compact tools whose old results are unlikely to be needed for decision-making.
+// EXCLUDED: web_search, web_fetch, browser_extract — these are research results
+// that the agent needs to remember to avoid repeating the same searches.
 const MICROCOMPACT_TOOLS = new Set([
   'read_file', 'write_file', 'edit_file', 'execute_command',
   'list_directory', 'search_files', 'search_content',
-  'web_search', 'web_fetch',
-  'browser_navigate', 'browser_action', 'browser_extract', 'browser_screenshot',
+  'browser_navigate', 'browser_action', 'browser_screenshot',
   'notebook_edit', 'worktree_create', 'worktree_remove', 'find_symbol',
 ])
 const SESSION_MEMORY_MAX_OUTPUT_TOKENS = 4000
@@ -2130,7 +2132,7 @@ What remains to be done.
     const compactableIndices: number[] = []
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i]
-      if (msg.role === 'tool' && msg.name && MICROCOMPACT_TOOLS.has(msg.name) && msg.content && !msg.content.startsWith(MICROCOMPACT_CLEARED_MSG)) {
+      if (msg.role === 'tool' && msg.name && MICROCOMPACT_TOOLS.has(msg.name) && msg.content && msg.content !== MICROCOMPACT_CLEARED_MSG) {
         compactableIndices.push(i)
       }
     }
@@ -2138,16 +2140,10 @@ What remains to be done.
     // Nothing to compact if within keep-recent limit
     if (compactableIndices.length <= MICROCOMPACT_KEEP_RECENT) return
 
-    // Replace old results with a brief stub that preserves WHAT was done
-    // (so the agent remembers it already tried this), but removes the full content.
+    // Replace all but the most recent N with a cleared stub
     const toClear = compactableIndices.slice(0, compactableIndices.length - MICROCOMPACT_KEEP_RECENT)
     for (const idx of toClear) {
-      const msg = messages[idx]
-      const content = msg.content || ''
-      // Extract a one-line summary: first 120 chars of the result
-      const firstLine = content.split('\n')[0]?.substring(0, 120) || ''
-      const stub = `${MICROCOMPACT_CLEARED_MSG} (${msg.name}: ${firstLine})`
-      messages[idx] = { ...messages[idx], content: stub }
+      messages[idx] = { ...messages[idx], content: MICROCOMPACT_CLEARED_MSG }
     }
   }
 
