@@ -118,6 +118,10 @@ const COMPRESSION_MAX_CONSECUTIVE_FAILURES = 3
 const COMPRESSION_INIT_TOKEN_THRESHOLD = 10_000
 const COMPRESSION_TOOL_CALL_THRESHOLD = 3
 
+// Loop detection: detect when the agent repeats the same actions
+const LOOP_DETECTION_WINDOW = 20   // track last N tool calls
+const LOOP_DETECTION_THRESHOLD = 3 // same signature 3+ times = loop
+
 // NOTE: Bash security patterns are consolidated in tools.ts getToolRiskLevel()
 // to avoid duplication. See the execute_command case there.
 
@@ -162,6 +166,10 @@ interface AgentSession {
   browserManager?: BrowserManager
   /** Tracks files read in this session for read-before-edit enforcement. */
   readFiles: Set<string>
+  /** Recent tool call signatures for loop detection. */
+  recentToolSignatures: string[]
+  /** Count of detected loops (used for escalating intervention). */
+  loopDetectionCount: number
   /** Pending answer texts for ask_user tool (keyed by requestId). */
   pendingAnswers: Map<string, string>
 }
@@ -398,6 +406,8 @@ export class AgentManager {
       },
       alwaysAllowedTools: agentSession?.alwaysAllowedTools || new Set(this.persistedAllowedTools),
       readFiles: agentSession?.readFiles || new Set(),
+      recentToolSignatures: [],
+      loopDetectionCount: 0,
       pendingAnswers: new Map(),
       pendingPermissions: new Map(),
       enabledSkills,
@@ -891,6 +901,8 @@ ${platformHint}${workspace}
 - Freely take local, reversible actions (reading files, running tests).
 - For hard-to-reverse actions (delete, force-push, overwrite), check with the user first.
 - If an approach fails, diagnose the root cause before switching tactics. Don't retry the identical action blindly.
+- If a search returns irrelevant results, change your search query significantly — don't just retry with minor variations. Try different keywords, different phrasing, or a different tool entirely.
+- Never repeat the same tool call with the same arguments more than twice. If it didn't work twice, it won't work a third time.
 - Never use destructive actions as a shortcut to bypass obstacles.
 - For git operations: prefer new commits over amends, never force-push to main, never skip hooks.
 
@@ -2749,6 +2761,38 @@ What remains to be done.
 
         // Track tool calls for dual-trigger compression
         agentSession.toolCallsSinceLastCompression += toolCalls.length
+
+        // --- Loop detection: check if agent is repeating the same actions ---
+        for (const tc of toolCalls) {
+          // Generate a signature from tool name + key argument (normalized)
+          let keyArg = ''
+          try {
+            const args = JSON.parse(tc.function.arguments)
+            keyArg = args.query || args.url || args.command || args.path || args.question || ''
+          } catch {}
+          const sig = `${tc.function.name}:${keyArg.substring(0, 100).toLowerCase().trim()}`
+          agentSession.recentToolSignatures.push(sig)
+        }
+        // Keep only the last N signatures
+        if (agentSession.recentToolSignatures.length > LOOP_DETECTION_WINDOW) {
+          agentSession.recentToolSignatures = agentSession.recentToolSignatures.slice(-LOOP_DETECTION_WINDOW)
+        }
+        // Count occurrences of each signature
+        const sigCounts = new Map<string, number>()
+        for (const sig of agentSession.recentToolSignatures) {
+          sigCounts.set(sig, (sigCounts.get(sig) || 0) + 1)
+        }
+        const maxCount = Math.max(...sigCounts.values())
+        if (maxCount >= LOOP_DETECTION_THRESHOLD) {
+          agentSession.loopDetectionCount++
+          const repeatedSig = [...sigCounts.entries()].find(([, c]) => c >= LOOP_DETECTION_THRESHOLD)?.[0] || ''
+          const loopMessage = agentSession.loopDetectionCount >= 2
+            ? `[LOOP DETECTED] You have repeated "${repeatedSig}" ${maxCount} times with the same results. You MUST stop this approach immediately. Summarize what you've tried, what failed, and either try a fundamentally different approach or tell the user you cannot complete this task with the available tools.`
+            : `[LOOP WARNING] You have called "${repeatedSig}" ${maxCount} times. The results are not changing. Before trying again, stop and think: why isn't this working? Try a different search query, a different tool, or a different approach entirely. If you're stuck, use ask_user to ask the user for guidance.`
+          agentSession.messages.push({ role: 'system', content: loopMessage })
+          // Clear signatures after intervention to give the agent a fresh start
+          agentSession.recentToolSignatures = []
+        }
 
         // Send iteration-end signal for UI collapse
         this.sendToRenderer('agent:stream', {
