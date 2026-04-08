@@ -893,6 +893,7 @@ ${platformHint}${workspace}
 - Freely take local, reversible actions (reading files, running tests).
 - For hard-to-reverse actions (delete, force-push, overwrite), check with the user first.
 - If an approach fails, diagnose the root cause before switching tactics. Don't retry the identical action blindly.
+- Before installing packages or configuring tools, check if they already exist (e.g., pip show X, which X, node -v). Packages from previous sessions persist on the system.
 - Never use destructive actions as a shortcut to bypass obstacles.
 - For git operations: prefer new commits over amends, never force-push to main, never skip hooks.
 
