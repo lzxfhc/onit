@@ -123,6 +123,15 @@ const COMPRESSION_TOOL_CALL_THRESHOLD = 2
 // Loop detection: detect when the agent repeats the same actions
 const LOOP_DETECTION_WINDOW = 20   // track last N tool calls
 const LOOP_DETECTION_THRESHOLD = 3 // same signature 3+ times = loop
+// Per-tool-type call limits: prevent runaway tool usage even with varied arguments
+const TOOL_CALL_LIMITS: Record<string, number> = {
+  web_search: 10,
+  web_fetch: 10,
+  browser_navigate: 8,
+  search_content: 15,
+  search_files: 15,
+  execute_command: 20,
+}
 
 // NOTE: Bash security patterns are consolidated in tools.ts getToolRiskLevel()
 // to avoid duplication. See the execute_command case there.
@@ -172,6 +181,8 @@ interface AgentSession {
   recentToolSignatures: string[]
   /** Count of detected loops (used for escalating intervention). */
   loopDetectionCount: number
+  /** Per-tool-type call counts for runaway prevention. */
+  toolCallCounts: Map<string, number>
   /** Pending answer texts for ask_user tool (keyed by requestId). */
   pendingAnswers: Map<string, string>
 }
@@ -410,6 +421,7 @@ export class AgentManager {
       readFiles: agentSession?.readFiles || new Set(),
       recentToolSignatures: [],
       loopDetectionCount: 0,
+      toolCallCounts: new Map(),
       pendingAnswers: new Map(),
       pendingPermissions: new Map(),
       enabledSkills,
@@ -2376,7 +2388,7 @@ What remains to be done.
   }
 
   private async runAgentLoop(agentSession: AgentSession): Promise<void> {
-    const MAX_ITERATIONS = 200
+    const MAX_ITERATIONS = 50
     let iteration = 0
 
     let maxOutputRecoveryCount = 0
@@ -2385,11 +2397,11 @@ What remains to be done.
       while (agentSession.isRunning && iteration < MAX_ITERATIONS) {
         iteration++
 
-        // After 50 iterations, add a hint to encourage progress summary
-        if (iteration === 51) {
+        // After 20 iterations, nudge the agent to wrap up
+        if (iteration === 21) {
           agentSession.messages.push({
             role: 'system',
-            content: 'You have been running for a while. Please summarize your progress so far and outline what remains to be done. If you are stuck in a loop, try a different approach.',
+            content: 'You have been running for 20 iterations. Wrap up your current work: summarize findings, produce the deliverable with what you have, or tell the user what you found and what you couldn\'t find. Do NOT keep searching — work with the information you already gathered.',
           })
         }
 
@@ -2455,6 +2467,18 @@ What remains to be done.
           const executeSingleTool = async (tc: typeof toolCalls[0]) => {
             const toolName = tc.function.name
             const toolArgs = tc.function.arguments
+
+            // Per-tool-type call limit: prevent runaway usage
+            const callCount = (agentSession.toolCallCounts.get(toolName) || 0) + 1
+            agentSession.toolCallCounts.set(toolName, callCount)
+            const limit = TOOL_CALL_LIMITS[toolName]
+            if (limit && callCount > limit) {
+              return {
+                tc, toolName, toolArgs,
+                result: { success: false, output: `Tool "${toolName}" has been called ${callCount} times (limit: ${limit}). You must stop using this tool and work with the information you already have. Summarize your findings so far and proceed to the next step, or tell the user what you found and what you couldn't find.`, riskLevel: 'safe' as const },
+                denied: false,
+              }
+            }
 
             this.sendToRenderer('agent:stream', {
               sessionId: agentSession.sessionId,
