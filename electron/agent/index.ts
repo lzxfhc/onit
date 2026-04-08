@@ -1574,6 +1574,9 @@ What remains to be done.
         return
       }
 
+      // Declare idleTimer at Promise scope so abort handler can clear it
+      let idleTimer: ReturnType<typeof setInterval> | null = null
+
       const parsedUrl = new URL(url)
       const options = {
         hostname: parsedUrl.hostname,
@@ -1597,7 +1600,7 @@ What remains to be done.
             const retryHint = retryAfter ? ` [retry-after:${retryAfter}]` : ''
             reject(new Error(`API error (${res.statusCode}): ${errorBody.substring(0, 500)}${retryHint}`))
           })
-          res.on('error', (err) => { clearInterval(idleTimer); reject(err) })
+          res.on('error', reject)
           return
         }
 
@@ -1608,10 +1611,10 @@ What remains to be done.
 
         // Stream idle watchdog: abort if no data for STREAM_IDLE_TIMEOUT_MS
         let lastDataTime = Date.now()
-        const idleTimer = setInterval(() => {
+        idleTimer = setInterval(() => {
           const idle = Date.now() - lastDataTime
           if (idle >= STREAM_IDLE_TIMEOUT_MS) {
-            clearInterval(idleTimer)
+            if (idleTimer) clearInterval(idleTimer)
             req.destroy()
             reject(new Error(`Stream idle timeout: no data for ${Math.round(idle / 1000)}s`))
           } else if (idle >= STREAM_STALL_THRESHOLD_MS) {
@@ -1624,7 +1627,7 @@ What remains to be done.
           lastDataTime = Date.now()
 
           if (!agentSession.isRunning) {
-            clearInterval(idleTimer)
+            if (idleTimer) clearInterval(idleTimer)
             req.destroy()
             return
           }
@@ -1682,7 +1685,7 @@ What remains to be done.
         })
 
         res.on('end', () => {
-          clearInterval(idleTimer)
+          if (idleTimer) clearInterval(idleTimer)
           if (buffer.trim()) {
             const trimmed = buffer.trim()
             if (trimmed.startsWith('data:')) {
@@ -1722,7 +1725,7 @@ What remains to be done.
           resolve({ content: fullContent, toolCalls: toolCalls.filter(Boolean), finishReason })
         })
 
-        res.on('error', (err) => { clearInterval(idleTimer); reject(err) })
+        res.on('error', (err) => { if (idleTimer) clearInterval(idleTimer); reject(err) })
       })
 
       req.on('error', (err) => { reject(err) })
@@ -1730,7 +1733,7 @@ What remains to be done.
       let abortHandler: (() => void) | null = null
       if (agentSession.abortController) {
         abortHandler = () => {
-          clearInterval(idleTimer)
+          if (idleTimer) clearInterval(idleTimer)
           req.destroy()
           reject(new Error('Agent stopped'))
         }
