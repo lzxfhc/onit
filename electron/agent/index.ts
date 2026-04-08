@@ -123,14 +123,12 @@ const COMPRESSION_TOOL_CALL_THRESHOLD = 2
 // Loop detection: detect when the agent repeats the same actions
 const LOOP_DETECTION_WINDOW = 20   // track last N tool calls
 const LOOP_DETECTION_THRESHOLD = 3 // same signature 3+ times = loop
-// Per-tool-type call limits: prevent runaway tool usage even with varied arguments
+// Per-tool-type call limits: safety net only — the research strategy in the
+// system prompt should prevent the agent from ever hitting these.
 const TOOL_CALL_LIMITS: Record<string, number> = {
-  web_search: 10,
-  web_fetch: 10,
-  browser_navigate: 8,
-  search_content: 15,
-  search_files: 15,
-  execute_command: 20,
+  web_search: 15,
+  web_fetch: 15,
+  browser_navigate: 12,
 }
 
 // NOTE: Bash security patterns are consolidated in tools.ts getToolRiskLevel()
@@ -911,12 +909,18 @@ ${platformHint}${workspace}
 - Call multiple independent read-only tools in parallel when possible for efficiency.
 - Some specialized tools (browser automation, notebook editing, git worktree, interactive questions) are not loaded by default. Use tool_search to discover and load them when needed.
 
+# Research strategy
+When you need to search for information or explore:
+- Plan before searching. Decide what you need to find, then search with 2-3 targeted queries.
+- Searching has diminishing returns. If 3-5 searches haven't found what you need, the information is likely not easily available. Stop searching and work with what you have.
+- Work with imperfect information. You don't need 100% before starting the actual work. 60-70% is enough — note the gaps, deliver what you can, and tell the user what you couldn't find.
+- If critical information is missing after a few attempts, ask the user — they may have the answer or a better source.
+- The goal is the deliverable, not the search. Searching is a means to an end. Shift from "gather" to "produce" as soon as you have enough material.
+
 # Actions with care
 - Freely take local, reversible actions (reading files, running tests).
 - For hard-to-reverse actions (delete, force-push, overwrite), check with the user first.
 - If an approach fails, diagnose the root cause before switching tactics. Don't retry the identical action blindly.
-- If a search returns irrelevant results, change your search query significantly — don't just retry with minor variations. Try different keywords, different phrasing, or a different tool entirely.
-- Never repeat the same tool call with the same arguments more than twice. If it didn't work twice, it won't work a third time.
 - Never use destructive actions as a shortcut to bypass obstacles.
 - For git operations: prefer new commits over amends, never force-push to main, never skip hooks.
 
@@ -2397,11 +2401,11 @@ What remains to be done.
       while (agentSession.isRunning && iteration < MAX_ITERATIONS) {
         iteration++
 
-        // After 20 iterations, nudge the agent to wrap up
-        if (iteration === 21) {
+        // After 25 iterations, nudge the agent to produce output
+        if (iteration === 26) {
           agentSession.messages.push({
             role: 'system',
-            content: 'You have been running for 20 iterations. Wrap up your current work: summarize findings, produce the deliverable with what you have, or tell the user what you found and what you couldn\'t find. Do NOT keep searching — work with the information you already gathered.',
+            content: 'You have been running for a while. Shift from gathering to producing — use the information you already have to deliver a result. If something is missing, note the gap and move on.',
           })
         }
 
