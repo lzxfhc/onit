@@ -979,7 +979,7 @@ function appendOutputChunk(target: string[], state: { length: number; truncated:
   state.length += chunk.length
 }
 
-async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, timeoutMs?: number): Promise<ToolExecutionResult> {
+async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, timeoutMs?: number, signal?: AbortSignal): Promise<ToolExecutionResult> {
   const effectiveTimeout = Math.min(Math.max(timeoutMs || COMMAND_DEFAULT_TIMEOUT_MS, 1000), COMMAND_MAX_TIMEOUT_MS)
   return new Promise((resolve) => {
     const stdoutChunks: string[] = []
@@ -1006,6 +1006,13 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, ti
         } catch {}
       }, 5000)
     }, effectiveTimeout)
+
+    // Abort support: kill the child process when signal fires
+    if (signal) {
+      const onAbort = () => { try { child.kill('SIGTERM') } catch {} }
+      signal.addEventListener('abort', onAbort, { once: true })
+      child.on('close', () => signal.removeEventListener('abort', onAbort))
+    }
 
     child.stdout?.on('data', (chunk: Buffer | string) => {
       appendOutputChunk(stdoutChunks, outputState, chunk.toString())
@@ -1462,7 +1469,7 @@ export async function executeTool(
 
       case 'execute_command': {
         const cwd = args.working_directory || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
-        return runCommand(args.command, cwd, riskLevel, args.timeout_ms)
+        return runCommand(args.command, cwd, riskLevel, args.timeout_ms, options?.signal)
       }
 
       case 'web_search': {
