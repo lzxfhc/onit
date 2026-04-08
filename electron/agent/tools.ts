@@ -1490,7 +1490,7 @@ export async function executeTool(
             } catch {
               resolve({ success: false, output: `Failed to parse search results for: "${query}"`, riskLevel })
             }
-          })
+          }, options?.signal)
         })
       }
 
@@ -1544,7 +1544,7 @@ export async function executeTool(
               }
               resolve({ success: true, output: `Content from ${targetUrl}:\n\n${text}`, riskLevel })
             }
-          })
+          }, options?.signal)
         })
       }
 
@@ -1772,8 +1772,13 @@ const BROWSER_HEADERS = {
 function fetchUrl(
   targetUrl: string,
   maxRedirects: number,
-  callback: (err: string | null, body: string | null) => void
+  callback: (err: string | null, body: string | null) => void,
+  signal?: AbortSignal
 ): void {
+  if (signal?.aborted) {
+    callback('Aborted', null)
+    return
+  }
   if (maxRedirects < 0) {
     callback('Too many redirects', null)
     return
@@ -1817,7 +1822,7 @@ function fetchUrl(
         redirectUrl = `${parsedUrl.protocol}//${parsedUrl.host}/${redirectUrl}`
       }
       res.resume()
-      fetchUrl(redirectUrl, maxRedirects - 1, callback)
+      fetchUrl(redirectUrl, maxRedirects - 1, callback, signal)
       return
     }
 
@@ -1853,6 +1858,13 @@ function fetchUrl(
   req.on('error', (err) => {
     safeCallback(err.message, null)
   })
+
+  // Abort support: destroy the request when the signal fires
+  if (signal) {
+    const onAbort = () => { req.destroy(); safeCallback('Aborted', null) }
+    signal.addEventListener('abort', onAbort, { once: true })
+    req.on('close', () => signal.removeEventListener('abort', onAbort))
+  }
 
   req.setTimeout(15000, () => {
     req.destroy()
