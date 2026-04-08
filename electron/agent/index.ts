@@ -941,8 +941,7 @@ Call exit_plan_mode with a brief summary. The user will review and either approv
 - Ask when uncertain. One focused question is better than a plan built on wrong assumptions.
 - Iterate naturally. Simple tasks: one explore→plan cycle. Complex tasks: 2-5 rounds of explore→ask→refine.
 - Be specific and actionable. The plan should tell the user exactly what will happen.
-- Your turn should end with either ask_user (if you need input) or exit_plan_mode (if the plan is ready). Don't stop for other reasons.` : ''}${permissionMode === 'accept-edit' ? `AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.
-For complex, multi-step, or ambiguous tasks, proactively call enter_plan_mode to plan first. For simple, clear, single-step tasks, just do them directly.` : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
+- Your turn should end with either ask_user (if you need input) or exit_plan_mode (if the plan is ready). Don't stop for other reasons.` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
 
 Format results clearly with markdown. Use syntax highlighting for code.${skillsSection}`
   }
