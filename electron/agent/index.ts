@@ -80,7 +80,7 @@ const SESSION_MEMORY_MARKER = '[ONIT_SESSION_MEMORY]'
 
 // Micro-compaction: zero-cost replacement of old tool results with stubs
 const MICROCOMPACT_KEEP_RECENT = 8
-const MICROCOMPACT_CLEARED_MSG = '[Old tool result cleared]'
+const MICROCOMPACT_MAX_SUMMARY_CHARS = 200 // keep first N chars as summary instead of fully clearing
 // Only compact tools whose old results are unlikely to be needed for decision-making.
 // EXCLUDED: web_search, web_fetch, browser_extract — these are research results
 // that the agent needs to remember to avoid repeating the same searches.
@@ -2132,7 +2132,7 @@ What remains to be done.
     const compactableIndices: number[] = []
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i]
-      if (msg.role === 'tool' && msg.name && MICROCOMPACT_TOOLS.has(msg.name) && msg.content && msg.content !== MICROCOMPACT_CLEARED_MSG) {
+      if (msg.role === 'tool' && msg.name && MICROCOMPACT_TOOLS.has(msg.name) && msg.content && msg.content.length > MICROCOMPACT_MAX_SUMMARY_CHARS + 50) {
         compactableIndices.push(i)
       }
     }
@@ -2143,7 +2143,11 @@ What remains to be done.
     // Replace all but the most recent N with a cleared stub
     const toClear = compactableIndices.slice(0, compactableIndices.length - MICROCOMPACT_KEEP_RECENT)
     for (const idx of toClear) {
-      messages[idx] = { ...messages[idx], content: MICROCOMPACT_CLEARED_MSG }
+      // Keep a short summary instead of fully clearing — preserves enough context
+      // for the agent to know what was done, preventing amnesia loops.
+      const original = messages[idx].content || ''
+      const summary = original.substring(0, MICROCOMPACT_MAX_SUMMARY_CHARS) + '\n\n[... content trimmed, see above summary]'
+      messages[idx] = { ...messages[idx], content: summary }
     }
   }
 
