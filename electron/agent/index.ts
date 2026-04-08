@@ -2130,7 +2130,7 @@ What remains to be done.
     const compactableIndices: number[] = []
     for (let i = 0; i < messages.length; i++) {
       const msg = messages[i]
-      if (msg.role === 'tool' && msg.name && MICROCOMPACT_TOOLS.has(msg.name) && msg.content && msg.content !== MICROCOMPACT_CLEARED_MSG) {
+      if (msg.role === 'tool' && msg.name && MICROCOMPACT_TOOLS.has(msg.name) && msg.content && !msg.content.startsWith(MICROCOMPACT_CLEARED_MSG)) {
         compactableIndices.push(i)
       }
     }
@@ -2138,10 +2138,16 @@ What remains to be done.
     // Nothing to compact if within keep-recent limit
     if (compactableIndices.length <= MICROCOMPACT_KEEP_RECENT) return
 
-    // Replace all but the most recent N with a cleared stub
+    // Replace old results with a brief stub that preserves WHAT was done
+    // (so the agent remembers it already tried this), but removes the full content.
     const toClear = compactableIndices.slice(0, compactableIndices.length - MICROCOMPACT_KEEP_RECENT)
     for (const idx of toClear) {
-      messages[idx] = { ...messages[idx], content: MICROCOMPACT_CLEARED_MSG }
+      const msg = messages[idx]
+      const content = msg.content || ''
+      // Extract a one-line summary: first 120 chars of the result
+      const firstLine = content.split('\n')[0]?.substring(0, 120) || ''
+      const stub = `${MICROCOMPACT_CLEARED_MSG} (${msg.name}: ${firstLine})`
+      messages[idx] = { ...messages[idx], content: stub }
     }
   }
 
