@@ -401,37 +401,56 @@ function InlineQuestionCard({ request }: { request: PermissionRequest }) {
         {questions.map((q, qIdx) => (
           <div key={qIdx} className={qIdx === currentQ ? '' : 'hidden'}>
             <p className="text-sm font-medium text-charcoal mb-2.5">{q.question}</p>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="space-y-1.5">
               {q.options.map((opt, oIdx) => (
                 <button
                   key={oIdx}
                   onClick={() => handleSelect(qIdx, opt.label)}
-                  className={`px-3 py-1.5 rounded-full text-xs border transition-all ${
+                  className={`w-full text-left px-3 py-2 rounded-lg border transition-all ${
                     isSelected(qIdx, opt.label)
-                      ? 'border-accent bg-accent text-white'
-                      : 'border-border-subtle text-text-secondary hover:border-accent/40 hover:text-charcoal'
+                      ? 'border-accent bg-accent/5 ring-1 ring-accent/30'
+                      : 'border-border-subtle hover:border-accent/40 hover:bg-gray-50'
                   }`}
-                  title={opt.description}
                 >
-                  {opt.label}
+                  <div className="flex items-center gap-2">
+                    <div className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center shrink-0 ${
+                      isSelected(qIdx, opt.label) ? 'border-accent bg-accent' : 'border-gray-300'
+                    }`}>
+                      {isSelected(qIdx, opt.label) && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                    </div>
+                    <span className="text-xs font-medium text-charcoal">{opt.label}</span>
+                  </div>
+                  {opt.description && (
+                    <p className="text-[10px] text-text-tertiary mt-0.5 ml-[22px]">{opt.description}</p>
+                  )}
                 </button>
               ))}
-              <input
-                type="text"
-                placeholder={t.question?.otherPlaceholder || 'Other...'}
-                value={otherTexts.get(qIdx) || ''}
-                onChange={e => setOtherTexts(prev => new Map(prev).set(qIdx, e.target.value))}
-                onKeyDown={e => {
-                  if (e.key === 'Enter') {
-                    const text = otherTexts.get(qIdx)?.trim()
-                    if (text) {
-                      setAnswers(prev => new Map(prev).set(qIdx, text))
-                      if (qIdx < questions.length - 1) setTimeout(() => setCurrentQ(qIdx + 1), 150)
-                    }
-                  }
-                }}
-                className="px-3 py-1.5 rounded-full text-xs border border-dashed border-border-subtle bg-transparent outline-none placeholder:text-text-tertiary w-28 focus:border-accent/40"
-              />
+              {/* Other option */}
+              <div className={`w-full text-left px-3 py-2 rounded-lg border transition-all ${
+                answers.get(qIdx) && !q.options.some(o => o.label === answers.get(qIdx))
+                  ? 'border-accent bg-accent/5 ring-1 ring-accent/30'
+                  : 'border-dashed border-border-subtle'
+              }`}>
+                <div className="flex items-center gap-2">
+                  <div className="w-3.5 h-3.5 rounded-full border-2 border-gray-300 shrink-0" />
+                  <input
+                    type="text"
+                    placeholder={t.question?.otherPlaceholder || 'Other...'}
+                    value={otherTexts.get(qIdx) || ''}
+                    onChange={e => setOtherTexts(prev => new Map(prev).set(qIdx, e.target.value))}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter') {
+                        const text = otherTexts.get(qIdx)?.trim()
+                        if (text) {
+                          setAnswers(prev => new Map(prev).set(qIdx, text))
+                          if (qIdx < questions.length - 1) setTimeout(() => setCurrentQ(qIdx + 1), 150)
+                        }
+                      }
+                    }}
+                    className="flex-1 text-xs bg-transparent outline-none placeholder:text-text-tertiary"
+                  />
+                </div>
+              </div>
             </div>
           </div>
         ))}
