@@ -280,12 +280,11 @@ export default function App() {
         </ErrorBoundary>
       </main>
 
-      {/* Permission / Question / Plan dialogs */}
-      {permissionRequests.map(req => {
-        if (req.type === 'user-question') return <QuestionDialog key={req.id} request={req} />
-        if (req.type === 'plan-approval') return <PlanApprovalDialog key={req.id} request={req} />
-        return <PermissionDialog key={req.id} request={req} />
-      })}
+      {/* Permission dialogs (question/plan dialogs are inline in ChatView) */}
+      {permissionRequests
+        .filter(req => req.type !== 'user-question' && req.type !== 'plan-approval')
+        .map(req => <PermissionDialog key={req.id} request={req} />)
+      }
     </div>
   )
 }

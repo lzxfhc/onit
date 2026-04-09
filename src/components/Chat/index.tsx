@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { v4 as uuidv4 } from 'uuid'
 import { useT } from '../../i18n'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -6,7 +6,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import MessageList from './MessageList'
 import InputBox from './InputBox'
 import TaskStatusPanel from './TaskStatus'
-import type { Message, StreamChunk } from '../../types'
+import type { Message, StreamChunk, PermissionRequest } from '../../types'
 
 function isCurrentRun(sessionId: string, runId?: string) {
   if (!runId) return false
@@ -283,6 +283,8 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
           isRunning={activeSession.status === 'running'}
           sessionId={activeSession.id}
         />
+        {/* Inline question/plan cards — above the input box */}
+        <InlineInteractiveCards sessionId={activeSession.id} />
         <InputBox
           onSend={handleSendMessage}
           onStop={handleStopAgent}
@@ -304,6 +306,235 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
         >
           <TaskStatusPanel session={activeSession} />
         </div>
+      </div>
+    </div>
+  )
+}
+
+/** Inline question/plan cards rendered above the input box. */
+function InlineInteractiveCards({ sessionId }: { sessionId: string }) {
+  const requests = useSettingsStore(s => s.permissionRequests)
+  const relevant = requests.filter(
+    r => r.sessionId === sessionId && (r.type === 'user-question' || r.type === 'plan-approval')
+  )
+  if (relevant.length === 0) return null
+
+  return (
+    <div className="px-4 pb-2 space-y-2">
+      {relevant.map(req =>
+        req.type === 'user-question'
+          ? <InlineQuestionCard key={req.id} request={req} />
+          : <InlinePlanCard key={req.id} request={req} />
+      )}
+    </div>
+  )
+}
+
+function InlineQuestionCard({ request }: { request: PermissionRequest }) {
+  const t = useT()
+  const { removePermissionRequest } = useSettingsStore()
+  const questions = request.questions || []
+  const [answers, setAnswers] = React.useState<Map<number, string>>(new Map())
+  const [otherTexts, setOtherTexts] = React.useState<Map<number, string>>(new Map())
+  const [currentQ, setCurrentQ] = React.useState(0)
+
+  const handleSelect = (qIdx: number, label: string) => {
+    setAnswers(prev => {
+      const next = new Map(prev)
+      const q = questions[qIdx]
+      if (q?.multiSelect) {
+        const current = next.get(qIdx) || ''
+        const selected = current ? current.split(', ') : []
+        if (selected.includes(label)) {
+          next.set(qIdx, selected.filter(s => s !== label).join(', '))
+        } else {
+          next.set(qIdx, [...selected, label].join(', '))
+        }
+      } else {
+        next.set(qIdx, label)
+        if (qIdx < questions.length - 1) {
+          setTimeout(() => setCurrentQ(qIdx + 1), 150)
+        }
+      }
+      return next
+    })
+  }
+
+  const isSelected = (qIdx: number, label: string) => {
+    const answer = answers.get(qIdx) || ''
+    return questions[qIdx]?.multiSelect ? answer.split(', ').includes(label) : answer === label
+  }
+
+  const allAnswered = questions.every((_, i) => answers.has(i) && answers.get(i))
+
+  const handleSubmit = () => {
+    const answerLines = questions.map((q, i) => `"${q.question}" = "${answers.get(i) || '(no answer)'}"`).join('\n')
+    window.electronAPI.sendPermissionResponse({
+      requestId: request.id,
+      approved: true,
+      answerText: `User has answered your questions:\n${answerLines}\n\nContinue with the user's answers in mind.`,
+    })
+    removePermissionRequest(request.id)
+  }
+
+  const handleSkip = () => {
+    window.electronAPI.sendPermissionResponse({
+      requestId: request.id,
+      approved: true,
+      answerText: 'User skipped the questions. Proceed with your best judgment.',
+    })
+    removePermissionRequest(request.id)
+  }
+
+  return (
+    <div className="bg-white rounded-lg border border-accent/20 shadow-sm overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-accent/5 border-b border-accent/10">
+        <span className="text-xs font-medium text-accent">
+          {questions.length > 1 ? `${currentQ + 1} / ${questions.length}` : ''}
+        </span>
+        <span className="text-xs text-text-secondary">{t.question?.title || 'Agent is asking'}</span>
+      </div>
+
+      {/* Question */}
+      <div className="px-4 py-3">
+        {questions.map((q, qIdx) => (
+          <div key={qIdx} className={qIdx === currentQ ? '' : 'hidden'}>
+            <p className="text-sm font-medium text-charcoal mb-2.5">{q.question}</p>
+            <div className="flex flex-wrap gap-1.5">
+              {q.options.map((opt, oIdx) => (
+                <button
+                  key={oIdx}
+                  onClick={() => handleSelect(qIdx, opt.label)}
+                  className={`px-3 py-1.5 rounded-full text-xs border transition-all ${
+                    isSelected(qIdx, opt.label)
+                      ? 'border-accent bg-accent text-white'
+                      : 'border-border-subtle text-text-secondary hover:border-accent/40 hover:text-charcoal'
+                  }`}
+                  title={opt.description}
+                >
+                  {opt.label}
+                </button>
+              ))}
+              <input
+                type="text"
+                placeholder={t.question?.otherPlaceholder || 'Other...'}
+                value={otherTexts.get(qIdx) || ''}
+                onChange={e => setOtherTexts(prev => new Map(prev).set(qIdx, e.target.value))}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') {
+                    const text = otherTexts.get(qIdx)?.trim()
+                    if (text) {
+                      setAnswers(prev => new Map(prev).set(qIdx, text))
+                      if (qIdx < questions.length - 1) setTimeout(() => setCurrentQ(qIdx + 1), 150)
+                    }
+                  }
+                }}
+                className="px-3 py-1.5 rounded-full text-xs border border-dashed border-border-subtle bg-transparent outline-none placeholder:text-text-tertiary w-28 focus:border-accent/40"
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center justify-between px-4 py-2 border-t border-border-subtle bg-gray-50/50">
+        <div className="flex gap-2">
+          {questions.length > 1 && currentQ > 0 && (
+            <button onClick={() => setCurrentQ(currentQ - 1)} className="text-[10px] text-text-tertiary hover:text-charcoal">
+              {t.question?.prev || '< Prev'}
+            </button>
+          )}
+          {questions.length > 1 && currentQ < questions.length - 1 && (
+            <button onClick={() => setCurrentQ(currentQ + 1)} className="text-[10px] text-accent hover:text-accent-dark">
+              {t.question?.next || 'Next >'}
+            </button>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={handleSkip} className="text-[10px] text-text-tertiary hover:text-charcoal">
+            {t.question?.skip || 'Skip'}
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={!allAnswered}
+            className="px-3 py-1 rounded-full text-[10px] font-medium bg-accent text-white disabled:opacity-40"
+          >
+            {t.question?.submit || 'Submit'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function InlinePlanCard({ request }: { request: PermissionRequest }) {
+  const t = useT()
+  const { removePermissionRequest } = useSettingsStore()
+  const planContent = request.planContent || request.description || ''
+  const keyActions = request.planFiles || []
+  const [showFeedback, setShowFeedback] = React.useState(false)
+  const [feedback, setFeedback] = React.useState('')
+
+  const handleApprove = () => {
+    window.electronAPI.sendPermissionResponse({ requestId: request.id, approved: true })
+    removePermissionRequest(request.id)
+  }
+
+  const handleReject = () => {
+    if (!showFeedback) { setShowFeedback(true); return }
+    window.electronAPI.sendPermissionResponse({
+      requestId: request.id,
+      approved: false,
+      answerText: feedback.trim() || undefined,
+    })
+    removePermissionRequest(request.id)
+  }
+
+  return (
+    <div className="bg-white rounded-lg border border-green-200 shadow-sm overflow-hidden animate-in slide-in-from-bottom-2 duration-200">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-4 py-2.5 bg-green-50 border-b border-green-100">
+        <span className="text-xs font-medium text-green-700">{t.plan?.approvalTitle || 'Plan Ready'}</span>
+      </div>
+
+      {/* Summary + key actions */}
+      <div className="px-4 py-3">
+        <p className="text-sm text-charcoal mb-2">{request.description}</p>
+        {keyActions.length > 0 && (
+          <div className="flex flex-wrap gap-1 mb-2">
+            {keyActions.map((a, i) => (
+              <span key={i} className="text-[10px] px-2 py-0.5 bg-gray-100 rounded font-mono text-text-secondary">{a}</span>
+            ))}
+          </div>
+        )}
+        {/* Collapsible full plan */}
+        <details className="text-xs">
+          <summary className="text-text-tertiary cursor-pointer hover:text-charcoal">{t.plan?.showDetails || 'Show full plan'}</summary>
+          <div className="mt-2 p-2 bg-gray-50 rounded text-text-secondary max-h-40 overflow-y-auto whitespace-pre-wrap">{planContent}</div>
+        </details>
+        {showFeedback && (
+          <textarea
+            value={feedback}
+            onChange={e => setFeedback(e.target.value)}
+            placeholder={t.plan?.feedbackPlaceholder || 'What should be changed?'}
+            className="mt-2 w-full text-xs border border-border-subtle rounded p-2 h-16 resize-none outline-none focus:border-accent/40"
+            autoFocus
+          />
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center justify-end gap-2 px-4 py-2 border-t border-border-subtle bg-gray-50/50">
+        <button
+          onClick={handleReject}
+          className="px-3 py-1 rounded-full text-[10px] text-text-secondary border border-border-subtle hover:border-danger/30 hover:text-danger"
+        >
+          {showFeedback ? (t.plan?.submitFeedback || 'Send Feedback') : (t.plan?.reject || 'Reject')}
+        </button>
+        <button onClick={handleApprove} className="px-3 py-1 rounded-full text-[10px] font-medium bg-green-600 text-white hover:bg-green-700">
+          {t.plan?.approve || 'Approve'}
+        </button>
       </div>
     </div>
   )

@@ -251,6 +251,7 @@ export const en: Translations = {
     reject: 'Needs Changes',
     submitFeedback: 'Send Feedback',
     feedbackPlaceholder: 'Tell the agent what to change...',
+    showDetails: 'Show full plan',
   },
 
   // Error boundary

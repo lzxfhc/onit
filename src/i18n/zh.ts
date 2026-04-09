@@ -249,6 +249,7 @@ export const zh = {
     reject: '需要修改',
     submitFeedback: '发送反馈',
     feedbackPlaceholder: '告诉 Agent 需要怎么修改...',
+    showDetails: '查看完整计划',
   },
 
   // Error boundary
