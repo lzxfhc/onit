@@ -1,7 +1,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { spawn } from 'child_process'
+import { spawn, ChildProcess } from 'child_process'
 import https from 'https'
 import http from 'http'
 import { URL } from 'url'
@@ -174,6 +174,21 @@ export const AGENT_TOOLS: AgentToolDef[] = [
           },
         },
         required: ['tasks'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'invoke_skill',
+      description: 'Load one of the enabled skills into the current run. Use this before following a skill-specific workflow. This is for autonomous skill use by the assistant; users can also explicitly invoke skills by mentioning @skill-name in their message.',
+      parameters: {
+        type: 'object',
+        properties: {
+          skill_name: { type: 'string', description: 'Exact skill name from the available skills list, without the leading @' },
+          reason: { type: 'string', description: 'Optional brief reason this skill is relevant right now' },
+        },
+        required: ['skill_name'],
       },
     },
   },
@@ -483,7 +498,8 @@ If unsure, err on the side of planning.`,
 const DEFERRED_TOOL_NAMES = new Set([
   'browser_navigate', 'browser_action', 'browser_extract', 'browser_screenshot', 'browser_close',
   'notebook_edit', 'worktree_create', 'worktree_remove',
-  'ask_user', 'enter_plan_mode', 'exit_plan_mode',
+  'enter_plan_mode',
+  // ask_user and exit_plan_mode are CORE — needed in plan mode and general use
 ])
 
 /** Core tools — always included in the prompt. */
@@ -533,6 +549,7 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
     case 'search_files':
     case 'search_content':
     case 'create_task_list':
+    case 'invoke_skill':
     case 'web_search':
     case 'web_fetch':
     case 'browser_navigate':
@@ -961,6 +978,37 @@ function getExitCodeHint(command: string): string {
   }
 }
 
+function signalChildProcess(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid
+
+  if (pid && process.platform !== 'win32') {
+    try {
+      process.kill(-pid, signal)
+      return
+    } catch {}
+  }
+
+  try {
+    child.kill(signal)
+  } catch {}
+}
+
+function forceKillChildProcess(child: ChildProcess): void {
+  const pid = child.pid
+
+  if (pid && process.platform === 'win32') {
+    try {
+      const killer = spawn('taskkill', ['/pid', String(pid), '/t', '/f'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      killer.on('error', () => {})
+    } catch {}
+  }
+
+  signalChildProcess(child, 'SIGKILL')
+}
+
 function appendOutputChunk(target: string[], state: { length: number; truncated: boolean }, chunk: string) {
   if (!chunk || state.length >= MAX_COMMAND_OUTPUT_LENGTH) {
     if (chunk) state.truncated = true
@@ -986,30 +1034,49 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, ti
     const stderrChunks: string[] = []
     const outputState = { length: 0, truncated: false }
     let timedOut = false
+    let aborted = false
     let settled = false
+    let terminationRequested = false
+    let timeoutKillTimer: NodeJS.Timeout | null = null
+    let abortKillTimer: NodeJS.Timeout | null = null
 
     const child = spawn(command, [], {
       cwd,
       shell: true,
+      detached: process.platform !== 'win32',
       env: { ...process.env, FORCE_COLOR: '0' },
     })
 
-    const timeout = setTimeout(() => {
-      timedOut = true
-      try {
-        child.kill('SIGTERM')
-      } catch {}
+    const clearKillTimers = () => {
+      if (timeoutKillTimer) clearTimeout(timeoutKillTimer)
+      if (abortKillTimer) clearTimeout(abortKillTimer)
+      timeoutKillTimer = null
+      abortKillTimer = null
+    }
 
-      setTimeout(() => {
-        try {
-          child.kill('SIGKILL')
-        } catch {}
+    const requestTermination = (reason: 'timeout' | 'abort') => {
+      if (terminationRequested || settled) return
+      terminationRequested = true
+
+      if (reason === 'timeout') timedOut = true
+      else aborted = true
+
+      signalChildProcess(child, 'SIGTERM')
+      const killTimer = setTimeout(() => {
+        forceKillChildProcess(child)
       }, 5000)
+
+      if (reason === 'timeout') timeoutKillTimer = killTimer
+      else abortKillTimer = killTimer
+    }
+
+    const timeout = setTimeout(() => {
+      requestTermination('timeout')
     }, effectiveTimeout)
 
     // Abort support: kill the child process when signal fires
     if (signal) {
-      const onAbort = () => { try { child.kill('SIGTERM') } catch {} }
+      const onAbort = () => { requestTermination('abort') }
       signal.addEventListener('abort', onAbort, { once: true })
       child.on('close', () => signal.removeEventListener('abort', onAbort))
     }
@@ -1026,6 +1093,7 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, ti
       if (settled) return
       settled = true
       clearTimeout(timeout)
+      clearKillTimers()
       resolve({ success: false, output: `Command failed: ${error.message}`, riskLevel })
     })
 
@@ -1033,6 +1101,7 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, ti
       if (settled) return
       settled = true
       clearTimeout(timeout)
+      clearKillTimers()
 
       const combinedOutput = [...stdoutChunks, ...stderrChunks].join('').trim()
       const truncatedSuffix = outputState.truncated ? '\n\n[Output truncated]' : ''
@@ -1042,6 +1111,14 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, ti
           ? `${combinedOutput}${truncatedSuffix}\n\n[Command timed out after ${effectiveTimeout / 1000} seconds]`
           : `Command timed out after ${effectiveTimeout / 1000} seconds`
         resolve({ success: false, output: timeoutMessage, riskLevel })
+        return
+      }
+
+      if (aborted) {
+        const abortMessage = combinedOutput
+          ? `${combinedOutput}${truncatedSuffix}\n\n[Command aborted by user]`
+          : 'Command aborted by user'
+        resolve({ success: false, output: abortMessage, riskLevel })
         return
       }
 
