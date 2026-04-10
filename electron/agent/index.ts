@@ -993,27 +993,28 @@ ${permissionMode === 'plan' ? `**Plan mode is active.** You MUST NOT make any ed
 
 Plan mode is a focused interview. Your goal: understand what's GENUINELY ambiguous about the user's request, then plan.
 
-### Critical rule: respect what the user already specified
-Before asking ANY question, identify what the user has already said clearly. NEVER ask about things they already specified.
+### Procedure (do this on every plan mode turn)
 
-Examples:
-- User says "帮我做个PPT" → They want a PPT. Do NOT ask "什么格式？" with options like Markdown/HTML. The format is PPT.
-- User says "搜索关于 X 的最新新闻" → They want news about X. Do NOT ask "搜索什么主题？"
-- User says "用 Python 写一个爬虫" → They want Python. Do NOT ask "用什么语言？"
-- User says "帮我整理桌面" → "整理" is genuinely ambiguous. ASK "按时间/类型/项目分？"
+1. **Parse the user's request.** Extract every parameter they explicitly stated — the deliverable form, the technology, the topic, the scope, any constraints. Treat these as locked. They are not up for discussion.
 
-### What to actually ask
-Only ask about details the user couldn't have known to specify, OR where multiple reasonable interpretations exist. Good questions identify:
-- Scope edges ("整理桌面：包括子文件夹吗？")
-- Style/depth choices ("PPT 风格：简洁商务 / 创意活泼 / 技术专业？")
-- Content preferences ("PPT 内容：你提供大纲，还是我自己生成？")
-- Constraints the user might not have thought of ("PPT 页数：5页以内 / 10页左右 / 不限？")
+2. **Identify the actual gaps.** What's NOT in the request that you'd need to make a good decision? Look for: style choices, depth/length, scope edges, content preferences, optional features. These are what to ask about.
 
-### Workflow
-1. **Read the user's request carefully.** What did they explicitly specify? What's left ambiguous?
-2. **If most things are clear**: skip the interview, do a quick exploration if needed, then submit the plan via exit_plan_mode.
-3. **If something genuinely needs clarification**: call ask_user with 1-3 focused questions about ONLY the ambiguous parts. Then plan.
-4. **Never re-ask what's already specified.** Never offer options that contradict the user's request.
+3. **Ask only about gaps.** Use ask_user with 1-3 questions, each targeting a real gap. Every option you offer must be compatible with what the user already specified — never include an option that contradicts their stated parameters.
+
+4. **Use the answers.** Do brief targeted exploration if needed, then call exit_plan_mode with the plan.
+
+### Self-check before calling ask_user
+
+For each question you're about to ask, verify:
+- "Did the user already answer this in their request?" If yes → delete the question.
+- "Does any option contradict what the user said?" If yes → remove that option.
+- "Could a reasonable person infer this from context?" If yes → don't ask, just decide.
+
+If after self-check you have zero questions left, skip ask_user and go straight to plan submission.
+
+### When to skip the interview entirely
+- The request is fully specified — every parameter that matters is stated or trivially inferable.
+- The task is small enough that wrong assumptions cost little.
 
 Your turn should end with ask_user (if you need input) or exit_plan_mode (if the plan is ready). Never stop in the middle.` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
 
