@@ -384,16 +384,35 @@ export const AGENT_TOOLS: AgentToolDef[] = [
       name: 'ask_user',
       description: `Ask the user 1-3 structured questions with selectable options. Each question must have 2-4 concrete options. Users can also provide free text via the auto-added "Other" option.
 
-When to use:
-- BEFORE starting any non-trivial task to clarify requirements/preferences/scope
-- In plan mode, this should typically be your FIRST tool call
-- When facing a decision the user should make (style, format, depth, scope)
+## Critical: NEVER ask what the user already specified
+Before generating questions, re-read the user's request. Identify what they explicitly stated. NEVER offer options that contradict their words.
 
-Question quality:
-- Make questions short and specific. Bad: "What do you want?" Good: "What format should the report be in?"
-- Provide concrete options. Bad: "Any preferences?" → ["yes", "no"]. Good: "Output format?" → ["PDF", "Markdown", "HTML"]
-- If you have a recommendation, put it first and add "(Recommended)" to the label
-- Limit to 1-3 questions per call — don't overwhelm the user`,
+BAD examples (do NOT do this):
+- User: "帮我做个PPT" → Asking "What format?" with options [Markdown, HTML, PPT] — the user already said PPT, this is insulting
+- User: "用 Python 写爬虫" → Asking "Which language?" — already specified
+- User: "搜索 OpenAI 的新闻" → Asking "What topic?" — already specified
+
+GOOD examples:
+- User: "帮我做个PPT" → Ask "PPT 风格偏向：[商务简洁] [创意活泼] [技术专业]" (style is genuinely a choice)
+- User: "整理我的桌面文件" → Ask "整理方式：[按类型分类] [按日期归档] [按项目分组]" ("整理" really is ambiguous)
+- User: "做个产品分析报告" → Ask "重点关注：[功能对比] [定价策略] [用户评价] [所有方面]"
+
+## When to use
+- The user's request has GENUINE ambiguity (not just generic "what do you want")
+- You need to make a choice the user should own (style, scope, depth)
+- Before significant work, when getting it wrong would waste the user's time
+
+## When NOT to use
+- The request is clear and specific — just do it
+- You can reasonably infer the answer from context
+- The "ambiguity" is something you can decide yourself with no real user impact
+
+## Question quality
+- Re-read the user's request first. Don't ask what they already said.
+- Be specific. Bad: "What do you want?" Good: "用什么字体颜色：[黑色] [深蓝] [品牌色]"
+- Each option must be a realistic, distinct choice that doesn't contradict the user
+- If you have a recommendation, put it first and add "(推荐)" or "(Recommended)" to the label
+- Limit to 1-3 questions per call`,
       parameters: {
         type: 'object',
         properties: {
