@@ -382,31 +382,20 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     type: 'function',
     function: {
       name: 'ask_user',
-      description: `Ask the user 1-3 structured questions with selectable options. Each question has 2-4 concrete options. Users can also provide free text via the auto-added "Other" option. Use this INSTEAD of natural language text questions — the interactive dialog is faster.
+      description: `Ask the user 1-3 structured questions with selectable options. Use this INSTEAD of asking via natural language text — the interactive dialog is faster for users.
 
-You are NOT obligated to call this tool. Asking for the sake of asking wastes the user's time. Only call it when there's something real to learn.
+When asking helps:
+- You need a fact only the user knows (topic, audience, source data, deadline, constraints)
+- A choice would meaningfully change what they see or experience in the result
+- You found a conflict in their request and need their guidance
 
-## Valid question categories (only these)
+Key principle: ask about what the user will see, not how you build it. If two approaches produce results that look the same to the user, pick one yourself — don't make them choose. Implementation choices (which library, intermediate format, manual vs scripted) are your call.
 
-**(a) Information you can't guess**: things only the user knows. Topic, target audience, content to include, source files, deadline, constraints.
-
-**(b) Outcome-changing choices**: things that affect the final deliverable in ways the user would notice and care about. Style, tone, depth, length, scope.
-
-**(c) Conflicts to resolve**: feasibility (impossible request), self-contradiction, likely typo/confusion.
-
-## Invalid — never ask about these
-
-- **Already-specified parameters.** User said "PPT" → don't ask about format. User said "Python" → don't ask about language.
-- **Internal implementation details.** "Should I use Markdown→PPT or Python-pptx?" "Which library?" "Script or manual?" — these are YOUR job. Pick the best approach yourself.
-- **Things with sensible defaults.** If a reasonable person would all make the same choice, just make it.
-- **Generic template questions.** "What do you want?" / "Any preferences?" — useless. Be specific or don't ask.
-
-## Question quality
-- Each question targets ONE real gap from category (a) or (b), OR ONE conflict from (c).
-- Every option must be compatible with all parameters the user already specified.
-- Be concrete. Bad: "What style?" Good: "Visual style: [minimal] [bold colors] [dark mode]"
-- If you have a recommendation, put it first and add "(Recommended)" / "(推荐)".
-- Limit to 1-3 questions per call.`,
+Question quality:
+- Be concrete. "Visual style: minimal / bold / dark" — not "What style?"
+- Each question has 2-4 options. An "Other" text input is added automatically.
+- If you have a recommendation, put it first with "(推荐)" / "(Recommended)".
+- 1-3 questions max per call.`,
       parameters: {
         type: 'object',
         properties: {
