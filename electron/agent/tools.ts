@@ -386,26 +386,28 @@ export const AGENT_TOOLS: AgentToolDef[] = [
 
 Use this INSTEAD of asking via natural language text — the interactive dialog is faster and easier for users.
 
-## ABSOLUTE RULE: Locked parameters
+## When questions are valid
 
-Any concrete noun the user used (file type, technology, format, topic, scope) is locked. Your questions cannot ask about these parameters, and your options cannot contradict them.
+The user's specific words (file types, technologies, tools, formats, scope) are their CHOICE. Default to respecting them. Three valid reasons to ask:
 
-If the user said "PPT", you cannot ask "what format" or offer "Markdown / HTML". If they said "Python", you cannot ask "which language". If they said "search Twitter", you cannot ask "which platform".
+1. **Feasibility conflict** — what they asked is technically impossible. Ask how to proceed (e.g., "Word can't directly edit PDFs. Use [X] / [Y] instead?")
+2. **Self-contradiction** — their own words conflict. Ask which one is the priority.
+3. **Genuine gaps** — they didn't specify something that would meaningfully change the output (style, depth, content choices, optional features). Ask about those.
 
-## Procedure
+If your task is purely "fill in the blanks" because the user was clear and what they asked is doable, DO NOT call this tool. Just proceed.
 
-1. List every concrete parameter the user already specified. Treat as locked.
-2. Find real gaps — things NOT specified that would meaningfully change your output (style, depth, content, optional features, scope edges).
-3. For each candidate question, self-check:
-   - Does it ask about a locked parameter? → DELETE.
-   - Does any option contradict a locked parameter? → REMOVE that option.
-   - Can you reasonably decide it yourself? → DROP, decide silently.
-4. If zero questions survive, do not call this tool.
+## What questions are NOT valid
+
+- Asking about parameters the user already named ("user said PPT, asking what format")
+- Offering options that contradict locked parameters ("user said PPT, offering Markdown")
+- Asking because you personally think something else would be better — your preferences don't override theirs
+- Asking generic template questions when the request is specific
 
 ## Question quality
-- Each question targets one real gap. Each option is a distinct, realistic choice fully compatible with all locked parameters.
-- Be specific. Bad: "What style?" Good: "Visual style: minimal / bold colors / dark mode"
-- If you have a recommendation, put it first and add "(Recommended)" / "(推荐)" to the label.
+- Each question targets ONE real gap or conflict.
+- Every option must be compatible with all parameters the user already specified.
+- Be concrete. Bad: "What style?" Good: "Visual style: [minimal] [bold colors] [dark mode]"
+- If you have a recommendation, put it first and add "(Recommended)" / "(推荐)".
 - Limit to 1-3 questions per call.`,
       parameters: {
         type: 'object',
