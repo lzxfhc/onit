@@ -1,7 +1,9 @@
 import { Loader2, CheckCircle2, Eye } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useT } from '../../i18n'
 
 export default function ActiveTasks() {
+  const t = useT()
   const { sessions, activeSessionId, setActiveSession, markSessionViewed } = useSessionStore()
 
   const activeTasks = sessions.filter(s =>
@@ -22,7 +24,7 @@ export default function ActiveTasks() {
     <div className="px-2 mb-2">
       <div className="px-2 py-1.5">
         <span className="text-[10px] font-semibold text-text-tertiary uppercase tracking-wider">
-          Active Tasks
+          {t.sessions.activeTasks}
         </span>
       </div>
       <div className="space-y-0.5">

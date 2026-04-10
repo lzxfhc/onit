@@ -67,6 +67,7 @@ const createDefaultSession = (name?: string): Session => ({
   model: 'qianfan-code-latest',
   tasks: [],
   workspaceFiles: [],
+  sessionMemory: null,
   activeRunId: null,
   createdAt: Date.now(),
   updatedAt: Date.now(),
@@ -88,9 +89,18 @@ function upsertToolCall(toolCalls: ToolCall[] | undefined, nextToolCall: ToolCal
   return nextCalls
 }
 
+function finalizeThinkingStatus(message: Message): Message {
+  if (message.thinkingStatus !== 'thinking') return message
+  return {
+    ...message,
+    thinkingStatus: 'done',
+  }
+}
+
 function applyChunkToAssistantMessage(message: Message, chunk: StreamChunk): Message {
   if (chunk.type === 'content' && chunk.content) {
-    const blocks = message.contentBlocks ? [...message.contentBlocks] : []
+    const nextMessage = finalizeThinkingStatus(message)
+    const blocks = nextMessage.contentBlocks ? [...nextMessage.contentBlocks] : []
     if (blocks.length > 0 && blocks[blocks.length - 1].type === 'text') {
       const previous = blocks[blocks.length - 1]
       blocks[blocks.length - 1] = {
@@ -102,8 +112,8 @@ function applyChunkToAssistantMessage(message: Message, chunk: StreamChunk): Mes
     }
 
     return {
-      ...message,
-      content: message.content + chunk.content,
+      ...nextMessage,
+      content: nextMessage.content + chunk.content,
       contentBlocks: blocks,
     }
   }
@@ -112,16 +122,18 @@ function applyChunkToAssistantMessage(message: Message, chunk: StreamChunk): Mes
     return {
       ...message,
       thinking: (message.thinking || '') + chunk.content,
+      thinkingStatus: 'thinking',
     }
   }
 
   if (chunk.type === 'tool-call-start' && chunk.toolCall) {
-    const blocks = message.contentBlocks ? [...message.contentBlocks] : []
+    const nextMessage = finalizeThinkingStatus(message)
+    const blocks = nextMessage.contentBlocks ? [...nextMessage.contentBlocks] : []
     blocks.push({ type: 'tool-call', toolCallId: chunk.toolCall.id })
 
     return {
-      ...message,
-      toolCalls: upsertToolCall(message.toolCalls, chunk.toolCall),
+      ...nextMessage,
+      toolCalls: upsertToolCall(nextMessage.toolCalls, chunk.toolCall),
       contentBlocks: blocks,
     }
   }
@@ -134,13 +146,66 @@ function applyChunkToAssistantMessage(message: Message, chunk: StreamChunk): Mes
   }
 
   if (chunk.type === 'iteration-end') {
-    const blocks = message.contentBlocks ? [...message.contentBlocks] : []
+    const nextMessage = finalizeThinkingStatus(message)
+    const blocks = nextMessage.contentBlocks ? [...nextMessage.contentBlocks] : []
     blocks.push({ type: 'iteration-end', iterationIndex: chunk.iterationIndex })
 
     return {
-      ...message,
+      ...nextMessage,
       contentBlocks: blocks,
       iterationIndex: chunk.iterationIndex,
+    }
+  }
+
+  if (chunk.type === 'reconnect') {
+    const blocks = message.contentBlocks ? [...message.contentBlocks] : []
+    if (blocks.length === 0) {
+      return {
+        ...message,
+        content: '',
+        contentBlocks: [],
+        // Reconnect retries should restart visible thinking from a clean slate;
+        // otherwise repeated reasoning chunks accumulate into "复读机" noise.
+        thinking: '',
+        thinkingStatus: 'thinking',
+      }
+    }
+
+    let boundaryIndex = -1
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      if (blocks[i].type === 'iteration-end') {
+        boundaryIndex = i
+        break
+      }
+    }
+
+    const keptBlocks = boundaryIndex >= 0 ? blocks.slice(0, boundaryIndex + 1) : []
+    const nextContent = keptBlocks
+      .filter(block => block.type === 'text')
+      .map(block => block.content || '')
+      .join('')
+
+    const keptToolCallIds = new Set(
+      keptBlocks
+        .filter(block => block.type === 'tool-call')
+        .map(block => block.toolCallId)
+        .filter(Boolean) as string[],
+    )
+
+    const nextToolCalls = message.toolCalls && message.toolCalls.length > 0
+      ? message.toolCalls.filter(toolCall => keptToolCallIds.has(toolCall.id))
+      : message.toolCalls
+
+    return {
+      ...message,
+      content: nextContent,
+      contentBlocks: keptBlocks,
+      toolCalls: nextToolCalls,
+      // Thinking text is not segmented by iteration, so on reconnect we cannot
+      // safely preserve only the kept portion. Reset it and let the retried
+      // request stream fresh reasoning chunks.
+      thinking: '',
+      thinkingStatus: 'thinking',
     }
   }
 
@@ -183,6 +248,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   createSession: (name?: string) => {
+    const state = get()
+    // If current active session is empty (no user messages), just reuse it
+    const currentSession = state.sessions.find(s => s.id === state.activeSessionId)
+    if (currentSession && currentSession.messages.length === 0 && currentSession.status === 'idle') {
+      // Already on an empty session, no need to create another
+      return currentSession
+    }
+
+    // Otherwise create a new session normally
     const newSession = createDefaultSession(name)
     set(state => ({
       sessions: [newSession, ...state.sessions],
@@ -212,6 +286,13 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   deleteSession: async (id: string) => {
+    // Stop agent if running for this session
+    const session = get().sessions.find(s => s.id === id)
+    if (session && (session.status === 'running' || session.isBackgroundRunning)) {
+      try {
+        await window.electronAPI.stopAgent({ sessionId: id })
+      } catch { /* ignore if already stopped */ }
+    }
     await window.electronAPI.deleteSession({ id })
     set(state => {
       const filtered = state.sessions.filter(s => s.id !== id)
@@ -239,34 +320,25 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   setActiveSession: (id: string) => {
-    const state = get()
-    const currentActive = state.activeSessionId
-    const currentSession = state.sessions.find(s => s.id === currentActive)
+    set(state => {
+      const currentActive = state.activeSessionId
+      if (currentActive === id) return { activeSessionId: id }
 
-    // If the current session is running, mark it as background
-    if (currentSession && currentSession.status === 'running' && currentActive !== id) {
-      set(state => ({
-        sessions: state.sessions.map(s =>
-          s.id === currentActive ? { ...s, isBackgroundRunning: true } : s
-        ),
-      }))
-    }
-
-    // Clear unviewed flags on the session we're switching TO
-    const targetSession = state.sessions.find(s => s.id === id)
-    if (targetSession && (targetSession.isBackgroundRunning || targetSession.hasUnviewedResult || targetSession.backgroundCompleted)) {
-      set(state => ({
-        sessions: state.sessions.map(s =>
-          s.id === id
-            ? { ...s, isBackgroundRunning: false, hasUnviewedResult: false, backgroundCompleted: false }
-            : s
-        ),
-      }))
-      // Persist so flags don't come back on restart
-      get().saveSession(id)
-    }
-
-    set({ activeSessionId: id })
+      const sessions = state.sessions.map(s => {
+        // Mark current running session as background
+        if (s.id === currentActive && s.status === 'running') {
+          return { ...s, isBackgroundRunning: true }
+        }
+        // Clear background flags on target session
+        if (s.id === id && (s.isBackgroundRunning || s.hasUnviewedResult || s.backgroundCompleted)) {
+          return { ...s, isBackgroundRunning: false, hasUnviewedResult: false, backgroundCompleted: false }
+        }
+        return s
+      })
+      return { sessions, activeSessionId: id }
+    })
+    // Save the target session to persist the cleared flags
+    get().saveSession(id)
   },
 
   updateSession: (id, updates) => {
@@ -450,8 +522,15 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
         if (!matchesRun && s.activeRunId !== runId) return s
 
-        if (matchesRun) {
-          messages[lastIndex] = { ...last, isStreaming: false }
+        // Clear isStreaming on ALL streaming assistant messages, not just the last one
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].role === 'assistant' && messages[i].isStreaming) {
+            messages[i] = {
+              ...messages[i],
+              isStreaming: false,
+              thinkingStatus: messages[i].thinkingStatus === 'thinking' ? 'done' : messages[i].thinkingStatus,
+            }
+          }
         }
 
         const wasBackgroundRunning = s.isBackgroundRunning

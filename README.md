@@ -1,8 +1,10 @@
-# Onit - Desktop AI Agent
+# Onit — You say it. Onit.
 
-> Your reliable AI assistant, right on your desktop.
+> 你的桌面搭档，随时待命。把琐碎的小任务交给 Onit，你专注重要的事。
 >
-> 你的桌面 AI 助手，就在你身边。
+> Your desktop companion, always ready. Hand off small tasks to Onit, so you can focus on what matters.
+
+**[下载 / Download →](https://github.com/lzxfhc/onit/releases/latest)** macOS Apple Silicon (M1+) / Windows x64
 
 [中文](#中文) | [English](#english)
 
@@ -12,139 +14,140 @@
 
 ## 这是什么？
 
-**Onit** 是一款原生桌面 AI Agent 应用，支持 macOS 和 Windows。不同于浏览器中的 AI 聊天工具，Onit 直接运行在你的电脑上，能够读写文件、编写代码、执行命令、搜索网页、管理任务——全部通过自然对话完成。
+**Onit** 是一款桌面 AI Agent 应用——不是回答问题的聊天框，是能读文件、写代码、搜网页、跑命令的**执行者**。你描述目标，它自己想办法、动手做、做完汇报。
 
-**核心理念：**
+<p align="center">
+  <img src="docs/screenshots/main-interface.png" width="720" alt="Onit 主界面" />
+</p>
 
-- **透明** — Agent 的每一步操作对你完全可见。它读了哪个文件、运行了什么命令，你一目了然。
-- **可中断** — 你可以随时停止 Agent。控制权始终在你手中。
-- **人在回路** — 敏感操作需要你的许可。在执行重要变更前，Agent 会先征得你的同意。
+### 核心亮点
 
-## 功能特点
+- **自主执行** — 说目标就行，不用一步步教。自己读文件、写代码、搜网页、跑命令
+- **Skills 系统** — 可定制的能力模块。内置、自建、导入，用 `@` 一键调用
+- **Skill Memory** — 每个 Skill 都有记忆，用得越多越懂你。自动学习你的偏好、项目上下文、工作习惯
+- **多模型服务切换** — 支持百度千帆、火山方舟、阿里百炼等主流服务商，一键切换，也支持自定义 API
+- **安全护栏** — 文件访问权限隔离 + 三级操作权限模式，为 Agent 装上护栏，每一步可见可控
+- **本地部署** — 支持本地模型推理框架（llama.cpp），数据完全在本地处理，100% 隐私安全
+- **定时任务** — 设一次，自动跑。支持多种执行频率，无人值守的自动化
 
-- **多会话支持** — 同时运行多个 Agent 会话，自由切换。
-- **内置工具集** — 文件读写编辑删除、目录列表、内容搜索、命令执行、Web 搜索、网页抓取、任务管理。
-- **Skills 系统** — 自定义提示词模板，在输入框中通过 `@` 快速调用。可扩展、可配置。
-- **多平台 Coding Plan** — 支持千帆、火山引擎、灵积三个 Provider，各自独立模型参数。
-- **三种权限模式** — Plan 模式（确认所有操作）、AcceptEdit（智能确认）、Full Access（自动执行）。
-- **定时任务** — 设置周期性自动执行的任务。
-- **工作区感知** — 选择工作目录，让 Agent 专注于你的项目。
-- **文件附件** — 直接附加文件到对话中供 Agent 分析。
-- **流式响应** — 实时查看 Agent 的思考过程和操作动态。
-- **后台执行** — 切换到其他会话时 Agent 继续工作，完成后通知你。
-- **历史搜索** — 跨所有历史对话的全文搜索。
-- **顶栏与侧边面板** — 显示会话名称，可折叠右侧面板含任务 / 工具 / 文件三个 Tab。
+## 功能详解
+
+### Skills 系统
+
+给 Agent 装上不同的"技能包"。内置网络调研、代码审查、文档总结等 Skill，也可以用自然语言创建自己的 Skill。
+
+<p align="center">
+  <img src="docs/screenshots/skills-system.png" width="280" alt="Skills 系统" />
+</p>
+
+### Skill Memory — 越用越懂你
+
+每个 Skill 拥有独立的记忆。Onit 在使用过程中自动记录交互数据，后台分析你的偏好、项目特征、工具使用模式，提炼成结构化知识。下次调用时，Skill 自然就"记得"怎么更好地为你工作。
+
+进化过程完全透明——你可以查看 Onit 学到了什么、基于什么证据，觉得合理就应用，不满意就拒绝，还能回滚到任意历史版本。
+
+### 多模型服务
+
+<p align="center">
+  <img src="docs/screenshots/coding-plan-providers.png" width="620" alt="Coding Plan 多平台" />
+</p>
+
+- **Coding Plan** — 百度千帆、火山方舟、阿里百炼，一键切换
+- **API Call** — ERNIE 4.5、DeepSeek V3/R1 等，支持自定义 API 地址
+- **本地模型** — Qwen3.5 系列，支持离线运行，按平台自动使用可用加速后端
+
+### 三级权限模式
+
+<p align="center">
+  <img src="docs/screenshots/permission-modes.png" width="480" alt="三种权限模式" />
+</p>
+
+| 模式 | 行为 | 适用场景 |
+|------|------|---------|
+| **Plan** | 每步操作都先问你 | 了解 Agent 工作方式时 |
+| **AcceptEdit** | 安全操作自动执行，敏感操作需确认 | 日常推荐 |
+| **Full Access** | 全自动执行 | 完全信任的任务 |
+
+文件操作有路径隔离保护，危险命令自动拦截，为 Agent 能力装上安全护栏。
+
+### 定时任务
+
+设置周期性任务（每小时 / 每天 / 每周 / 工作日），Onit 按时在后台执行。打开电脑，结果已经在那了。
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
-| 运行时 | Electron 28 |
+| 运行时 | Electron 35 (Node.js 22) |
 | 前端 | React 18 + TypeScript + Tailwind CSS 3 |
 | 状态管理 | Zustand |
 | 构建 | Vite 5 + electron-builder |
-| LLM API | 千帆 (Baidu) / 火山引擎 / 灵积 |
+| 本地推理 | node-llama-cpp v3（按平台使用 CPU / Metal / Vulkan / CUDA） |
+| LLM API | 千帆 / 火山方舟 / 百炼 / 自定义 |
+| 国际化 | 中文 / English |
 
-## 安装
+## 下载安装
 
-### macOS (Apple Silicon / ARM64)
+### macOS (Apple Silicon)
 
-应用以 `.dmg` 文件分发。由于未使用 Apple 开发者证书签名，macOS 的 Gatekeeper 会默认阻止。请按以下步骤操作：
+> **[下载最新版 Onit DMG](https://github.com/lzxfhc/onit/releases/latest)**
 
-1. **打开 DMG 文件** — 双击 `.dmg` 挂载磁盘映像。你会看到 `安装 Onit.command` 文件和 `Applications` 文件夹。
-2. **右键点击** `安装 Onit.command` 文件，选择 **打开**。macOS 会弹出警告——点击 **完成**。
-3. **打开系统设置** → **隐私与安全性**。滑到最底下的 **安全性** 部分。你会看到关于被阻止文件的提示。点击 **"仍要打开"**。
-4. **会弹出确认对话框** — 再次点击 **"仍要打开"**。安装脚本将在终端中运行。
-5. **如果再次出现 Gatekeeper 提示**，再点击一次 **"仍要打开"** 即可完成安装！
+1. 从 [Releases](https://github.com/lzxfhc/onit/releases) 页面下载 `Onit-x.x.x-arm64.dmg`
+2. 双击 `.dmg` 挂载，将 Onit 拖入 Applications 文件夹
+3. 首次打开：右键 Onit → **打开**，然后在系统设置 → 隐私与安全性 → **"仍要打开"**
+
+> ⚠️ 应用未签名，macOS 会弹出安全提示，按上面步骤操作即可。
 
 ### Windows (x64)
 
-1. 下载并解压 Windows 构建包。
-2. 运行 `install-onit.bat` — 脚本会将 Onit 安装到 `%LOCALAPPDATA%\Onit`，创建桌面和开始菜单快捷方式，并自动启动应用。
+> **[下载最新版 Onit Windows 包](https://github.com/lzxfhc/onit/releases/latest)**
 
-## 快速上手
-
-### 1. 登录
-
-首次启动时需要输入 API Key。Onit 支持两种计费模式：
-
-- **Coding Plan** — 为编码任务优化。支持千帆、火山引擎、灵积三个 Provider。
-- **API Call** — 可选择多种模型（ERNIE 4.5、DeepSeek V3 等）。
-
-### 2. 开始对话
-
-用自然语言输入你的需求。例如：
-
-- "读取 ~/Desktop/project 的文件并总结代码结构"
-- "创建一个将 CSV 转换为 JSON 的 Python 脚本"
-- "搜索这个目录中所有的 TODO 注释"
-
-### 3. 使用 Skills
-
-在输入框中输入 `@` 调用 Skill。Skills 是可自定义的提示词模板，用于常见任务场景。
-
-### 4. 设置工作区
-
-点击输入区域的 **Workspace** 按钮选择文件夹。Agent 将了解你项目文件的上下文。
-
-### 5. 选择权限模式
-
-- **Plan 模式** — Agent 在执行任何文件操作或命令前都会征求确认。适合了解 Agent 的工作方式。
-- **AcceptEdit** — 智能默认：安全操作自动执行，敏感操作询问许可。推荐使用。
-- **Full Access** — 所有操作自动执行。仅在完全信任任务时使用。
-
-## 项目结构
-
-```
-electron/               # Electron 主进程
-├── main.ts             # 应用生命周期、IPC 处理
-├── preload.ts          # 上下文桥接 (主进程 ↔ 渲染进程)
-└── agent/
-    ├── index.ts        # Agent 核心 — ReAct 循环、LLM 流式调用
-    ├── tools.ts        # 内置工具 (文件操作、搜索、执行、Web)
-    ├── skills.ts       # Skills 加载与管理
-    ├── scheduler.ts    # 定时任务管理
-    └── types.ts        # Agent 侧类型定义
-
-src/                    # React 渲染进程
-├── types/index.ts      # 共享类型定义
-├── stores/
-│   ├── sessionStore.ts # 会话状态管理
-│   └── settingsStore.ts# 设置与 API 配置
-├── components/
-│   ├── Login.tsx       # API Key 登录
-│   ├── TopBar.tsx      # 顶部栏 (会话名称 & 面板开关)
-│   ├── Sidebar/        # 会话列表、定时任务、搜索
-│   ├── Chat/           # 消息列表、输入框、任务状态面板
-│   └── Dialogs/        # 权限确认 & 定时任务对话框
-├── utils/
-│   └── platform.ts     # 跨平台工具
-├── App.tsx             # 根组件
-└── index.css           # Tailwind + 自定义样式
-```
+1. 从 [Releases](https://github.com/lzxfhc/onit/releases) 页面下载 Windows x64 版本压缩包并解压
+2. 进入解压后的目录，双击 `install-onit.bat` 自动安装
+3. 如果只想免安装运行，也可以直接双击 `Onit.exe`
 
 ## 本地开发
 
 ```bash
-# 安装依赖 (国内网络需设置 Electron 镜像)
+# 安装依赖
 ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install
 
-# 启动开发服务器 (热更新)
+# 开发模式（热更新）
 npm run dev
 
-# 构建 macOS ARM64
+# 构建 macOS
 npm run build:mac
 
-# 构建 Windows x64
+# 构建 Windows
 npm run build:win
 ```
 
-### 分支
+## 项目结构
 
-| 分支 | 说明 |
-|------|------|
-| `main` | macOS 最新版本 (v1.2.0) |
-| `windows` | Windows 最新版本 (v1.2.0) |
+```
+electron/                    # Electron 主进程
+├── main.ts                  # 应用生命周期、IPC、数据目录
+├── preload.ts               # Context Bridge
+├── agent/
+│   ├── index.ts             # AgentManager — ReAct 循环、LLM 流式调用
+│   ├── tools.ts             # 9 种内置工具 + 权限分级
+│   ├── skills.ts            # Skills 加载与管理
+│   ├── skill-evolution.ts   # Skill Memory 自进化引擎
+│   └── scheduler.ts         # 定时任务调度
+└── local-model/
+    ├── index.ts             # 本地模型下载、加载、推理
+    └── hermes.ts            # OpenAI → llama.cpp 格式转换
+
+src/                         # React 渲染进程
+├── i18n/                    # 国际化（中文 / English）
+├── stores/                  # Zustand 状态管理
+├── components/
+│   ├── Login.tsx            # 登录 & 模型选择
+│   ├── Sidebar/             # 会话、Skills、定时任务、搜索
+│   ├── Chat/                # 对话、消息、输入、任务面板
+│   └── Dialogs/             # 权限确认、任务编辑
+└── types/index.ts           # 共享类型定义
+```
 
 ## 数据存储
 
@@ -153,23 +156,31 @@ npm run build:win
 | 会话 | `~/Library/Application Support/onit/onit-data/sessions/` | `%APPDATA%\onit\onit-data\sessions\` |
 | 定时任务 | `~/Library/Application Support/onit/onit-data/scheduled/` | `%APPDATA%\onit\onit-data\scheduled\` |
 | Skills | `~/Library/Application Support/onit/onit-data/skills/` | `%APPDATA%\onit\onit-data\skills\` |
-| 设置 | 浏览器 localStorage (key: `onit-settings`) | 浏览器 localStorage (key: `onit-settings`) |
+| 本地模型 | `~/Library/Application Support/onit/onit-data/models/` | `%APPDATA%\onit\onit-data\models\` |
+| 设置 | localStorage (`onit-settings`) | localStorage (`onit-settings`) |
 
 ## 版本历史
 
 | 版本 | 日期 | 主要更新 |
 |------|------|---------|
-| v1.2.0 | 2025-03 | 多平台 Coding Plan、顶部程序栏、右侧面板、搜索工具修复 |
-| v1.1.0 | 2025-02 | Skills 系统、Web 工具（搜索 + 抓取）、定时任务增强 |
-| v1.0.0 | 2025-01 | 首个版本 — Agent 循环、文件工具、权限系统、多会话 |
+| v1.5.0 | 2026-04 | Windows 版完整同步 v1.5.0 能力，补齐 Browser Use / Hook / 打包适配，修复重连 thinking 累积 |
+| v1.4.2 | 2026-04 | Plan Mode 统一策略（参考 Claude Code）、bug 修复 |
+| v1.4.1 | 2026-04 | Browser Use、Agent 引擎全面优化、Plan Mode、AskUserQuestion、Hooks 系统 |
+| v1.4.0 | 2026-03 | Copilot 模式（Meta-Agent 任务编排）、多文件类型支持、语音输入 |
+| v1.3.2 | 2026-03 | @Skill 交互优化、定时任务修复、空 session 防重复 |
+| v1.3.1 | 2026-03 | Skill Memory 自进化、中英文切换、全代码库安全加固 |
+| v1.3.0 | 2026-03 | 本地模型支持（Qwen3.5 + llama.cpp） |
+| v1.2.3 | 2026-03 | UI 细节打磨 |
+| v1.2.0 | 2025-03 | 多平台 Coding Plan、顶部栏、右侧面板 |
+| v1.1.0 | 2025-03 | Skills 系统、Web 工具、定时任务增强 |
+| v1.0.0 | 2025-02 | 首个版本 — Agent 循环、文件工具、权限系统 |
 
 ## 备注
 
-- **未签名** — 应用未使用 Apple 开发者证书或 Microsoft Authenticode 签名。安装时需要绕过系统安全提示（参见上方安装说明）。
-- **需要 LLM API** — Onit 需要 API Key（千帆 / 火山引擎 / 灵积）才能运行，不内置模型。
-- **macOS 仅支持 ARM64** — macOS 版本仅支持 Apple Silicon（M1/M2/M3/M4），暂不支持 Intel Mac。
-- **Windows x64** — Windows 版本支持 64 位 x86 系统。
-- **定时任务需保持应用运行** — 没有后台守护进程，任务仅在 Onit 打开时执行。
+- **未签名** — 安装时需绕过系统安全提示
+- **桌面平台支持** — macOS Apple Silicon（M1 及以上） / Windows x64
+- **定时任务需保持应用运行** — 无后台守护进程
+- **本地模型可离线使用** — 云端 API 需要网络 + API Key
 
 ---
 
@@ -177,102 +188,124 @@ npm run build:win
 
 ## What is Onit?
 
-**Onit** is a native desktop AI agent application for macOS and Windows. Unlike browser-based AI chat tools, Onit runs directly on your computer, capable of reading files, writing code, executing commands, searching the web, and managing tasks — all through natural conversation.
+**Onit** is a desktop AI Agent — not a chatbot that answers questions, but an **executor** that reads files, writes code, searches the web, and runs commands. Describe your goal, and Onit figures out how to get it done.
 
-**Core Philosophy:**
+<p align="center">
+  <img src="docs/screenshots/main-interface.png" width="720" alt="Onit Main Interface" />
+</p>
 
-- **Transparent** — Every action the agent takes is visible to you. You see every file it reads, every command it runs.
-- **Interruptible** — You can stop the agent at any time. You're always in control.
-- **Human-in-the-loop** — Sensitive operations require your permission. The agent asks before making important changes.
+### Key Highlights
+
+- **Autonomous execution** — Just state your goal. Onit plans the steps, picks the tools, and gets it done
+- **Skills system** — Customizable capability modules. Built-in, user-created, or imported. Invoke with `@`
+- **Skill Memory** — Each Skill has its own memory that learns from usage. Preferences, project context, workflows — all remembered
+- **Multi-provider** — Qianfan (Baidu), Volcengine, Dashscope, custom APIs, or fully local models
+- **Safety guardrails** — File access isolation + three permission levels. Every action is visible and controllable
+- **Local deployment** — Local model inference via llama.cpp. Data never leaves your device. 100% privacy
+- **Scheduled tasks** — Set once, runs automatically. Multiple frequencies, unattended automation
 
 ## Features
 
-- **Multi-session support** — Run multiple agent sessions simultaneously, switch freely between them.
-- **Built-in tools** — File read/write/edit/delete, directory listing, content search, command execution, web search, URL fetching, task management.
-- **Skills system** — Custom prompt templates invoked via `@` mention in the input box. Extensible and configurable.
-- **Multi-provider Coding Plan** — Supports Qianfan, Volcengine, and Dashscope providers with independent model parameters.
-- **Three permission modes** — Plan Mode (confirm everything), AcceptEdit (smart confirmations), Full Access (auto-execute).
-- **Scheduled tasks** — Set up recurring tasks with cron-like scheduling.
-- **Workspace awareness** — Select a working directory for the agent to focus on your project.
-- **File attachment** — Attach files directly to your conversation for the agent to analyze.
-- **Streaming responses** — See the agent's thinking and actions in real-time.
-- **Background execution** — Switch to another session while the agent works, get notified when it's done.
-- **History search** — Full-text search across all your past conversations.
-- **TopBar & side panel** — Session name display, collapsible right panel with Tasks / Tools / Files tabs.
+### Skills System
+
+Equip your agent with different "skill packs." Built-in skills for web research, code review, document summarization, and more. Create your own with natural language.
+
+### Skill Memory — Gets Better With Use
+
+Each Skill maintains independent memory. Onit automatically records interaction data, analyzes your preferences, project characteristics, and tool usage patterns in the background, then distills it into structured knowledge. Next time the Skill is invoked, it naturally "remembers" how to work better for you.
+
+The evolution process is fully transparent — you can review what Onit learned, approve or reject changes, and roll back to any historical version.
+
+### Multi-Provider Support
+
+- **Coding Plan** — Qianfan, Volcengine, Dashscope (one-click switch)
+- **API Call** — ERNIE 4.5, DeepSeek V3/R1, custom endpoints
+- **Local Model** — Qwen3.5 series, fully offline, with platform-appropriate acceleration backends
+
+### Three Permission Levels
+
+| Mode | Behavior | Best For |
+|------|----------|----------|
+| **Plan** | Asks before every action | Learning how the agent works |
+| **AcceptEdit** | Auto-runs safe ops, asks for sensitive ones | Daily recommended |
+| **Full Access** | Everything auto-executes | Fully trusted tasks |
+
+File operations have path isolation. Dangerous commands are auto-blocked. Safety guardrails for agent capabilities.
+
+### Scheduled Tasks
+
+Set up recurring tasks (hourly / daily / weekly / weekdays). Onit runs them in the background. Open your computer, results are already there.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Runtime | Electron 28 |
+| Runtime | Electron 35 (Node.js 22) |
 | Frontend | React 18 + TypeScript + Tailwind CSS 3 |
 | State | Zustand |
 | Build | Vite 5 + electron-builder |
-| LLM API | Qianfan (Baidu) / Volcengine / Dashscope |
+| Local Inference | node-llama-cpp v3 (CPU / Metal / Vulkan / CUDA depending on platform) |
+| LLM API | Qianfan / Volcengine / Dashscope / Custom |
+| i18n | Chinese / English |
 
 ## Installation
 
-### macOS (Apple Silicon / ARM64)
+### macOS (Apple Silicon)
 
-The app is distributed as a `.dmg` file. Since the app is not code-signed with an Apple Developer certificate, macOS Gatekeeper will block it by default. Follow these steps:
+> **[Download Latest Onit DMG](https://github.com/lzxfhc/onit/releases/latest)**
 
-1. **Open the DMG file** — Double-click the `.dmg` to mount it. You'll see an `安装 Onit.command` file and an `Applications` folder.
-2. **Right-click** the `安装 Onit.command` file and select **Open**. macOS will show a warning — click **Done**.
-3. **Go to System Settings** → **Privacy & Security**. Scroll down to the **Security** section. You'll see a message about the blocked file. Click **"Open Anyway"**.
-4. **A confirmation dialog will appear** — Click **"Open Anyway"** again. The installation script will run in Terminal.
-5. **If another Gatekeeper prompt appears** for the `.command` file itself, click **"Open Anyway"** one more time. Installation is now complete!
+1. Download `Onit-x.x.x-arm64.dmg` from [Releases](https://github.com/lzxfhc/onit/releases)
+2. Double-click `.dmg` to mount, drag Onit into Applications
+3. First launch: Right-click Onit → **Open**, then System Settings → Privacy & Security → **"Open Anyway"**
+
+> ⚠️ The app is not code-signed. macOS will show a security warning — follow the steps above.
 
 ### Windows (x64)
 
-1. Download and extract the Windows build package.
-2. Run `install-onit.bat` — The script will install Onit to `%LOCALAPPDATA%\Onit`, create desktop and Start Menu shortcuts, and launch the app automatically.
+> **[Download Latest Onit Windows Build](https://github.com/lzxfhc/onit/releases/latest)**
 
-## Getting Started
+1. Download the Windows x64 archive from [Releases](https://github.com/lzxfhc/onit/releases)
+2. Extract it, then run `install-onit.bat` inside the unpacked directory
+3. If you prefer a portable run, launch `Onit.exe` directly
 
-### 1. Login
+## Development
 
-On first launch, you'll need to enter your API key. Onit supports two billing modes:
+```bash
+# Install dependencies (China mirror for Electron)
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install
 
-- **Coding Plan** — Optimized for coding tasks. Supports Qianfan, Volcengine, and Dashscope providers.
-- **API Call** — Choose from multiple models (ERNIE 4.5, DeepSeek V3, etc.).
+# Dev mode (hot reload)
+npm run dev
 
-### 2. Start a Conversation
+# Build macOS
+npm run build:mac
 
-Type your request in natural language. For example:
-
-- "Read the files in ~/Desktop/project and summarize the code structure"
-- "Create a Python script that converts CSV to JSON"
-- "Search for all TODO comments in this directory"
-
-### 3. Use Skills
-
-Type `@` in the input box to invoke a skill. Skills are customizable prompt templates for common tasks.
-
-### 4. Set a Workspace
-
-Click the **Workspace** button in the input area to select a folder. The agent will have context about your project files.
-
-### 5. Choose Permission Mode
-
-- **Plan Mode** — Agent asks before any file operation or command. Best for learning what the agent does.
-- **AcceptEdit** — Smart defaults: safe operations run automatically, sensitive ones ask for permission. Recommended.
-- **Full Access** — Everything runs automatically. Use only when you fully trust the task.
+# Build Windows
+npm run build:win
+```
 
 ## Version History
 
 | Version | Date | Highlights |
 |---------|------|-----------|
-| v1.2.0 | 2025-03 | Multi-provider Coding Plan, TopBar, right panel, search tool fixes |
-| v1.1.0 | 2025-02 | Skills system, web tools (search + fetch), scheduled task enhancements |
-| v1.0.0 | 2025-01 | Initial release — agent loop, file tools, permission system, multi-session |
+| v1.5.0 | 2026-04 | Full Windows parity with v1.5.0, Browser Use / Hooks / packaging adaptations, reconnect thinking reset fix |
+| v1.4.2 | 2026-04 | Unified Plan Mode (Claude Code style), bug fixes |
+| v1.4.1 | 2026-04 | Browser Use, Agent engine overhaul, Plan Mode, AskUserQuestion, Hooks system |
+| v1.4.0 | 2026-03 | Copilot mode (Meta-Agent orchestration), multi-file type support, voice input |
+| v1.3.2 | 2026-03 | @Skill interaction, scheduled task fix, empty session dedup |
+| v1.3.1 | 2026-03 | Skill Memory self-evolution, i18n (zh/en), full codebase security hardening |
+| v1.3.0 | 2026-03 | Local model support (Qwen3.5 + llama.cpp) |
+| v1.2.3 | 2026-03 | UI polish |
+| v1.2.0 | 2025-03 | Multi-provider Coding Plan, TopBar, right panel |
+| v1.1.0 | 2025-03 | Skills system, web tools, scheduled task enhancements |
+| v1.0.0 | 2025-02 | Initial release — agent loop, file tools, permission system |
 
 ## Notes
 
-- **Not code-signed** — The app is not signed with an Apple Developer certificate or Microsoft Authenticode. You'll need to bypass OS security prompts during installation.
-- **LLM API required** — Onit requires an API key (Qianfan / Volcengine / Dashscope) to function. It does not include a built-in model.
-- **macOS ARM64 only** — The macOS build targets Apple Silicon (M1/M2/M3/M4). Intel Macs are not currently supported.
-- **Windows x64** — The Windows build targets 64-bit x86 systems.
-- **Scheduled tasks require the app to be running** — There is no background daemon; tasks only execute while Onit is open.
+- **Not code-signed** — Bypass OS security prompts during installation
+- **Desktop platforms** — macOS Apple Silicon (M1 and above) / Windows x64
+- **Scheduled tasks require the app to be running** — No background daemon
+- **Local model works offline** — Cloud APIs require network + API Key
 
 ---
 

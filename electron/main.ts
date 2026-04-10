@@ -1,20 +1,37 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron'
 import path from 'path'
 import fs from 'fs'
+import os from 'os'
 import { AgentManager } from './agent/index'
 import { SchedulerManager } from './agent/scheduler'
 import { SkillManager } from './agent/skills'
+import { SkillEvolutionManager } from './agent/skill-evolution'
+import { LocalModelManager } from './local-model/index'
+import { CopilotManager } from './copilot/index'
+import { runCLI, detectCLIMode, createCLIOutputHandler } from './cli'
 
 let mainWindow: BrowserWindow | null = null
 let agentManager: AgentManager
 let schedulerManager: SchedulerManager
 let skillManager: SkillManager
+let skillEvolutionManager: SkillEvolutionManager
+let localModelManager: LocalModelManager
+let copilotManager: CopilotManager
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
+if (!gotSingleInstanceLock) {
+  app.quit()
+}
 
 const DATA_DIR = path.join(app.getPath('userData'), 'onit-data')
 const SESSIONS_DIR = path.join(DATA_DIR, 'sessions')
 const SCHEDULED_DIR = path.join(DATA_DIR, 'scheduled')
+const ARTIFACTS_DIR = path.join(DATA_DIR, 'artifacts')
+const MODELS_DIR = path.join(DATA_DIR, 'models')
 const USER_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'user')
 const IMPORTED_SKILLS_DIR = path.join(DATA_DIR, 'skills', 'imported')
+const COPILOT_DIR = path.join(DATA_DIR, 'copilot')
+const COPILOT_TASKS_DIR = path.join(DATA_DIR, 'copilot', 'tasks')
 
 function getPrebuiltSkillsDir(): string {
   // In packaged app: resources/skills/
@@ -26,7 +43,7 @@ function getPrebuiltSkillsDir(): string {
 }
 
 function ensureDirectories() {
-  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR]) {
+  for (const dir of [DATA_DIR, SESSIONS_DIR, SCHEDULED_DIR, ARTIFACTS_DIR, MODELS_DIR, USER_SKILLS_DIR, IMPORTED_SKILLS_DIR, COPILOT_DIR, COPILOT_TASKS_DIR]) {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
     }
@@ -36,6 +53,11 @@ function ensureDirectories() {
 const isMac = process.platform === 'darwin'
 const isWin = process.platform === 'win32'
 
+if (isWin) {
+  // Required for correct taskbar grouping and notifications on Windows.
+  app.setAppUserModelId('com.onit.app')
+}
+
 function createWindow() {
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: 1400,
@@ -43,13 +65,15 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 700,
     backgroundColor: '#FAFAFA',
+    icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
     show: false,
+    autoHideMenuBar: isWin,
   }
 
   if (isMac) {
@@ -65,6 +89,9 @@ function createWindow() {
   }
 
   mainWindow = new BrowserWindow(windowOptions)
+  if (isWin) {
+    mainWindow.setMenuBarVisibility(false)
+  }
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
@@ -76,6 +103,23 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
 
+  // Prevent navigation to external URLs — open in system browser instead
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const appUrl = process.env.VITE_DEV_SERVER_URL || 'file://'
+    if (!url.startsWith(appUrl) && !url.startsWith('file://')) {
+      event.preventDefault()
+      shell.openExternal(url)
+    }
+  })
+
+  // Prevent new windows from opening — redirect to system browser
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      shell.openExternal(url)
+    }
+    return { action: 'deny' }
+  })
+
   mainWindow.on('closed', () => {
     mainWindow = null
   })
@@ -85,8 +129,12 @@ function setupIPC() {
   // Dialog: select folder
   ipcMain.handle('dialog:select-folder', async () => {
     if (!mainWindow) return null
+    const properties: Electron.OpenDialogOptions['properties'] = ['openDirectory']
+    if (process.platform === 'darwin') {
+      properties.push('createDirectory')
+    }
     const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory', 'createDirectory'],
+      properties,
       title: 'Select Workspace Folder',
     })
     if (result.canceled) return null
@@ -111,6 +159,7 @@ function setupIPC() {
       displayName: s.displayName,
       description: s.description,
       content: s.content,
+      memory: s.memory,
     }))
     return agentManager.startAgent(data.sessionId, data.message, data.runId, {
       ...data.session,
@@ -124,14 +173,23 @@ function setupIPC() {
   })
 
   // Agent: permission response
-  ipcMain.on('agent:permission-response', (_event, data: { requestId: string; approved: boolean; alwaysAllow?: boolean }) => {
-    agentManager.handlePermissionResponse(data.requestId, data.approved, data.alwaysAllow)
+  ipcMain.on('agent:permission-response', (_event, data: { requestId: string; approved: boolean; alwaysAllow?: boolean; answerText?: string }) => {
+    // Route question/plan answers to the dedicated handler
+    if (data.requestId.startsWith('ask_user:') || data.requestId.startsWith('plan_approval:')) {
+      agentManager.handleQuestionResponse(data.requestId, data.approved, data.answerText)
+    } else {
+      agentManager.handlePermissionResponse(data.requestId, data.approved, data.alwaysAllow)
+    }
   })
 
   // Sessions: save
   ipcMain.handle('sessions:save', async (_event, session: any) => {
-    const filePath = path.join(SESSIONS_DIR, `${session.id}.json`)
-    fs.writeFileSync(filePath, JSON.stringify(session, null, 2), 'utf-8')
+    if (!/^[a-zA-Z0-9_-]+$/.test(session.id)) return false
+    const filePath = path.resolve(SESSIONS_DIR, `${session.id}.json`)
+    if (!filePath.startsWith(SESSIONS_DIR + path.sep)) return false
+    const tmpPath = filePath + '.tmp'
+    fs.writeFileSync(tmpPath, JSON.stringify(session, null, 2), 'utf-8')
+    fs.renameSync(tmpPath, filePath)
     return true
   })
 
@@ -140,14 +198,20 @@ function setupIPC() {
     if (!fs.existsSync(SESSIONS_DIR)) return []
     const files = fs.readdirSync(SESSIONS_DIR).filter(f => f.endsWith('.json'))
     return files.map(f => {
-      const content = fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf-8')
-      return JSON.parse(content)
-    }).sort((a, b) => b.updatedAt - a.updatedAt)
+      try {
+        const content = fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf-8')
+        return JSON.parse(content)
+      } catch {
+        return null
+      }
+    }).filter(Boolean).sort((a: any, b: any) => b.updatedAt - a.updatedAt)
   })
 
   // Sessions: delete
   ipcMain.handle('sessions:delete', async (_event, data: { id: string }) => {
-    const filePath = path.join(SESSIONS_DIR, `${data.id}.json`)
+    if (!/^[a-zA-Z0-9_-]+$/.test(data.id)) return false
+    const filePath = path.resolve(SESSIONS_DIR, `${data.id}.json`)
+    if (!filePath.startsWith(SESSIONS_DIR + path.sep)) return false
     if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
     return true
   })
@@ -174,13 +238,22 @@ function setupIPC() {
   })
 
   ipcMain.handle('scheduler:run-now', async (_event, data: { id: string }) => {
-    return schedulerManager.runTaskNow(data.id, (channel, eventData) => {
-      mainWindow?.webContents.send(channel, eventData)
+    return schedulerManager.runTaskNow(data.id, {
+      triggerSource: 'manual',
     })
   })
 
   // Scheduler: set API config
-  ipcMain.handle('scheduler:set-api-config', async (_event, config: { billingMode: string; apiKey: string; customBaseUrl?: string }) => {
+  ipcMain.handle('scheduler:set-api-config', async (_event, config: {
+    billingMode: string
+    apiKey: string
+    model?: string
+    customBaseUrl?: string
+    codingPlanProvider?: string
+    localModelId?: string
+    maxInputTokens?: number
+    maxOutputTokens?: number
+  }) => {
     schedulerManager.setApiConfig(config)
     return true
   })
@@ -219,15 +292,56 @@ function setupIPC() {
     return skillManager.importSkill(result.filePaths[0])
   })
 
+  // Skills Evolution: get evolution data
+  ipcMain.handle('skills:get-evolution', async (_event, data: { skillId: string }) => {
+    return skillManager.getEvolutionData(data.skillId)
+  })
+
+  // Skills Evolution: toggle evolvable
+  ipcMain.handle('skills:toggle-evolvable', async (_event, data: { skillId: string; evolvable: boolean }) => {
+    return skillManager.toggleEvolvable(data.skillId, data.evolvable)
+  })
+
+  // Skills Evolution: synthesize evolution
+  ipcMain.handle('skills:evolve', async (_event, data: { skillId: string; apiConfig: any }) => {
+    return skillEvolutionManager.synthesizeEvolution(data.skillId, data.apiConfig)
+  })
+
+  // Skills Evolution: apply pending evolution
+  ipcMain.handle('skills:apply-evolution', async (_event, data: { skillId: string }) => {
+    return skillEvolutionManager.applyEvolution(data.skillId)
+  })
+
+  // Skills Evolution: reject pending evolution
+  ipcMain.handle('skills:reject-evolution', async (_event, data: { skillId: string }) => {
+    return skillEvolutionManager.rejectEvolution(data.skillId)
+  })
+
+  // Skills Evolution: rollback to previous version
+  ipcMain.handle('skills:rollback', async (_event, data: { skillId: string; version: string }) => {
+    return skillEvolutionManager.rollback(data.skillId, data.version)
+  })
+
+  // Skills Evolution: delete a learning entry
+  ipcMain.handle('skills:delete-record', async (_event, data: { skillId: string; recordId: string }) => {
+    return skillManager.deleteRecord(data.skillId, data.recordId)
+  })
+
   // File system: list directory
   ipcMain.handle('fs:list-directory', async (_event, dirPath: string) => {
     try {
-      const items = fs.readdirSync(dirPath, { withFileTypes: true })
+      const resolvedDir = path.resolve(dirPath)
+      const homeDir = os.homedir()
+      if (!resolvedDir.startsWith(homeDir + path.sep) && resolvedDir !== homeDir &&
+          !resolvedDir.startsWith(DATA_DIR + path.sep) && resolvedDir !== DATA_DIR) {
+        return []
+      }
+      const items = fs.readdirSync(resolvedDir, { withFileTypes: true })
       return items
         .filter(item => !item.name.startsWith('.'))
         .map(item => ({
           name: item.name,
-          path: path.join(dirPath, item.name),
+          path: path.join(resolvedDir, item.name),
           type: item.isDirectory() ? 'directory' : 'file',
         }))
         .sort((a, b) => {
@@ -241,20 +355,174 @@ function setupIPC() {
 
   // Open external links
   ipcMain.on('shell:open-external', (_event, url: string) => {
-    shell.openExternal(url)
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        shell.openExternal(url)
+      }
+    } catch {
+      // Ignore malformed URLs
+    }
+  })
+
+  // Local model: status
+  ipcMain.handle('local-model:status', async (_event, data?: { modelId?: string }) => {
+    return localModelManager.checkModelStatus(data?.modelId)
+  })
+
+  // Local model: download
+  ipcMain.handle('local-model:download', async (_event, data: { modelId: string }) => {
+    try {
+      await localModelManager.downloadModel(data.modelId, (progress, speed) => {
+        mainWindow?.webContents.send('local-model:download-progress', {
+          modelId: data.modelId,
+          progress,
+          speed,
+        })
+      })
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'downloaded',
+      })
+      return { success: true }
+    } catch (err: any) {
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'error',
+        error: err.message,
+      })
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Local model: cancel download
+  ipcMain.handle('local-model:cancel-download', async () => {
+    localModelManager.cancelDownload()
+    return { success: true }
+  })
+
+  // Local model: delete
+  ipcMain.handle('local-model:delete', async (_event, data: { modelId: string }) => {
+    await localModelManager.deleteModel(data.modelId)
+    return { success: true }
+  })
+
+  // Local model: load
+  ipcMain.handle('local-model:load', async (_event, data: { modelId: string }) => {
+    try {
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'loading',
+      })
+      await localModelManager.loadModel(data.modelId)
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'ready',
+      })
+      return { success: true }
+    } catch (err: any) {
+      mainWindow?.webContents.send('local-model:status-change', {
+        modelId: data.modelId,
+        status: 'error',
+        error: err.message,
+      })
+      return { success: false, error: err.message }
+    }
+  })
+
+  // Local model: unload
+  ipcMain.handle('local-model:unload', async () => {
+    await localModelManager.unloadModel()
+    return { success: true }
   })
 
   // Get app data path
   ipcMain.handle('app:get-data-path', () => DATA_DIR)
+
+  // Copilot: start main agent
+  ipcMain.handle('copilot:start', async (_event, data: { message: string; runId: string; apiConfig: any; messages?: any[] }) => {
+    return copilotManager.startMainAgent(data.message, data.runId, data.apiConfig, data.messages || [])
+  })
+
+  // Copilot: stop main agent
+  ipcMain.handle('copilot:stop', async () => {
+    copilotManager.stopMainAgent()
+    return true
+  })
+
+  // Copilot: load persisted data
+  ipcMain.handle('copilot:load', async () => {
+    return copilotManager.loadData()
+  })
+
+  // Copilot: save data
+  ipcMain.handle('copilot:save', async (_event, data: { messages: any[]; tasks: any[] }) => {
+    await copilotManager.saveData(data.messages, data.tasks)
+    return true
+  })
 }
 
 app.whenReady().then(() => {
   ensureDirectories()
-  agentManager = new AgentManager((channel, data) => {
+  if (isWin) {
+    Menu.setApplicationMenu(null)
+  }
+  localModelManager = new LocalModelManager(MODELS_DIR)
+  skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
+  skillEvolutionManager = new SkillEvolutionManager(skillManager)
+
+  // Wrap sendToRenderer to detect copilot worker completions (both success and error)
+  const workerSend = (channel: string, data: any) => {
+    mainWindow?.webContents.send(channel, data)
+    if (data.sessionId?.startsWith('copilot-task-')) {
+      if (channel === 'agent:stream') {
+        copilotManager?.onWorkerStream(data.sessionId, data.runId, data.chunk)
+      } else if (channel === 'agent:memory-update') {
+        copilotManager?.onWorkerMemoryUpdate(data.sessionId, data.runId, data.memory)
+      } else if (channel === 'agent:error') {
+        copilotManager?.onWorkerError(data.sessionId, data.runId, data.error || 'Unknown error')
+        copilotManager?.onWorkerComplete(data.sessionId, 'failed')
+      } else if (channel === 'agent:complete') {
+        copilotManager?.onWorkerComplete(data.sessionId, data.status || 'completed')
+      }
+    }
+  }
+
+  agentManager = new AgentManager(workerSend, {
+    artifactsDir: ARTIFACTS_DIR,
+    localModelManager,
+    onRunComplete: (params) => {
+      // Fire-and-forget: record usage counts and save evolution records
+      const { sessionId, currentRunSkillNames, sessionSkillNames, messages, apiConfig } = params
+
+      // Record usage counts (only for skills @-mentioned in this run)
+      for (const skillName of currentRunSkillNames) {
+        skillManager.recordSkillUsage(skillName)
+      }
+
+      // Record usage for evolution (all session skills within recording window)
+      // Saves formatted conversation log to EVOLUTION.json.
+      // May trigger LLM compression of old records if storage exceeds budget.
+      for (const skillName of sessionSkillNames) {
+        skillEvolutionManager.recordUsage(skillName, sessionId, messages, apiConfig)
+          .catch((err) => {
+            console.error(`[SkillEvolution] Record usage error for ${skillName}:`, err)
+          })
+      }
+    },
+  })
+  schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager, (channel, data) => {
     mainWindow?.webContents.send(channel, data)
   })
-  schedulerManager = new SchedulerManager(SCHEDULED_DIR, agentManager)
-  skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
+
+  // Create CopilotManager with the worker AgentManager
+  copilotManager = new CopilotManager(
+    (channel, data) => {
+      mainWindow?.webContents.send(channel, data)
+    },
+    agentManager,
+    { dataDir: DATA_DIR, localModelManager, skillManager },
+  )
 
   createWindow()
   setupIPC()
@@ -266,7 +534,17 @@ app.whenReady().then(() => {
   })
 })
 
+app.on('second-instance', () => {
+  if (!mainWindow) return
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore()
+  }
+  mainWindow.show()
+  mainWindow.focus()
+})
+
 app.on('window-all-closed', () => {
+  copilotManager?.stopMainAgent()
   schedulerManager?.shutdown()
   agentManager?.stopAll()
   if (process.platform !== 'darwin') {

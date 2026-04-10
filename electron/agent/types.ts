@@ -9,6 +9,8 @@ export interface AgentToolDef {
       required: string[]
     }
   }
+  /** Whether this tool can safely run concurrently with other concurrency-safe tools. */
+  concurrencySafe?: boolean
 }
 
 export interface AgentMessage {

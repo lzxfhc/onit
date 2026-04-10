@@ -1,6 +1,14 @@
 import { create } from 'zustand'
-import type { AppSettings, ApiConfig, PermissionMode, ScheduledTask, Skill } from '../types'
+import type { AppSettings, ApiConfig, PermissionMode, ScheduledTask, Skill, EvolutionData, Language } from '../types'
 import { DEFAULT_SETTINGS } from '../types'
+
+interface SkillNotification {
+  id: string
+  skillId: string
+  skillName: string
+  message: string
+  timestamp: number
+}
 
 interface SettingsState {
   settings: AppSettings
@@ -8,10 +16,12 @@ interface SettingsState {
   scheduledTasks: ScheduledTask[]
   permissionRequests: any[]
   skills: Skill[]
+  skillNotifications: SkillNotification[]
 
   // Settings actions
   updateApiConfig: (config: Partial<ApiConfig>) => void
   setDefaultPermissionMode: (mode: PermissionMode) => void
+  setLanguage: (language: Language) => void
   login: (config: ApiConfig) => void
   logout: () => void
   loadSettings: () => void
@@ -31,6 +41,17 @@ interface SettingsState {
   deleteSkill: (id: string) => Promise<void>
   importSkill: () => Promise<Skill | null>
 
+  // Skills Evolution
+  getSkillEvolution: (skillId: string) => Promise<EvolutionData>
+  toggleSkillEvolvable: (skillId: string, evolvable: boolean) => Promise<void>
+  evolveSkill: (skillId: string) => Promise<{ success: boolean; error?: string }>
+  applySkillEvolution: (skillId: string) => Promise<boolean>
+  rejectSkillEvolution: (skillId: string) => Promise<boolean>
+  rollbackSkill: (skillId: string, version: string) => Promise<boolean>
+  deleteSkillRecord: (skillId: string, recordId: string) => Promise<void>
+  addSkillNotification: (notification: Omit<SkillNotification, 'id' | 'timestamp'>) => void
+  dismissSkillNotification: (id: string) => void
+
   // Permission requests
   addPermissionRequest: (request: any) => void
   removePermissionRequest: (id: string) => void
@@ -45,6 +66,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   scheduledTasks: [],
   permissionRequests: [],
   skills: [],
+  skillNotifications: [],
 
   updateApiConfig: (config) => {
     set(state => ({
@@ -63,19 +85,35 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     get().saveSettings()
   },
 
+  setLanguage: (language) => {
+    set(state => ({
+      settings: { ...state.settings, language },
+    }))
+    get().saveSettings()
+  },
+
   login: (config) => {
+    const mergedConfig: ApiConfig = {
+      ...DEFAULT_SETTINGS.apiConfig,
+      ...get().settings.apiConfig,
+      ...config,
+    }
     set(state => ({
       isLoggedIn: true,
-      settings: { ...state.settings, apiConfig: config },
+      settings: { ...state.settings, apiConfig: mergedConfig },
     }))
     get().saveSettings()
     // Sync API config to scheduler
     try {
       window.electronAPI.setSchedulerApiConfig({
-        billingMode: config.billingMode,
-        apiKey: config.apiKey,
-        customBaseUrl: config.customBaseUrl,
-        codingPlanProvider: config.codingPlanProvider,
+        billingMode: mergedConfig.billingMode,
+        apiKey: mergedConfig.apiKey,
+        model: mergedConfig.model,
+        customBaseUrl: mergedConfig.customBaseUrl,
+        codingPlanProvider: mergedConfig.codingPlanProvider,
+        localModelId: mergedConfig.localModelId,
+        maxInputTokens: mergedConfig.maxInputTokens,
+        maxOutputTokens: mergedConfig.maxOutputTokens,
       })
     } catch {}
   },
@@ -88,20 +126,18 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     try {
       const stored = localStorage.getItem(SETTINGS_KEY)
       if (stored) {
-        const settings = JSON.parse(stored) as AppSettings
-        const isLoggedIn = !!settings.apiConfig.apiKey
-        set({ settings, isLoggedIn })
-        // Sync API config to scheduler on load
-        if (isLoggedIn) {
-          try {
-            window.electronAPI.setSchedulerApiConfig({
-              billingMode: settings.apiConfig.billingMode,
-              apiKey: settings.apiConfig.apiKey,
-              customBaseUrl: settings.apiConfig.customBaseUrl,
-              codingPlanProvider: settings.apiConfig.codingPlanProvider,
-            })
-          } catch {}
+        const parsed = JSON.parse(stored) as Partial<AppSettings>
+        // Merge with defaults so newly-added fields always have sane values.
+        const settings: AppSettings = {
+          ...DEFAULT_SETTINGS,
+          ...parsed,
+          apiConfig: {
+            ...DEFAULT_SETTINGS.apiConfig,
+            ...(parsed.apiConfig || {}),
+          },
         }
+        // Load settings but don't auto-login — always show mode selection on startup
+        set({ settings, isLoggedIn: false })
       }
     } catch {
       // Use defaults
@@ -157,7 +193,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   runScheduledTaskNow: async (id) => {
-    await window.electronAPI.runScheduledTaskNow({ id })
+    const started = await window.electronAPI.runScheduledTaskNow({ id })
+    if (started) {
+      await get().loadScheduledTasks()
+    }
   },
 
   loadSkills: async () => {
@@ -200,6 +239,89 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     } catch {
       return null
     }
+  },
+
+  // Skills Evolution
+  getSkillEvolution: async (skillId) => {
+    return window.electronAPI.getSkillEvolution({ skillId })
+  },
+
+  toggleSkillEvolvable: async (skillId, evolvable) => {
+    try {
+      const updated = await window.electronAPI.toggleSkillEvolvable({ skillId, evolvable })
+      if (updated) {
+        // Reload skills to reflect changes (fork may have created a new skill)
+        await get().loadSkills()
+      }
+    } catch {}
+  },
+
+  evolveSkill: async (skillId) => {
+    try {
+      const apiConfig = get().settings.apiConfig
+      return await window.electronAPI.evolveSkill({ skillId, apiConfig })
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Unknown error' }
+    }
+  },
+
+  applySkillEvolution: async (skillId) => {
+    try {
+      const result = await window.electronAPI.applySkillEvolution({ skillId })
+      if (result) {
+        await get().loadSkills()
+      }
+      return !!result
+    } catch {
+      return false
+    }
+  },
+
+  rejectSkillEvolution: async (skillId) => {
+    try {
+      const result = await window.electronAPI.rejectSkillEvolution({ skillId })
+      if (result) {
+        await get().loadSkills()
+      }
+      return !!result
+    } catch {
+      return false
+    }
+  },
+
+  rollbackSkill: async (skillId, version) => {
+    try {
+      const result = await window.electronAPI.rollbackSkill({ skillId, version })
+      if (result) {
+        await get().loadSkills()
+      }
+      return !!result
+    } catch {
+      return false
+    }
+  },
+
+  deleteSkillRecord: async (skillId, recordId) => {
+    try {
+      await window.electronAPI.deleteSkillRecord({ skillId, recordId })
+    } catch {}
+  },
+
+  addSkillNotification: (notification) => {
+    const id = `sn-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    set(state => ({
+      skillNotifications: [...state.skillNotifications, { ...notification, id, timestamp: Date.now() }],
+    }))
+    // Auto-dismiss after 5 seconds
+    setTimeout(() => {
+      get().dismissSkillNotification(id)
+    }, 5000)
+  },
+
+  dismissSkillNotification: (id) => {
+    set(state => ({
+      skillNotifications: state.skillNotifications.filter(n => n.id !== id),
+    }))
   },
 
   addPermissionRequest: (request) => {

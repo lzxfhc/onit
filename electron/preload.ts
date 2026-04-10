@@ -10,7 +10,7 @@ const api = {
     ipcRenderer.invoke('agent:start', data),
   stopAgent: (data: { sessionId: string }) =>
     ipcRenderer.invoke('agent:stop', data),
-  sendPermissionResponse: (data: { requestId: string; approved: boolean; alwaysAllow?: boolean }) =>
+  sendPermissionResponse: (data: { requestId: string; approved: boolean; alwaysAllow?: boolean; answerText?: string }) =>
     ipcRenderer.send('agent:permission-response', data),
 
   // Sessions
@@ -25,7 +25,16 @@ const api = {
   deleteScheduledTask: (data: { id: string }) => ipcRenderer.invoke('scheduler:delete', data),
   toggleScheduledTask: (data: { id: string; enabled: boolean }) => ipcRenderer.invoke('scheduler:toggle', data),
   runScheduledTaskNow: (data: { id: string }) => ipcRenderer.invoke('scheduler:run-now', data),
-  setSchedulerApiConfig: (config: { billingMode: string; apiKey: string; customBaseUrl?: string; codingPlanProvider?: string }) =>
+  setSchedulerApiConfig: (config: {
+    billingMode: string
+    apiKey: string
+    model?: string
+    customBaseUrl?: string
+    codingPlanProvider?: string
+    localModelId?: string
+    maxInputTokens?: number
+    maxOutputTokens?: number
+  }) =>
     ipcRenderer.invoke('scheduler:set-api-config', config),
 
   // Skills
@@ -34,6 +43,23 @@ const api = {
   deleteSkill: (data: { id: string }) => ipcRenderer.invoke('skills:delete', data),
   createSkill: (data: { name: string; description: string; content: string }) => ipcRenderer.invoke('skills:create', data),
   importSkill: () => ipcRenderer.invoke('skills:import'),
+
+  // Skills Evolution
+  getSkillEvolution: (data: { skillId: string }) => ipcRenderer.invoke('skills:get-evolution', data),
+  toggleSkillEvolvable: (data: { skillId: string; evolvable: boolean }) => ipcRenderer.invoke('skills:toggle-evolvable', data),
+  evolveSkill: (data: { skillId: string; apiConfig: any }) => ipcRenderer.invoke('skills:evolve', data),
+  applySkillEvolution: (data: { skillId: string }) => ipcRenderer.invoke('skills:apply-evolution', data),
+  rejectSkillEvolution: (data: { skillId: string }) => ipcRenderer.invoke('skills:reject-evolution', data),
+  rollbackSkill: (data: { skillId: string; version: string }) => ipcRenderer.invoke('skills:rollback', data),
+  deleteSkillRecord: (data: { skillId: string; recordId: string }) => ipcRenderer.invoke('skills:delete-record', data),
+
+  // Local model
+  getLocalModelStatus: (data?: { modelId?: string }) => ipcRenderer.invoke('local-model:status', data),
+  downloadLocalModel: (data: { modelId: string }) => ipcRenderer.invoke('local-model:download', data),
+  cancelLocalModelDownload: () => ipcRenderer.invoke('local-model:cancel-download'),
+  deleteLocalModel: (data: { modelId: string }) => ipcRenderer.invoke('local-model:delete', data),
+  loadLocalModel: (data: { modelId: string }) => ipcRenderer.invoke('local-model:load', data),
+  unloadLocalModel: () => ipcRenderer.invoke('local-model:unload'),
 
   // File system
   listDirectory: (dirPath: string) => ipcRenderer.invoke('fs:list-directory', dirPath),
@@ -57,6 +83,16 @@ const api = {
     const listener = (_event: any, data: any) => callback(data)
     ipcRenderer.on('agent:error', listener)
     return () => ipcRenderer.removeListener('agent:error', listener)
+  },
+  onAgentMemoryUpdate: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('agent:memory-update', listener)
+    return () => ipcRenderer.removeListener('agent:memory-update', listener)
+  },
+  onAgentSessionUpdate: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('agent:session-update', listener)
+    return () => ipcRenderer.removeListener('agent:session-update', listener)
   },
   onPermissionRequest: (callback: (data: any) => void) => {
     const listener = (_event: any, data: any) => callback(data)
@@ -87,6 +123,58 @@ const api = {
     const listener = (_event: any, data: any) => callback(data)
     ipcRenderer.on('scheduler:session-created', listener)
     return () => ipcRenderer.removeListener('scheduler:session-created', listener)
+  },
+  onLocalModelProgress: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('local-model:download-progress', listener)
+    return () => ipcRenderer.removeListener('local-model:download-progress', listener)
+  },
+  onLocalModelStatusChange: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('local-model:status-change', listener)
+    return () => ipcRenderer.removeListener('local-model:status-change', listener)
+  },
+
+  // Copilot
+  startCopilot: (data: { message: string; runId: string; apiConfig: any; messages?: any[] }) =>
+    ipcRenderer.invoke('copilot:start', data),
+  stopCopilot: (data?: any) =>
+    ipcRenderer.invoke('copilot:stop', data),
+  loadCopilotData: () =>
+    ipcRenderer.invoke('copilot:load'),
+  saveCopilotData: (data: { messages: any[]; tasks: any[] }) =>
+    ipcRenderer.invoke('copilot:save', data),
+
+  // Copilot Events
+  onCopilotStream: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:stream', listener)
+    return () => ipcRenderer.removeListener('copilot:stream', listener)
+  },
+  onCopilotComplete: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:complete', listener)
+    return () => ipcRenderer.removeListener('copilot:complete', listener)
+  },
+  onCopilotError: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:error', listener)
+    return () => ipcRenderer.removeListener('copilot:error', listener)
+  },
+  onCopilotTaskEvent: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:task-event', listener)
+    return () => ipcRenderer.removeListener('copilot:task-event', listener)
+  },
+  onCopilotTaskResult: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:task-result', listener)
+    return () => ipcRenderer.removeListener('copilot:task-result', listener)
+  },
+  onCopilotAutoReport: (callback: (data: any) => void) => {
+    const listener = (_event: any, data: any) => callback(data)
+    ipcRenderer.on('copilot:auto-report', listener)
+    return () => ipcRenderer.removeListener('copilot:auto-report', listener)
   },
 }
 
