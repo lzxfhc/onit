@@ -108,7 +108,14 @@ function applyChunkToMessage(message: Message, chunk: StreamChunk): Message {
   if (chunk.type === 'reconnect') {
     const blocks = [...(message.contentBlocks || [])]
     if (blocks.length === 0) {
-      return { ...message, content: '', contentBlocks: [] }
+      return {
+        ...message,
+        content: '',
+        contentBlocks: [],
+        // Reconnect retries should restart visible thinking from a clean slate;
+        // otherwise repeated reasoning chunks accumulate into duplicated noise.
+        thinking: '',
+      }
     }
 
     let boundaryIndex = -1
@@ -141,6 +148,10 @@ function applyChunkToMessage(message: Message, chunk: StreamChunk): Message {
       content: nextContent,
       contentBlocks: keptBlocks,
       toolCalls: nextToolCalls,
+      // Thinking text is not segmented by iteration, so on reconnect we cannot
+      // safely preserve only the kept portion. Reset it and let the retried
+      // request stream fresh reasoning chunks.
+      thinking: '',
     }
   }
 

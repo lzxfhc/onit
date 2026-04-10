@@ -28,8 +28,9 @@ export default function App() {
     loadSkills: state.loadSkills,
     permissionRequests: state.permissionRequests,
   }), shallow)
-  const { loadSessions } = useSessionStore((state) => ({
+  const { loadSessions, activeSessionId } = useSessionStore((state) => ({
     loadSessions: state.loadSessions,
+    activeSessionId: state.activeSessionId,
   }), shallow)
   const appMode = useCopilotStore(s => s.appMode)
 
@@ -257,6 +258,10 @@ export default function App() {
   }
 
   const isCopilot = appMode === 'copilot'
+  const backgroundInteractiveRequest = permissionRequests.find(req =>
+    (isCopilot || req.sessionId !== activeSessionId) &&
+    (req.type === 'user-question' || req.type === 'plan-approval')
+  )
 
   return (
     <div className="flex h-screen bg-canvas overflow-hidden">
@@ -280,11 +285,18 @@ export default function App() {
         </ErrorBoundary>
       </main>
 
-      {/* Permission dialogs (question/plan dialogs are inline in ChatView) */}
+      {/* Permission dialogs. Active-session question/plan requests render inline in ChatView.
+          Background-session interactive requests still need a global fallback so they do not block invisibly. */}
       {permissionRequests
         .filter(req => req.type !== 'user-question' && req.type !== 'plan-approval')
         .map(req => <PermissionDialog key={req.id} request={req} />)
       }
+      {backgroundInteractiveRequest?.type === 'user-question' && (
+        <QuestionDialog request={backgroundInteractiveRequest} />
+      )}
+      {backgroundInteractiveRequest?.type === 'plan-approval' && (
+        <PlanApprovalDialog request={backgroundInteractiveRequest} />
+      )}
     </div>
   )
 }
