@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron'
 import path from 'path'
 import fs from 'fs'
 import os from 'os'
@@ -53,6 +53,11 @@ function ensureDirectories() {
 const isMac = process.platform === 'darwin'
 const isWin = process.platform === 'win32'
 
+if (isWin) {
+  // Required for correct taskbar grouping and notifications on Windows.
+  app.setAppUserModelId('com.onit.app')
+}
+
 function createWindow() {
   const windowOptions: Electron.BrowserWindowConstructorOptions = {
     width: 1400,
@@ -68,6 +73,7 @@ function createWindow() {
       sandbox: true,
     },
     show: false,
+    autoHideMenuBar: isWin,
   }
 
   if (isMac) {
@@ -83,6 +89,9 @@ function createWindow() {
   }
 
   mainWindow = new BrowserWindow(windowOptions)
+  if (isWin) {
+    mainWindow.setMenuBarVisibility(false)
+  }
 
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show()
@@ -120,8 +129,12 @@ function setupIPC() {
   // Dialog: select folder
   ipcMain.handle('dialog:select-folder', async () => {
     if (!mainWindow) return null
+    const properties: Electron.OpenDialogOptions['properties'] = ['openDirectory']
+    if (process.platform === 'darwin') {
+      properties.push('createDirectory')
+    }
     const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory', 'createDirectory'],
+      properties,
       title: 'Select Workspace Folder',
     })
     if (result.canceled) return null
@@ -451,6 +464,9 @@ function setupIPC() {
 
 app.whenReady().then(() => {
   ensureDirectories()
+  if (isWin) {
+    Menu.setApplicationMenu(null)
+  }
   localModelManager = new LocalModelManager(MODELS_DIR)
   skillManager = new SkillManager(getPrebuiltSkillsDir(), USER_SKILLS_DIR, IMPORTED_SKILLS_DIR)
   skillEvolutionManager = new SkillEvolutionManager(skillManager)

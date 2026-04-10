@@ -642,15 +642,148 @@ export function getToolRiskLevel(toolName: string, args: any): RiskLevel {
   }
 }
 
+function escapeInvalidBackslashesInJson(input: string): string {
+  // Windows paths like "C:\Users\me" often arrive with unescaped backslashes.
+  // If JSON.parse fails, repair invalid escapes inside string literals only.
+  let out = ''
+  let inString = false
+  let escaped = false
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+
+    if (!inString) {
+      out += ch
+      if (ch === '"') inString = true
+      continue
+    }
+
+    if (escaped) {
+      out += ch
+      escaped = false
+      continue
+    }
+
+    if (ch === '\\') {
+      const next = input[i + 1]
+      if (next && /["\\/bfnrtu]/.test(next)) {
+        out += ch
+        escaped = true
+        continue
+      }
+
+      out += '\\\\'
+      continue
+    }
+
+    out += ch
+    if (ch === '"') inString = false
+  }
+
+  return out
+}
+
+function restoreWindowsBackslashEscapes(value: string): string {
+  // If single backslashes were parsed as JSON escapes, restore them.
+  return value
+    .replace(/\u0008/g, '\\b')
+    .replace(/\u000c/g, '\\f')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
+}
+
+function normalizeToolArgsForPlatform(toolName: string, args: any): any {
+  if (process.platform !== 'win32') return args
+  if (!args || typeof args !== 'object') return args
+
+  const restoreKey = (key: string) => {
+    if (typeof args[key] === 'string') {
+      args[key] = restoreWindowsBackslashEscapes(args[key])
+    }
+  }
+
+  switch (toolName) {
+    case 'read_file':
+    case 'write_file':
+    case 'edit_file':
+    case 'delete_file':
+    case 'list_directory':
+      restoreKey('path')
+      break
+    case 'search_files':
+    case 'search_content':
+    case 'find_symbol':
+      restoreKey('directory')
+      break
+    case 'execute_command':
+      restoreKey('working_directory')
+      restoreKey('command')
+      break
+    default:
+      break
+  }
+
+  return args
+}
+
+export function parseToolArgs(argsStr: string, toolName: string): { ok: true; args: any; repaired: boolean } | { ok: false; error: string } {
+  if (typeof argsStr !== 'string' || argsStr.trim().length === 0) {
+    return { ok: false, error: 'Empty tool arguments.' }
+  }
+
+  try {
+    const parsed = normalizeToolArgsForPlatform(toolName, JSON.parse(argsStr))
+    return { ok: true, args: parsed, repaired: false }
+  } catch {
+    // Fall through to repair attempt.
+  }
+
+  try {
+    const repairedStr = escapeInvalidBackslashesInJson(argsStr)
+    const parsed = normalizeToolArgsForPlatform(toolName, JSON.parse(repairedStr))
+    return { ok: true, args: parsed, repaired: repairedStr !== argsStr }
+  } catch (error: any) {
+    return { ok: false, error: error?.message || 'Invalid JSON tool arguments.' }
+  }
+}
+
+export function inferRiskLevelWithoutArgs(toolName: string): RiskLevel {
+  switch (toolName) {
+    case 'read_file':
+    case 'list_directory':
+    case 'search_files':
+    case 'search_content':
+    case 'create_task_list':
+    case 'invoke_skill':
+    case 'web_search':
+    case 'web_fetch':
+    case 'browser_navigate':
+    case 'browser_extract':
+    case 'browser_screenshot':
+    case 'browser_close':
+    case 'ask_user':
+    case 'enter_plan_mode':
+    case 'exit_plan_mode':
+    case 'tool_search':
+    case 'find_symbol':
+      return 'safe'
+    case 'delete_file':
+    case 'worktree_remove':
+      return 'dangerous'
+    default:
+      return 'moderate'
+  }
+}
+
 function globMatch(pattern: string, filename: string): boolean {
   try {
+    const placeholder = '__GLOBSTAR__'
     const regex = pattern
-      // Escape regex-special characters (except * and . which are handled below)
-      .replace(/[(){}+?\[\]|^$]/g, '\\$&')
-      .replace(/\./g, '\\.')
-      .replace(/\*\*/g, '{{GLOBSTAR}}')
+      .replace(/\*\*/g, placeholder)
+      .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
       .replace(/\*/g, '[^/\\\\]*')
-      .replace(/\{\{GLOBSTAR\}\}/g, '.*')
+      .replace(new RegExp(placeholder, 'g'), '.*')
     return new RegExp(`^${regex}$`).test(filename)
   } catch {
     return false
@@ -1040,6 +1173,191 @@ function appendOutputChunk(target: string[], state: { length: number; truncated:
   state.length += chunk.length
 }
 
+function splitCommandSegments(command: string): { segments: string[]; operators: string[] } {
+  const segments: string[] = []
+  const operators: string[] = []
+
+  let buf = ''
+  let inSingle = false
+  let inDouble = false
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i]
+
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble
+      buf += ch
+      continue
+    }
+
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle
+      buf += ch
+      continue
+    }
+
+    if (!inSingle && !inDouble) {
+      const next2 = command.slice(i, i + 2)
+      if (next2 === '&&' || next2 === '||') {
+        segments.push(buf)
+        operators.push(next2)
+        buf = ''
+        i += 1
+        continue
+      }
+
+      if (ch === '|' || ch === '&' || ch === ';') {
+        segments.push(buf)
+        operators.push(ch)
+        buf = ''
+        continue
+      }
+    }
+
+    buf += ch
+  }
+
+  segments.push(buf)
+  return { segments, operators }
+}
+
+function tokenizeCommandLine(input: string): string[] {
+  const tokens: string[] = []
+  let current = ''
+  let inQuotes = false
+
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i]
+    if (ch === '"') {
+      inQuotes = !inQuotes
+      continue
+    }
+    if (!inQuotes && /\s/.test(ch)) {
+      if (current.length > 0) tokens.push(current)
+      current = ''
+      continue
+    }
+    current += ch
+  }
+  if (current.length > 0) tokens.push(current)
+  return tokens
+}
+
+function quoteCmdArg(arg: string): string {
+  if (!arg) return '""'
+  if (arg.startsWith('"') && arg.endsWith('"')) return arg
+  return /[\s"]/g.test(arg) ? `"${arg.replace(/"/g, '\\"')}"` : arg
+}
+
+function hasUnquotedRedirection(segment: string): boolean {
+  let inSingle = false
+  let inDouble = false
+  for (let i = 0; i < segment.length; i++) {
+    const ch = segment[i]
+    if (ch === '"' && !inSingle) {
+      inDouble = !inDouble
+      continue
+    }
+    if (ch === "'" && !inDouble) {
+      inSingle = !inSingle
+      continue
+    }
+    if (!inSingle && !inDouble && (ch === '>' || ch === '<')) return true
+  }
+  return false
+}
+
+function rewriteWindowsCommandSegment(segment: string): string {
+  if (process.platform !== 'win32') return segment
+
+  const leading = segment.match(/^\s*/)?.[0] ?? ''
+  const trailing = segment.match(/\s*$/)?.[0] ?? ''
+  const core = segment.trim()
+  if (!core) return segment
+  if (hasUnquotedRedirection(core)) return segment
+
+  const tokens = tokenizeCommandLine(core)
+  if (tokens.length === 0) return segment
+
+  const cmd = tokens[0].toLowerCase()
+  const rest = tokens.slice(1)
+
+  if (cmd === 'pwd') {
+    return `${leading}cd${trailing}`
+  }
+
+  if (cmd === 'clear') {
+    return `${leading}cls${trailing}`
+  }
+
+  if (cmd === 'which' && rest.length >= 1) {
+    return `${leading}where ${rest.map(quoteCmdArg).join(' ')}${trailing}`
+  }
+
+  if (cmd === 'ls') {
+    let showAll = false
+    const paths: string[] = []
+
+    for (const arg of rest) {
+      const lower = arg.toLowerCase()
+      if (lower === '--all' || (lower.startsWith('-') && lower.includes('a'))) {
+        showAll = true
+        continue
+      }
+      if (lower.startsWith('-')) continue
+      paths.push(arg)
+    }
+
+    const args = ['dir']
+    if (showAll) args.push('/a')
+    if (paths.length > 0) args.push(quoteCmdArg(paths[0]))
+    return `${leading}${args.join(' ')}${trailing}`
+  }
+
+  if (cmd === 'cat') {
+    if (rest.length === 0) {
+      return `${leading}echo cat requires at least one file path${trailing}`
+    }
+    return `${leading}type ${rest.map(quoteCmdArg).join(' ')}${trailing}`
+  }
+
+  return segment
+}
+
+function rewriteWindowsCommand(command: string): string {
+  if (process.platform !== 'win32') return command
+
+  const { segments, operators } = splitCommandSegments(command)
+  const rewrittenSegments = segments.map(seg => rewriteWindowsCommandSegment(seg))
+
+  let out = ''
+  for (let i = 0; i < rewrittenSegments.length; i++) {
+    out += rewrittenSegments[i]
+    if (i < operators.length) out += operators[i]
+  }
+  return out
+}
+
+function spawnCommand(command: string, cwd: string): ChildProcess {
+  const env = { ...process.env, FORCE_COLOR: '0' }
+
+  if (process.platform === 'win32') {
+    const wrapped = `chcp 65001 >nul & ${command}`
+    return spawn('cmd.exe', ['/d', '/s', '/c', wrapped], {
+      cwd,
+      env,
+      windowsHide: true,
+    })
+  }
+
+  return spawn(command, [], {
+    cwd,
+    shell: true,
+    detached: true,
+    env,
+  })
+}
+
 async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, timeoutMs?: number, signal?: AbortSignal): Promise<ToolExecutionResult> {
   const effectiveTimeout = Math.min(Math.max(timeoutMs || COMMAND_DEFAULT_TIMEOUT_MS, 1000), COMMAND_MAX_TIMEOUT_MS)
   return new Promise((resolve) => {
@@ -1053,12 +1371,7 @@ async function runCommand(command: string, cwd: string, riskLevel: RiskLevel, ti
     let timeoutKillTimer: NodeJS.Timeout | null = null
     let abortKillTimer: NodeJS.Timeout | null = null
 
-    const child = spawn(command, [], {
-      cwd,
-      shell: true,
-      detached: process.platform !== 'win32',
-      env: { ...process.env, FORCE_COLOR: '0' },
-    })
+    const child = spawnCommand(command, cwd)
 
     const clearKillTimers = () => {
       if (timeoutKillTimer) clearTimeout(timeoutKillTimer)
@@ -1250,13 +1563,19 @@ export async function executeTool(
   workspacePath: string | null,
   options?: { signal?: AbortSignal }
 ): Promise<ToolExecutionResult> {
-  let args: any
-  try {
-    args = JSON.parse(argsStr)
-  } catch {
-    return { success: false, output: `Invalid tool arguments: ${argsStr}`, riskLevel: 'safe' }
+  const parsed = parseToolArgs(argsStr, toolName)
+  if (!parsed.ok) {
+    const hint = process.platform === 'win32'
+      ? '\n\n[Hint: On Windows, prefer forward-slash paths like C:/Users/... in tool arguments, or escape backslashes as \\\\ in JSON strings.]'
+      : ''
+    return {
+      success: false,
+      output: `Invalid tool arguments: ${argsStr}\n\n${parsed.error}${hint}`,
+      riskLevel: inferRiskLevelWithoutArgs(toolName),
+    }
   }
 
+  const args = parsed.args
   const riskLevel = getToolRiskLevel(toolName, args)
 
   try {
@@ -1428,7 +1747,7 @@ export async function executeTool(
       }
 
       case 'list_directory': {
-        const dirPath = args.path || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
+        const dirPath = args.path || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || os.homedir() || '/'
         if (!fs.existsSync(dirPath)) {
           return { success: false, output: `Directory not found: ${dirPath}`, riskLevel }
         }
@@ -1558,8 +1877,9 @@ export async function executeTool(
       }
 
       case 'execute_command': {
-        const cwd = args.working_directory || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || '/'
-        return runCommand(args.command, cwd, riskLevel, args.timeout_ms, options?.signal)
+        const cwd = args.working_directory || workspacePath || (process.platform === 'win32' ? process.env.USERPROFILE : process.env.HOME) || os.homedir() || '/'
+        const command = typeof args.command === 'string' ? rewriteWindowsCommand(args.command) : ''
+        return runCommand(command, cwd, riskLevel, args.timeout_ms, options?.signal)
       }
 
       case 'web_search': {

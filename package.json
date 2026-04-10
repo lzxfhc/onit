@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build && electron-builder",
-    "build:mac": "tsc && vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64",
+    "build:mac": "tsc && vite build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac --arm64 -c.electronDist=node_modules/electron/dist",
     "build:win": "tsc && vite build && electron-builder --win --x64",
     "build:vite": "tsc && vite build",
     "preview": "vite preview",
@@ -48,7 +48,7 @@
   "build": {
     "appId": "com.onit.app",
     "productName": "Onit",
-    "electronDist": "node_modules/electron/dist",
+    "afterPack": "./scripts/afterPack.js",
     "icon": "build/icon.png",
     "mac": {
       "icon": "build/icon.icns",

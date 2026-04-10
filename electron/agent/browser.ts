@@ -5,6 +5,7 @@ import https from 'https'
 import http from 'http'
 import { URL } from 'url'
 import { ToolExecutionResult } from './types'
+import { parseToolArgs } from './tools'
 
 // Lazy-loaded playwright-core
 let playwrightModule: typeof import('playwright-core') | null = null
@@ -14,6 +15,22 @@ async function getPlaywright() {
     playwrightModule = await import('playwright-core')
   }
   return playwrightModule
+}
+
+function getPreferredBrowserChannels(): string[] {
+  if (process.platform === 'win32') return ['msedge', 'chrome']
+  if (process.platform === 'darwin') return ['chrome']
+  return ['chrome', 'msedge']
+}
+
+function getBrowserUserAgent(): string {
+  if (process.platform === 'win32') {
+    return 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36'
+  }
+  if (process.platform === 'darwin') {
+    return 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36'
+  }
+  return 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36'
 }
 
 export interface InteractiveElement {
@@ -64,25 +81,36 @@ export class BrowserManager {
     if (this.page && !this.page.isClosed()) return this.page
 
     const pw = await getPlaywright()
+    const launchOptions = {
+      headless: true,
+      args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+    } satisfies Parameters<typeof pw.chromium.launch>[0]
 
-    // Try system Chrome first, fall back to bundled Chromium
-    try {
-      this.browser = await pw.chromium.launch({
-        channel: 'chrome',
-        headless: true,
-        args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
-      })
-    } catch {
-      // No system Chrome, try default Chromium
-      this.browser = await pw.chromium.launch({
-        headless: true,
-        args: ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
-      })
+    let lastError: Error | null = null
+    for (const channel of getPreferredBrowserChannels()) {
+      try {
+        this.browser = await pw.chromium.launch({ ...launchOptions, channel })
+        break
+      } catch (error: any) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+      }
+    }
+
+    if (!this.browser) {
+      try {
+        this.browser = await pw.chromium.launch(launchOptions)
+      } catch (error: any) {
+        const finalError = error instanceof Error ? error : new Error(String(error))
+        const platformHint = process.platform === 'win32'
+          ? 'Install Microsoft Edge or Google Chrome on Windows to enable Browser Use.'
+          : 'Install Google Chrome to enable Browser Use.'
+        throw new Error(`${platformHint} ${lastError?.message || finalError.message}`)
+      }
     }
 
     const context = await this.browser.newContext({
       viewport: { width: 1280, height: 900 },
-      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      userAgent: getBrowserUserAgent(),
       locale: 'zh-CN',
     })
     this.page = await context.newPage()
@@ -107,12 +135,11 @@ export class BrowserManager {
   // --- Public tool handler ---
 
   async handleToolCall(toolName: string, argsStr: string): Promise<ToolExecutionResult> {
-    let args: any
-    try {
-      args = JSON.parse(argsStr)
-    } catch {
-      return { success: false, output: `Invalid tool arguments: ${argsStr}`, riskLevel: 'safe' }
+    const parsed = parseToolArgs(argsStr, toolName)
+    if (!parsed.ok) {
+      return { success: false, output: `Invalid tool arguments: ${argsStr}\n\n${parsed.error}`, riskLevel: 'safe' }
     }
+    const args = parsed.args
 
     try {
       switch (toolName) {

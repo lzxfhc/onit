@@ -2,7 +2,7 @@
  * Hooks System — user-configurable lifecycle hooks for agent tool execution.
  *
  * Hooks are defined in a project-level `.onit/hooks.json` or the global
- * `~/Library/Application Support/onit/onit-data/hooks.json` file.
+ * app data `onit/onit-data/hooks.json` file.
  *
  * Format:
  * {
@@ -35,6 +35,7 @@ import { spawn } from 'child_process'
 import fs from 'fs'
 import path from 'path'
 import os from 'os'
+import { parseToolArgs } from './tools'
 
 export interface HookDef {
   matcher?: string       // tool name to match (e.g., "execute_command", "write_file")
@@ -58,6 +59,28 @@ interface HookContext {
 
 const DEFAULT_TIMEOUT = 30000
 
+function getGlobalDataDir(): string {
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'onit', 'onit-data')
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'onit', 'onit-data')
+  }
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'onit', 'onit-data')
+}
+
+function quoteHookValue(value: string): string {
+  const sanitized = String(value).replace(/[\x00-\x1f\x7f]/g, '')
+
+  if (process.platform === 'win32') {
+    return `"${sanitized
+      .replace(/%/g, '%%')
+      .replace(/"/g, '""')}"`
+  }
+
+  return `'${sanitized.replace(/'/g, `'\\''`)}'`
+}
+
 export class HooksManager {
   private config: HooksConfig = {}
   private loaded = false
@@ -78,8 +101,7 @@ export class HooksManager {
     }
 
     // Global hooks
-    const globalDir = path.join(os.homedir(), 'Library', 'Application Support', 'onit', 'onit-data')
-    candidates.push(path.join(globalDir, 'hooks.json'))
+    candidates.push(path.join(getGlobalDataDir(), 'hooks.json'))
 
     for (const filePath of candidates) {
       try {
@@ -146,8 +168,8 @@ export class HooksManager {
         const [, tool, pattern] = match
         if (tool !== ctx.toolName) return false
 
-        let args: any = {}
-        try { args = JSON.parse(ctx.toolArgs) } catch {}
+        const parsed = parseToolArgs(ctx.toolArgs, ctx.toolName)
+        const args = parsed.ok ? parsed.args : {}
         const content = args.command || args.path || args.url || ''
 
         if (pattern.endsWith(':*')) {
@@ -167,18 +189,21 @@ export class HooksManager {
 
     // Substitute ${path}, ${command} etc. in the hook command (shell-escaped)
     let command = hook.command
-    try {
-      const args = JSON.parse(ctx.toolArgs)
+    const parsed = parseToolArgs(ctx.toolArgs, ctx.toolName)
+    if (parsed.ok) {
+      const args = parsed.args
       command = command.replace(/\$\{(\w+)\}/g, (_: string, key: string) => {
         const value = args[key] || ''
-        // Strip control chars + newlines, then shell-escape with single quotes
-        const sanitized = String(value).replace(/[\x00-\x1f\x7f]/g, '')
-        return "'" + sanitized.replace(/'/g, "'\\''") + "'"
+        return quoteHookValue(value)
       })
-    } catch {}
+    }
 
     return new Promise((resolve) => {
-      const proc = spawn('sh', ['-c', command], {
+      const shellCommand = process.platform === 'win32'
+        ? { file: 'cmd.exe', args: ['/d', '/s', '/c', command] }
+        : { file: 'sh', args: ['-c', command] }
+
+      const proc = spawn(shellCommand.file, shellCommand.args, {
         env: {
           ...process.env,
           ONIT_TOOL_NAME: ctx.toolName,
@@ -190,6 +215,7 @@ export class HooksManager {
         cwd: ctx.workspacePath || undefined,
         timeout,
         stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: process.platform === 'win32',
       })
 
       let stdout = ''

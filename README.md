@@ -4,7 +4,7 @@
 >
 > Your desktop companion, always ready. Hand off small tasks to Onit, so you can focus on what matters.
 
-**[下载 / Download →](https://github.com/lzxfhc/onit/releases/latest)** macOS Apple Silicon (M1+)
+**[下载 / Download →](https://github.com/lzxfhc/onit/releases/latest)** macOS Apple Silicon (M1+) / Windows x64
 
 [中文](#中文) | [English](#english)
 
@@ -54,7 +54,7 @@
 
 - **Coding Plan** — 百度千帆、火山方舟、阿里百炼，一键切换
 - **API Call** — ERNIE 4.5、DeepSeek V3/R1 等，支持自定义 API 地址
-- **本地模型** — Qwen3.5 系列，Metal GPU 加速，完全离线
+- **本地模型** — Qwen3.5 系列，支持离线运行，按平台自动使用可用加速后端
 
 ### 三级权限模式
 
@@ -82,7 +82,7 @@
 | 前端 | React 18 + TypeScript + Tailwind CSS 3 |
 | 状态管理 | Zustand |
 | 构建 | Vite 5 + electron-builder |
-| 本地推理 | node-llama-cpp v3 (Metal GPU) |
+| 本地推理 | node-llama-cpp v3（按平台使用 CPU / Metal / Vulkan / CUDA） |
 | LLM API | 千帆 / 火山方舟 / 百炼 / 自定义 |
 | 国际化 | 中文 / English |
 
@@ -97,6 +97,14 @@
 3. 首次打开：右键 Onit → **打开**，然后在系统设置 → 隐私与安全性 → **"仍要打开"**
 
 > ⚠️ 应用未签名，macOS 会弹出安全提示，按上面步骤操作即可。
+
+### Windows (x64)
+
+> **[下载最新版 Onit Windows 包](https://github.com/lzxfhc/onit/releases/latest)**
+
+1. 从 [Releases](https://github.com/lzxfhc/onit/releases) 页面下载 Windows x64 版本压缩包并解压
+2. 进入解压后的目录，双击 `install-onit.bat` 自动安装
+3. 如果只想免安装运行，也可以直接双击 `Onit.exe`
 
 ## 本地开发
 
@@ -155,6 +163,7 @@ src/                         # React 渲染进程
 
 | 版本 | 日期 | 主要更新 |
 |------|------|---------|
+| v1.5.0 | 2026-04 | Windows 版完整同步 v1.5.0 能力，补齐 Browser Use / Hook / 打包适配，修复重连 thinking 累积 |
 | v1.4.2 | 2026-04 | Plan Mode 统一策略（参考 Claude Code）、bug 修复 |
 | v1.4.1 | 2026-04 | Browser Use、Agent 引擎全面优化、Plan Mode、AskUserQuestion、Hooks 系统 |
 | v1.4.0 | 2026-03 | Copilot 模式（Meta-Agent 任务编排）、多文件类型支持、语音输入 |
@@ -169,7 +178,7 @@ src/                         # React 渲染进程
 ## 备注
 
 - **未签名** — 安装时需绕过系统安全提示
-- **macOS 仅支持 Apple Silicon**（M1 及以上全系列，含 Pro/Max/Ultra）
+- **桌面平台支持** — macOS Apple Silicon（M1 及以上） / Windows x64
 - **定时任务需保持应用运行** — 无后台守护进程
 - **本地模型可离线使用** — 云端 API 需要网络 + API Key
 
@@ -211,7 +220,7 @@ The evolution process is fully transparent — you can review what Onit learned,
 
 - **Coding Plan** — Qianfan, Volcengine, Dashscope (one-click switch)
 - **API Call** — ERNIE 4.5, DeepSeek V3/R1, custom endpoints
-- **Local Model** — Qwen3.5 series, Metal GPU acceleration, fully offline
+- **Local Model** — Qwen3.5 series, fully offline, with platform-appropriate acceleration backends
 
 ### Three Permission Levels
 
@@ -235,7 +244,7 @@ Set up recurring tasks (hourly / daily / weekly / weekdays). Onit runs them in t
 | Frontend | React 18 + TypeScript + Tailwind CSS 3 |
 | State | Zustand |
 | Build | Vite 5 + electron-builder |
-| Local Inference | node-llama-cpp v3 (Metal GPU) |
+| Local Inference | node-llama-cpp v3 (CPU / Metal / Vulkan / CUDA depending on platform) |
 | LLM API | Qianfan / Volcengine / Dashscope / Custom |
 | i18n | Chinese / English |
 
@@ -250,6 +259,14 @@ Set up recurring tasks (hourly / daily / weekly / weekdays). Onit runs them in t
 3. First launch: Right-click Onit → **Open**, then System Settings → Privacy & Security → **"Open Anyway"**
 
 > ⚠️ The app is not code-signed. macOS will show a security warning — follow the steps above.
+
+### Windows (x64)
+
+> **[Download Latest Onit Windows Build](https://github.com/lzxfhc/onit/releases/latest)**
+
+1. Download the Windows x64 archive from [Releases](https://github.com/lzxfhc/onit/releases)
+2. Extract it, then run `install-onit.bat` inside the unpacked directory
+3. If you prefer a portable run, launch `Onit.exe` directly
 
 ## Development
 
@@ -271,6 +288,7 @@ npm run build:win
 
 | Version | Date | Highlights |
 |---------|------|-----------|
+| v1.5.0 | 2026-04 | Full Windows parity with v1.5.0, Browser Use / Hooks / packaging adaptations, reconnect thinking reset fix |
 | v1.4.2 | 2026-04 | Unified Plan Mode (Claude Code style), bug fixes |
 | v1.4.1 | 2026-04 | Browser Use, Agent engine overhaul, Plan Mode, AskUserQuestion, Hooks system |
 | v1.4.0 | 2026-03 | Copilot mode (Meta-Agent orchestration), multi-file type support, voice input |
@@ -285,7 +303,7 @@ npm run build:win
 ## Notes
 
 - **Not code-signed** — Bypass OS security prompts during installation
-- **macOS Apple Silicon only** (M1 and above, including Pro/Max/Ultra)
+- **Desktop platforms** — macOS Apple Silicon (M1 and above) / Windows x64
 - **Scheduled tasks require the app to be running** — No background daemon
 - **Local model works offline** — Cloud APIs require network + API Key
 

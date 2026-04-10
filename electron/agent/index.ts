@@ -5,7 +5,7 @@ import path from 'path'
 import os from 'os'
 import { URL } from 'url'
 import { v4 as uuidv4 } from 'uuid'
-import { executeTool, CORE_TOOLS, getToolByName, getToolRiskLevel, isToolConcurrencySafe, searchTools } from './tools'
+import { executeTool, CORE_TOOLS, getToolByName, getToolRiskLevel, inferRiskLevelWithoutArgs, isToolConcurrencySafe, parseToolArgs, searchTools } from './tools'
 import { AgentMessage } from './types'
 import { extractFileContent } from '../utils/file-extract'
 import type { LocalModelManager } from '../local-model/index'
@@ -222,10 +222,20 @@ export class AgentManager {
     this.loadPersistedPermissions()
   }
 
+  private getDefaultDataDir(): string {
+    if (process.platform === 'win32') {
+      return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'onit', 'onit-data')
+    }
+    if (process.platform === 'darwin') {
+      return path.join(os.homedir(), 'Library', 'Application Support', 'onit', 'onit-data')
+    }
+    return path.join(process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config'), 'onit', 'onit-data')
+  }
+
   private getPermissionsFilePath(): string {
     const dataDir = this.artifactsDir
       ? path.dirname(this.artifactsDir)
-      : path.join(os.homedir(), 'Library', 'Application Support', 'onit', 'onit-data')
+      : this.getDefaultDataDir()
     return path.join(dataDir, 'permissions.json')
   }
 
@@ -2555,9 +2565,11 @@ What remains to be done.
             })
 
             // Check permissions BEFORE executing
-            let args: any = {}
-            try { args = JSON.parse(toolArgs) } catch {}
-            const riskLevel = getToolRiskLevel(toolName, args)
+            const parsedToolArgs = parseToolArgs(toolArgs, toolName)
+            const args = parsedToolArgs.ok ? parsedToolArgs.args : {}
+            const riskLevel = parsedToolArgs.ok
+              ? getToolRiskLevel(toolName, args)
+              : inferRiskLevelWithoutArgs(toolName)
 
             if (riskLevel !== 'safe') {
               const description = `${toolName}: ${args.path || args.command || ''}`
@@ -2720,8 +2732,9 @@ What remains to be done.
 
             // Read-before-edit enforcement: reject edits to files not read in this session
             if (toolName === 'edit_file' && !this.toolExecutorOverride) {
-              try {
-                const editArgs = JSON.parse(toolArgs)
+              const editArgsParsed = parseToolArgs(toolArgs, toolName)
+              if (editArgsParsed.ok) {
+                const editArgs = editArgsParsed.args
                 if (editArgs.path && !agentSession.readFiles.has(path.resolve(editArgs.path))) {
                   return {
                     tc, toolName, toolArgs,
@@ -2729,7 +2742,7 @@ What remains to be done.
                     denied: false,
                   }
                 }
-              } catch {}
+              }
             }
 
             // Run preToolUse hooks
@@ -2765,10 +2778,10 @@ What remains to be done.
 
             // Track read files for read-before-edit enforcement
             if (toolName === 'read_file' && result.success) {
-              try {
-                const readArgs = JSON.parse(toolArgs)
-                if (readArgs.path) agentSession.readFiles.add(path.resolve(readArgs.path))
-              } catch {}
+              const readArgsParsed = parseToolArgs(toolArgs, toolName)
+              if (readArgsParsed.ok && readArgsParsed.args.path) {
+                agentSession.readFiles.add(path.resolve(readArgsParsed.args.path))
+              }
             }
 
             // Run postToolUse hooks (fire-and-forget)
