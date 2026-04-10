@@ -5,7 +5,7 @@ import path from 'path'
 import os from 'os'
 import { URL } from 'url'
 import { v4 as uuidv4 } from 'uuid'
-import { executeTool, AGENT_TOOLS, CORE_TOOLS, getToolRiskLevel, isToolConcurrencySafe } from './tools'
+import { executeTool, CORE_TOOLS, getToolByName, getToolRiskLevel, isToolConcurrencySafe, searchTools } from './tools'
 import { AgentMessage } from './types'
 import { extractFileContent } from '../utils/file-extract'
 import type { LocalModelManager } from '../local-model/index'
@@ -56,6 +56,8 @@ const MAX_ATTACHED_FILES = 8
 const MAX_ATTACHED_FILE_CHARS = 12000
 const MAX_TOTAL_ATTACHED_CHARS = 40000
 const MAX_RESTORED_TOOL_CONTENT_CHARS = 3000
+const MAX_SKILL_CONTENT_CHARS = 5000
+const SKILL_SYSTEM_MARKER_PREFIX = '[ONIT_SKILL:'
 
 // Context / token budgets
 const DEFAULT_MAX_INPUT_TOKENS = 95000
@@ -160,8 +162,10 @@ interface AgentSession {
   alwaysAllowedTools: Set<string>
   pendingPermissions: Map<string, { resolve: (approved: boolean) => void }>
   enabledSkills?: SkillData[]
-  /** Maps skill name → how many runs ago it was last @-mentioned (0 = this run). */
+  /** Maps skill name → how many runs ago it was last loaded/invoked (0 = this run). */
   usedSkillNames: Map<string, number>
+  /** Deferred tools explicitly loaded for this session via tool_search. */
+  loadedDeferredToolNames: Set<string>
   runPromise?: Promise<void>
   browserManager?: BrowserManager
   /** Tracks files read in this session for read-before-edit enforcement. */
@@ -184,9 +188,9 @@ export class AgentManager {
   private onRunComplete: ((params: {
     sessionId: string
     runId: string
-    /** Skills @-mentioned in this run's user message (for usage count). */
+    /** Skills loaded or invoked in this run (for usage count). */
     currentRunSkillNames: string[]
-    /** All skills @-mentioned within the recording window (for evolution recording). */
+    /** All skills seen within the recording window (for evolution recording). */
     sessionSkillNames: string[]
     messages: AgentMessage[]
     apiConfig: AgentSession['apiConfig']
@@ -404,6 +408,7 @@ export class AgentManager {
       pendingPermissions: new Map(),
       enabledSkills,
       usedSkillNames: new Map<string, number>(),
+      loadedDeferredToolNames: agentSession?.loadedDeferredToolNames || new Set<string>(),
     }
 
     // Current @-mentions in this message → distance 0 (this run)
@@ -523,26 +528,110 @@ export class AgentManager {
     }
   }
 
+  private normalizeSkillName(skillName: string): string {
+    return (skillName || '').trim().replace(/^[@/]+/, '')
+  }
+
+  private findEnabledSkill(skillName: string, enabledSkills: SkillData[]): SkillData | null {
+    const normalizedName = this.normalizeSkillName(skillName)
+    if (!normalizedName) return null
+    const normalizedLower = normalizedName.toLowerCase()
+    return enabledSkills.find(skill => skill.name.toLowerCase() === normalizedLower) || null
+  }
+
+  private buildSkillSystemMarker(skillName: string): string {
+    return `${SKILL_SYSTEM_MARKER_PREFIX}${skillName}]`
+  }
+
+  private isInjectedSkillSystemMessage(message: AgentMessage, skillName?: string): boolean {
+    if (message.role !== 'system' || typeof message.content !== 'string') {
+      return false
+    }
+    if (!skillName) {
+      return message.content.startsWith(SKILL_SYSTEM_MARKER_PREFIX)
+    }
+    return message.content.startsWith(this.buildSkillSystemMarker(skillName))
+  }
+
+  private buildInjectedSkillContent(skill: SkillData): string {
+    let fullContent = skill.content
+    if (skill.memory) {
+      fullContent += '\n\n## Skill Memory\n\n' + skill.memory
+    }
+    const injected = fullContent.length > MAX_SKILL_CONTENT_CHARS
+      ? fullContent.substring(0, MAX_SKILL_CONTENT_CHARS) + '\n\n[Skill content truncated]'
+      : fullContent
+    return `${this.buildSkillSystemMarker(skill.name)} ${skill.displayName}\n\n${injected}`
+  }
+
+  private loadSkillIntoSession(agentSession: AgentSession, rawSkillName: string): {
+    success: boolean
+    output: string
+    injectedMessage?: AgentMessage
+  } {
+    const enabledSkills = agentSession.enabledSkills || []
+    if (enabledSkills.length === 0) {
+      return { success: false, output: 'No skills are enabled in this session.' }
+    }
+
+    const skill = this.findEnabledSkill(rawSkillName, enabledSkills)
+    if (!skill) {
+      const available = enabledSkills.map(s => `@${s.name}`).join(', ')
+      return {
+        success: false,
+        output: `Unknown skill "${rawSkillName}". Available skills: ${available}`,
+      }
+    }
+
+    if (agentSession.messages.some(message => this.isInjectedSkillSystemMessage(message, skill.name))) {
+      agentSession.usedSkillNames.set(skill.name, 0)
+      return {
+        success: true,
+        output: `Skill "${skill.displayName}" is already loaded for this run.`,
+      }
+    }
+
+    agentSession.usedSkillNames.set(skill.name, 0)
+
+    return {
+      success: true,
+      output: `Skill "${skill.displayName}" loaded for this run. Follow its instructions until they no longer apply.`,
+      injectedMessage: {
+        role: 'system',
+        content: this.buildInjectedSkillContent(skill),
+      },
+    }
+  }
+
+  private getToolsForSession(agentSession: AgentSession): any[] {
+    if (agentSession.loadedDeferredToolNames.size === 0) {
+      return CORE_TOOLS
+    }
+
+    const loadedDeferredTools = Array.from(agentSession.loadedDeferredToolNames)
+      .map(toolName => getToolByName(toolName))
+      .filter((tool): tool is NonNullable<ReturnType<typeof getToolByName>> => Boolean(tool))
+
+    if (loadedDeferredTools.length === 0) {
+      return CORE_TOOLS
+    }
+
+    return [...CORE_TOOLS, ...loadedDeferredTools]
+  }
+
   private extractMentionedSkills(message: string, enabledSkills: SkillData[]): { contents: string[]; names: string[] } {
     const contents: string[] = []
     const names: string[] = []
+    const seen = new Set<string>()
     const mentionPattern = /@([\w-]+)/g
     let match: RegExpExecArray | null
 
     while ((match = mentionPattern.exec(message)) !== null) {
-      const skillName = match[1]
-      const skill = enabledSkills.find(s => s.name === skillName)
-      if (skill && skill.content) {
-        // Compose skill content with memory overlay
-        let fullContent = skill.content
-        if (skill.memory) {
-          fullContent += '\n\n## Skill Memory\n\n' + skill.memory
-        }
-        const injected = fullContent.length > 5000
-          ? fullContent.substring(0, 5000) + '\n\n[Skill content truncated]'
-          : fullContent
-        contents.push(`[Skill: ${skill.displayName}]\n\n${injected}`)
+      const skill = this.findEnabledSkill(match[1], enabledSkills)
+      if (skill && skill.content && !seen.has(skill.name)) {
+        contents.push(this.buildInjectedSkillContent(skill))
         names.push(skill.name)
+        seen.add(skill.name)
       }
     }
 
@@ -859,7 +948,7 @@ export class AgentManager {
       const skillsList = enabledSkills
         .map(s => `- **${s.displayName}** (\`@${s.name}\`): ${s.description}`)
         .join('\n')
-      skillsSection = `\n\n## Available Skills\nYou and the user can invoke skills by mentioning them with @ in messages. When a task matches a skill's purpose, proactively use it — include @skill-name in your response text and the skill instructions will be loaded for the next step.\n${skillsList}`
+      skillsSection = `\n\n## Available Skills\nUsers can explicitly invoke a skill by mentioning it in their message (for example \`@skill-name\`).\nWhen you want to use a skill proactively, call the \`invoke_skill\` tool with the exact skill name BEFORE following the skill-specific workflow.\nNever rely on mentioning \`@skill-name\` in your own assistant text to activate a skill.\nOnly load the specific skill(s) that materially help with the current task.\n${skillsList}`
     }
 
     return `You are Onit Agent, a highly capable AI assistant running on the user's desktop. You help users accomplish tasks by using the available tools.
@@ -898,39 +987,31 @@ ${platformHint}${workspace}
 - For git operations: prefer new commits over amends, never force-push to main, never skip hooks.
 
 # Permission mode: ${permissionMode}
-${permissionMode === 'plan' ? `**Plan mode is active.** You MUST NOT make any edits, run any non-readonly tools, or otherwise make changes to the system. Only read-only tools and ask_user are allowed. This supercedes any other instructions.
+${permissionMode === 'plan' ? `**Plan mode is active.** You MUST NOT make any edits, run any non-readonly tools, or change the system. Only read-only tools and ask_user are allowed.
 
-## Plan Mode Workflow
+## Interview-First Workflow
 
-You decide the best approach based on the task:
+Plan mode is an interview. Your goal is to understand what the user wants BEFORE doing work — not to do work and then ask questions.
 
-### Phase 1: Understand
-Explore and gather information using read-only tools:
-- For code tasks: read_file, search_files, search_content, list_directory, find_symbol
-- For research tasks: web_search, web_fetch, browser_navigate, browser_extract
-- For any task: ask_user to clarify requirements, preferences, or constraints — provide 2-4 concrete options with descriptions
+**Step 1: Ask first, immediately.**
+On your VERY FIRST turn in plan mode, call ask_user with 1-3 clarifying questions about the task. Don't explore the codebase first. Don't search the web first. Just ask.
 
-### Phase 2: Design
-Based on your exploration, design the approach. Consider trade-offs and alternatives. If you need more information, go back to Phase 1 — explore more or ask more questions. Don't rush to a plan with insufficient understanding.
+Good first questions identify:
+- What outcome the user wants (the deliverable form, e.g., "PDF report" vs "markdown summary")
+- Scope and constraints (e.g., "all files" vs "only auth module")
+- Preferences that matter (style, approach, depth)
 
-### Phase 3: Present Plan
-When you have enough clarity, state your plan clearly:
-- What you will do, step by step
-- For code: which files to modify, which functions to change
-- For research/content: what sources to use, what structure and format
-- For automation: what tools in what sequence, how to handle errors
-- Include a verification step (how to confirm success)
-- Keep it concise and scannable
+**Step 2: Targeted exploration based on answers.**
+Once you have the user's answers, do a small amount of focused exploration (read 1-3 files, do 1-2 searches) — only what's needed to validate your plan.
 
-### Phase 4: Submit
-Call exit_plan_mode with a brief summary. The user will review and either approve (you start executing) or reject with feedback (you refine the plan).
+**Step 3: Submit the plan.**
+Call exit_plan_mode with a concise summary of what you'll do. The user approves or sends feedback.
 
-### Guidelines
-- Explore before you plan. Gather real information — don't guess or assume.
-- Ask when uncertain. One focused question is better than a plan built on wrong assumptions.
-- Iterate naturally. Simple tasks: one explore→plan cycle. Complex tasks: 2-5 rounds of explore→ask→refine.
-- Be specific and actionable. The plan should tell the user exactly what will happen.
-- Your turn should end with either ask_user (if you need input) or exit_plan_mode (if the plan is ready). Don't stop for other reasons.` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
+## Rules
+- Your FIRST tool call in plan mode should almost always be ask_user. Skip only if the user's request is fully unambiguous.
+- Keep questions short and concrete — provide 2-4 specific options, not open-ended prompts.
+- Do not loop between exploration and questions for many rounds. Aim for: ask once → explore briefly → submit plan.
+- Your turn should end with ask_user (if you need input) or exit_plan_mode (if the plan is ready). Never stop in the middle.` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
 
     Format results clearly with markdown. Use syntax highlighting for code.${skillsSection}`
   }
@@ -1836,9 +1917,9 @@ What remains to be done.
     iteration: number,
     onChunk: (chunk: any) => void
   ): Promise<{ content: string; toolCalls: any[]; finishReason?: string | null }> {
-    // Use CORE_TOOLS (not full AGENT_TOOLS) to reduce prompt size.
-    // Deferred tools are loaded on demand via tool_search.
-    const tools = this.toolsOverride || CORE_TOOLS
+    // Start from CORE_TOOLS and add any deferred tools that were explicitly
+    // loaded into this session via tool_search.
+    const tools = this.toolsOverride || this.getToolsForSession(agentSession)
 
     if (agentSession.apiConfig.billingMode === 'local-model') {
       return this.requestCompletionLocal(
@@ -2424,27 +2505,6 @@ What remains to be done.
           })
         }
 
-        // Check if the last assistant message mentioned any @skills — if so,
-        // inject the skill content so the agent can use it in the next turn.
-        if (agentSession.enabledSkills?.length) {
-          const lastAssistant = [...agentSession.messages].reverse().find(m => m.role === 'assistant')
-          if (lastAssistant?.content) {
-            const { contents: skillContents, names: skillNames } = this.extractMentionedSkills(lastAssistant.content, agentSession.enabledSkills)
-            for (let i = 0; i < skillContents.length; i++) {
-              const skillName = skillNames[i]
-              // Avoid duplicate: check if this specific skill is already injected
-              const marker = `[Skill: ${agentSession.enabledSkills.find(s => s.name === skillName)?.displayName || skillName}]`
-              const alreadyInjected = agentSession.messages.some(m => m.role === 'system' && m.content?.includes(marker))
-              if (!alreadyInjected) {
-                agentSession.messages.push({ role: 'system', content: skillContents[i] })
-              }
-            }
-            for (const name of skillNames) {
-              agentSession.usedSkillNames.set(name, 0)
-            }
-          }
-        }
-
         // Keep prompt within budgets (soft working-set + hard cap) before each
         // model call. This is where Session Memory compression happens.
         await this.prepareConversationForModelCall(agentSession, iteration)
@@ -2624,13 +2684,50 @@ What remains to be done.
               }
             }
 
+            if (toolName === 'invoke_skill') {
+              const invocation = this.loadSkillIntoSession(
+                agentSession,
+                typeof args.skill_name === 'string' ? args.skill_name : (typeof args.skill === 'string' ? args.skill : ''),
+              )
+              return {
+                tc, toolName, toolArgs,
+                result: {
+                  success: invocation.success,
+                  output: invocation.output,
+                  riskLevel: 'safe' as const,
+                },
+                postToolMessages: invocation.injectedMessage ? [invocation.injectedMessage] : [],
+                denied: false,
+              }
+            }
+
+            if (toolName === 'tool_search') {
+              const query = typeof args.query === 'string' ? args.query : ''
+              const matches = searchTools(query)
+              const availableDeferredTools = searchTools('').map(tool => tool.function.name)
+              for (const match of matches) {
+                agentSession.loadedDeferredToolNames.add(match.function.name)
+              }
+
+              const output = matches.length === 0
+                ? `No tools found matching "${query}". Available deferred tools: ${availableDeferredTools.join(', ')}`
+                : `Loaded ${matches.length} deferred tool(s) for future calls: ${matches.map(tool => tool.function.name).join(', ')}\n\nThese tools will be callable in your next response.`
+
+              return {
+                tc, toolName, toolArgs,
+                result: { success: true, output, riskLevel: 'safe' as const },
+                postToolMessages: [],
+                denied: false,
+              }
+            }
+
             // --- Plan mode: enforce read-only (except plan file) ---
             if (agentSession.permissionMode === 'plan' && !this.toolExecutorOverride) {
               const readOnlyTools = new Set([
                 'read_file', 'list_directory', 'search_files', 'search_content',
                 'create_task_list', 'web_search', 'web_fetch',
                 'browser_navigate', 'browser_extract', 'browser_screenshot', 'browser_close',
-                'ask_user', 'exit_plan_mode', 'find_symbol', 'tool_search',
+                'ask_user', 'exit_plan_mode', 'find_symbol', 'tool_search', 'invoke_skill',
               ])
               if (!readOnlyTools.has(toolName)) {
                 return {
@@ -2699,7 +2796,7 @@ What remains to be done.
               this.hooksManager.runPostToolUse({ ...hookCtx, toolResult: result.output }).catch(() => {})
             }
 
-            return { tc, toolName, toolArgs, result, denied: false }
+            return { tc, toolName, toolArgs, result, postToolMessages: [], denied: false }
           }
 
           // Run batch: parallel for concurrent-safe (>1), serial otherwise
@@ -2717,7 +2814,7 @@ What remains to be done.
           // Process results in original order
           for (const r of results) {
             if (!r) continue
-            const { tc, toolName, toolArgs, result, denied } = r
+            const { tc, toolName, toolArgs, result, postToolMessages, denied } = r
 
             if (denied) {
               agentSession.messages.push({
@@ -2783,6 +2880,10 @@ What remains to be done.
               name: toolName,
             })
 
+            for (const injectedMessage of postToolMessages || []) {
+              agentSession.messages.push(injectedMessage)
+            }
+
             // Notify about tool call completion
             this.sendToRenderer('agent:stream', {
               sessionId: agentSession.sessionId,
@@ -2840,7 +2941,7 @@ What remains to be done.
       }
 
       // Fire-and-forget: notify evolution system about used skills.
-      // currentRunSkillNames: skills @-mentioned in THIS run (distance=0) → for usage count
+      // currentRunSkillNames: skills used in THIS run (distance=0) → for usage count
       // sessionSkillNames: skills within recording window (distance≤2) → for evolution recording
       const EVOLUTION_RECORD_MAX_RUN_DISTANCE = 2
       const currentRunSkillNames: string[] = []

@@ -382,7 +382,18 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     type: 'function',
     function: {
       name: 'ask_user',
-      description: 'Ask the user one or more structured questions with selectable options. Use this to gather preferences, clarify requirements, get decisions on implementation choices, or offer direction options. Users can always provide custom text via an "Other" option that is automatically added. If you recommend a specific option, make it the first in the list and add "(Recommended)" to its label.',
+      description: `Ask the user 1-3 structured questions with selectable options. Each question must have 2-4 concrete options. Users can also provide free text via the auto-added "Other" option.
+
+When to use:
+- BEFORE starting any non-trivial task to clarify requirements/preferences/scope
+- In plan mode, this should typically be your FIRST tool call
+- When facing a decision the user should make (style, format, depth, scope)
+
+Question quality:
+- Make questions short and specific. Bad: "What do you want?" Good: "What format should the report be in?"
+- Provide concrete options. Bad: "Any preferences?" → ["yes", "no"]. Good: "Output format?" → ["PDF", "Markdown", "HTML"]
+- If you have a recommendation, put it first and add "(Recommended)" to the label
+- Limit to 1-3 questions per call — don't overwhelm the user`,
       parameters: {
         type: 'object',
         properties: {
