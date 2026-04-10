@@ -382,29 +382,27 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     type: 'function',
     function: {
       name: 'ask_user',
-      description: `Ask the user 1-3 structured questions with selectable options. Each question has 2-4 concrete options. Users can also provide free text via the auto-added "Other" option.
+      description: `Ask the user 1-3 structured questions with selectable options. Each question has 2-4 concrete options. Users can also provide free text via the auto-added "Other" option. Use this INSTEAD of natural language text questions — the interactive dialog is faster.
 
-Use this INSTEAD of asking via natural language text — the interactive dialog is faster and easier for users.
+You are NOT obligated to call this tool. Asking for the sake of asking wastes the user's time. Only call it when there's something real to learn.
 
-## When questions are valid
+## Valid question categories (only these)
 
-The user's specific words (file types, technologies, tools, formats, scope) are their CHOICE. Default to respecting them. Three valid reasons to ask:
+**(a) Information you can't guess**: things only the user knows. Topic, target audience, content to include, source files, deadline, constraints.
 
-1. **Feasibility conflict** — what they asked is technically impossible. Ask how to proceed (e.g., "Word can't directly edit PDFs. Use [X] / [Y] instead?")
-2. **Self-contradiction** — their own words conflict. Ask which one is the priority.
-3. **Genuine gaps** — they didn't specify something that would meaningfully change the output (style, depth, content choices, optional features). Ask about those.
+**(b) Outcome-changing choices**: things that affect the final deliverable in ways the user would notice and care about. Style, tone, depth, length, scope.
 
-If your task is purely "fill in the blanks" because the user was clear and what they asked is doable, DO NOT call this tool. Just proceed.
+**(c) Conflicts to resolve**: feasibility (impossible request), self-contradiction, likely typo/confusion.
 
-## What questions are NOT valid
+## Invalid — never ask about these
 
-- Asking about parameters the user already named ("user said PPT, asking what format")
-- Offering options that contradict locked parameters ("user said PPT, offering Markdown")
-- Asking because you personally think something else would be better — your preferences don't override theirs
-- Asking generic template questions when the request is specific
+- **Already-specified parameters.** User said "PPT" → don't ask about format. User said "Python" → don't ask about language.
+- **Internal implementation details.** "Should I use Markdown→PPT or Python-pptx?" "Which library?" "Script or manual?" — these are YOUR job. Pick the best approach yourself.
+- **Things with sensible defaults.** If a reasonable person would all make the same choice, just make it.
+- **Generic template questions.** "What do you want?" / "Any preferences?" — useless. Be specific or don't ask.
 
 ## Question quality
-- Each question targets ONE real gap or conflict.
+- Each question targets ONE real gap from category (a) or (b), OR ONE conflict from (c).
 - Every option must be compatible with all parameters the user already specified.
 - Be concrete. Bad: "What style?" Good: "Visual style: [minimal] [bold colors] [dark mode]"
 - If you have a recommendation, put it first and add "(Recommended)" / "(推荐)".
