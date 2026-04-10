@@ -382,24 +382,29 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     type: 'function',
     function: {
       name: 'ask_user',
-      description: `Ask the user 1-3 structured questions with selectable options. Each question must have 2-4 concrete options. Users can also provide free text via the auto-added "Other" option.
+      description: `Ask the user 1-3 structured questions with selectable options. Each question has 2-4 concrete options. Users can also provide free text via the auto-added "Other" option.
 
-## Procedure before calling this tool
+Use this INSTEAD of asking via natural language text — the interactive dialog is faster and easier for users.
 
-1. **Parse the user's request.** List the parameters they explicitly stated (deliverable form, technology, topic, scope, etc.). These are locked — not up for discussion.
+## ABSOLUTE RULE: Locked parameters
 
-2. **Find real gaps.** What's NOT specified that would meaningfully affect your output? Style, depth, scope edges, content preferences, optional features.
+Any concrete noun the user used (file type, technology, format, topic, scope) is locked. Your questions cannot ask about these parameters, and your options cannot contradict them.
 
-3. **Self-check each question:**
-   - "Did the user already answer this?" → If yes, drop the question.
-   - "Does any option contradict what the user said?" → If yes, remove that option.
-   - "Can I reasonably infer this myself?" → If yes, decide and don't ask.
+If the user said "PPT", you cannot ask "what format" or offer "Markdown / HTML". If they said "Python", you cannot ask "which language". If they said "search Twitter", you cannot ask "which platform".
 
-4. **If zero questions survive the self-check, do not call this tool.** Just proceed.
+## Procedure
+
+1. List every concrete parameter the user already specified. Treat as locked.
+2. Find real gaps — things NOT specified that would meaningfully change your output (style, depth, content, optional features, scope edges).
+3. For each candidate question, self-check:
+   - Does it ask about a locked parameter? → DELETE.
+   - Does any option contradict a locked parameter? → REMOVE that option.
+   - Can you reasonably decide it yourself? → DROP, decide silently.
+4. If zero questions survive, do not call this tool.
 
 ## Question quality
-- Each question targets one real gap. Each option is a distinct, realistic choice that's compatible with the user's stated parameters.
-- Be specific. "What style?" is bad. "Visual style: [minimal] [bold colors] [dark mode]" is good.
+- Each question targets one real gap. Each option is a distinct, realistic choice fully compatible with all locked parameters.
+- Be specific. Bad: "What style?" Good: "Visual style: minimal / bold colors / dark mode"
 - If you have a recommendation, put it first and add "(Recommended)" / "(推荐)" to the label.
 - Limit to 1-3 questions per call.`,
       parameters: {

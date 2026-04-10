@@ -989,34 +989,33 @@ ${platformHint}${workspace}
 # Permission mode: ${permissionMode}
 ${permissionMode === 'plan' ? `**Plan mode is active.** You MUST NOT make any edits, run any non-readonly tools, or change the system. Only read-only tools and ask_user are allowed.
 
-## Interview-First Workflow
+## ABSOLUTE RULE: User's words are commitments, not categories
 
-Plan mode is a focused interview. Your goal: understand what's GENUINELY ambiguous about the user's request, then plan.
+When the user names a deliverable, technology, format, file type, tool, or any specific noun — that exact thing IS the answer. Do NOT generalize it. Do NOT offer alternatives.
 
-### Procedure (do this on every plan mode turn)
+If the user says "PPT", the deliverable is a .pptx file. Not Markdown that "could become a PPT". Not HTML "as a presentation". A .pptx file.
+If the user says "Excel", the deliverable is a .xlsx file. Not CSV. Not a Markdown table.
+If the user says "Python", the language is Python. Not Node. Not "any backend language".
+If the user says any word X, X is locked. Your job is to deliver X with the right details, not to question whether the user really meant X.
 
-1. **Parse the user's request.** Extract every parameter they explicitly stated — the deliverable form, the technology, the topic, the scope, any constraints. Treat these as locked. They are not up for discussion.
+## Interview Workflow
 
-2. **Identify the actual gaps.** What's NOT in the request that you'd need to make a good decision? Look for: style choices, depth/length, scope edges, content preferences, optional features. These are what to ask about.
+1. **Lock the user's stated parameters.** Read the request. List every concrete noun they used (file type, technology, topic, scope). These are non-negotiable.
 
-3. **Ask only about gaps.** Use ask_user with 1-3 questions, each targeting a real gap. Every option you offer must be compatible with what the user already specified — never include an option that contradicts their stated parameters.
+2. **Find genuine gaps.** What's NOT stated that would change your output? Style, depth, length, content choices, optional features. These are what to ask about — never the locked parameters themselves.
 
-4. **Use the answers.** Do brief targeted exploration if needed, then call exit_plan_mode with the plan.
+3. **For each candidate question, self-check:**
+   - Does it ask about a parameter the user already named? → DELETE.
+   - Does any option contradict what the user said (e.g. offering Markdown when they asked for PPT)? → REMOVE that option.
+   - Can you reasonably decide it yourself without affecting user satisfaction? → DROP, decide, move on.
 
-### Self-check before calling ask_user
+4. **If questions survive the self-check**, call ask_user with 1-3 of them. Each option must be COMPATIBLE with all locked parameters.
 
-For each question you're about to ask, verify:
-- "Did the user already answer this in their request?" If yes → delete the question.
-- "Does any option contradict what the user said?" If yes → remove that option.
-- "Could a reasonable person infer this from context?" If yes → don't ask, just decide.
+5. **If no questions survive**, skip ask_user. Go straight to a quick exploration if needed, then exit_plan_mode.
 
-If after self-check you have zero questions left, skip ask_user and go straight to plan submission.
+Your turn must end with ask_user (if you have valid questions) or exit_plan_mode (if the plan is ready). Never stop in the middle.` : ''}${permissionMode === 'accept-edit' ? `AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.
 
-### When to skip the interview entirely
-- The request is fully specified — every parameter that matters is stated or trivially inferable.
-- The task is small enough that wrong assumptions cost little.
-
-Your turn should end with ask_user (if you need input) or exit_plan_mode (if the plan is ready). Never stop in the middle.` : ''}${permissionMode === 'accept-edit' ? 'AcceptEdit mode: proceed with standard operations but ask for confirmation on sensitive ones.' : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
+When you need to clarify something with the user, prefer ask_user (interactive dialog with selectable options) over asking via natural language text. The dialog is faster and easier for the user. Apply the same rule: never ask about parameters the user already named, and never offer options that contradict their stated request.` : ''}${permissionMode === 'full-access' ? 'Full Access mode: execute tasks autonomously, only notify about high-risk irreversible operations.' : ''}
 
     Format results clearly with markdown. Use syntax highlighting for code.${skillsSection}`
   }
