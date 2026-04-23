@@ -14,7 +14,7 @@ export default function PlanApprovalDialog({ request }: Props) {
   const t = useT()
   const { removePermissionRequest } = useSettingsStore()
   const planContent = request.planContent || request.description || ''
-  const planFiles = request.planFiles || []
+  const keyActions = request.planFiles || [] // planFiles used for backwards compat; now holds keyActions
   const [feedback, setFeedback] = useState('')
   const [showFeedback, setShowFeedback] = useState(false)
 
@@ -58,14 +58,14 @@ export default function PlanApprovalDialog({ request }: Props) {
           {/* Summary */}
           <div className="text-sm text-charcoal mb-3">{request.description}</div>
 
-          {/* Files to modify */}
-          {planFiles.length > 0 && (
+          {/* Key actions */}
+          {keyActions.length > 0 && (
             <div className="mb-3">
-              <div className="text-xs font-medium text-text-tertiary mb-1.5">{t.plan?.filesToModify || 'Files to modify:'}</div>
+              <div className="text-xs font-medium text-text-tertiary mb-1.5">{t.plan?.keyActions || 'Key actions:'}</div>
               <div className="flex flex-wrap gap-1">
-                {planFiles.map((f, i) => (
+                {keyActions.map((action, i) => (
                   <span key={i} className="text-[10px] px-2 py-0.5 bg-gray-100 rounded text-text-secondary font-mono">
-                    {f}
+                    {action}
                   </span>
                 ))}
               </div>

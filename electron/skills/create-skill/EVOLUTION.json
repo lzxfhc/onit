@@ -1,0 +1,27 @@
+{
+  "skillId": "create-skill",
+  "learnings": [
+    {
+      "id": "2eff3bc8-745e-43c6-bae6-9c0be9f021cd",
+      "sessionId": "5e76be55-9481-42e1-87cc-0250c5c2be9e",
+      "timestamp": 1773835484825,
+      "points": [
+        "Add a quick-start option at the beginning: when user provides a brief input like '上海天气', offer to immediately create a standard template for that skill type (e.g., 'Shall I create a standard weather skill with 7-day forecast and clothing suggestions?') rather than asking multiple clarifying questions"
+      ],
+      "confidence": "high",
+      "context": "User checked Beijing weather using @web-research, then invoked @create-skill with '上海天气' (Shanghai weather), possibly intending to check weather again or create a weather skill, revealing potential confusion between skills and opportunity for quicker skill creation flow."
+    },
+    {
+      "id": "1b982604-0e66-4589-ad4d-49cafee3f535",
+      "sessionId": "5e76be55-9481-42e1-87cc-0250c5c2be9e",
+      "timestamp": 1773835484825,
+      "points": [
+        "Leverage conversation context: when user just used a similar skill (e.g., checked Beijing weather with @web-research), recognize this pattern and suggest creating a skill that replicates that successful interaction format"
+      ],
+      "confidence": "medium",
+      "context": "User checked Beijing weather using @web-research, then invoked @create-skill with '上海天气' (Shanghai weather), possibly intending to check weather again or create a weather skill, revealing potential confusion between skills and opportunity for quicker skill creation flow."
+    }
+  ],
+  "history": [],
+  "pendingEvolution": null
+}

@@ -219,6 +219,7 @@ export const zh = {
     toolBrowserScreenshot: '截取页面',
     toolBrowserClose: '关闭浏览器',
     toolAskUser: '询问用户',
+    toolEnterPlanMode: '进入计划模式',
     toolExitPlanMode: '提交计划',
     toolNotebookEdit: '编辑笔记本',
     toolWorktreeCreate: '创建工作树',
@@ -243,10 +244,12 @@ export const zh = {
     approvalTitle: '计划已准备好',
     approvalSubtitle: '请审核以下计划，批准后开始实施',
     filesToModify: '将要修改的文件：',
+    keyActions: '关键操作：',
     approve: '批准并开始',
     reject: '需要修改',
     submitFeedback: '发送反馈',
     feedbackPlaceholder: '告诉 Agent 需要怎么修改...',
+    showDetails: '查看完整计划',
   },
 
   // Error boundary

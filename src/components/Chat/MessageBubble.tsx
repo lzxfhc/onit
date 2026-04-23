@@ -334,6 +334,7 @@ function getToolSummaryLabel(name: string, t: Translations): string {
     browser_screenshot: t.chat.toolBrowserScreenshot,
     browser_close: t.chat.toolBrowserClose,
     ask_user: t.chat.toolAskUser,
+    enter_plan_mode: t.chat.toolEnterPlanMode,
     exit_plan_mode: t.chat.toolExitPlanMode,
     notebook_edit: t.chat.toolNotebookEdit || 'Edit notebook',
     worktree_create: t.chat.toolWorktreeCreate || 'Create worktree',
@@ -500,6 +501,7 @@ function getToolLabel(name: string, t: Translations) {
     browser_screenshot: t.chat.toolBrowserScreenshot,
     browser_close: t.chat.toolBrowserClose,
     ask_user: t.chat.toolAskUser,
+    enter_plan_mode: t.chat.toolEnterPlanMode,
     exit_plan_mode: t.chat.toolExitPlanMode,
     notebook_edit: t.chat.toolNotebookEdit || 'Edit notebook',
     worktree_create: t.chat.toolWorktreeCreate || 'Create worktree',
@@ -530,6 +532,7 @@ function getToolCategoryIcon(name: string) {
   if (browserTools.includes(name)) return <Monitor className="w-3.5 h-3.5 text-text-tertiary" />
   if (name === 'create_task_list') return <ListTodo className="w-3.5 h-3.5 text-text-tertiary" />
   if (name === 'ask_user') return <MessageCircleQuestion className="w-3.5 h-3.5 text-text-tertiary" />
+  if (name === 'enter_plan_mode') return <ClipboardList className="w-3.5 h-3.5 text-text-tertiary" />
   if (name === 'exit_plan_mode') return <ClipboardList className="w-3.5 h-3.5 text-text-tertiary" />
   if (name === 'notebook_edit') return <BookOpen className="w-3.5 h-3.5 text-text-tertiary" />
   if (name === 'worktree_create' || name === 'worktree_remove') return <GitBranch className="w-3.5 h-3.5 text-text-tertiary" />

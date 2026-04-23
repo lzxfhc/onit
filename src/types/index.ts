@@ -225,8 +225,9 @@ export interface IpcChannels {
   'agent:complete': { sessionId: string; runId: string; status: 'completed' | 'stopped' }
   'agent:error': { sessionId: string; runId: string; error: string }
   'agent:memory-update': { sessionId: string; runId: string; memory: SessionMemory | null }
+  'agent:session-update': { sessionId: string; runId: string; updates: Partial<Pick<Session, 'permissionMode'>> }
   'agent:permission-request': PermissionRequest
-  'agent:permission-response': { requestId: string; approved: boolean; alwaysAllow?: boolean }
+  'agent:permission-response': { requestId: string; approved: boolean; alwaysAllow?: boolean; answerText?: string }
   'agent:task-update': { sessionId: string; runId: string; tasks: TaskItem[] }
   'agent:tool-call': { sessionId: string; runId: string; toolCall: ToolCall }
   'agent:workspace-files': { sessionId: string; runId: string; files: WorkspaceFile[] }
