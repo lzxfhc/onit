@@ -380,18 +380,44 @@ export default function Login() {
               {billingMode === 'api-call' && (
                 <div>
                   <label className="label">{t.login.model}</label>
-                  <div className="relative">
-                    <select
-                      value={model}
-                      onChange={(e) => setModel(e.target.value)}
-                      className="input appearance-none pr-8"
-                    >
-                      {AVAILABLE_MODELS.filter(m => !m.codingPlan).map(m => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
-                  </div>
+                  {(() => {
+                    const presetModels = AVAILABLE_MODELS.filter(m => !m.codingPlan)
+                    const isPreset = presetModels.some(m => m.id === model)
+                    const selectValue = isPreset ? model : '__custom__'
+                    return (
+                      <>
+                        <div className="relative">
+                          <select
+                            value={selectValue}
+                            onChange={(e) => {
+                              if (e.target.value === '__custom__') {
+                                if (isPreset) setModel('')
+                              } else {
+                                setModel(e.target.value)
+                              }
+                            }}
+                            className="input appearance-none pr-8"
+                          >
+                            {presetModels.map(m => (
+                              <option key={m.id} value={m.id}>{m.name}</option>
+                            ))}
+                            <option value="__custom__">{t.login.customModel || 'Custom — enter model ID'}</option>
+                          </select>
+                          <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
+                        </div>
+                        {!isPreset && (
+                          <input
+                            type="text"
+                            value={model}
+                            onChange={(e) => setModel(e.target.value)}
+                            placeholder={t.login.customModelPlaceholder || 'e.g. gpt-4o, claude-sonnet-4-5, qwen-max'}
+                            className="input mt-2 text-sm"
+                            autoFocus
+                          />
+                        )}
+                      </>
+                    )
+                  })()}
                 </div>
               )}
 

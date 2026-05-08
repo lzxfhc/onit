@@ -15,6 +15,8 @@ export const zh = {
     customBaseUrl: '自定义 Base URL (可选)',
     getStarted: '开始使用',
     apiKeyFooter: 'API Key 仅存储在本地设备上',
+    customModel: '自定义 — 输入模型 ID',
+    customModelPlaceholder: '例如：gpt-4o, claude-sonnet-4-5, qwen-max',
     enterApiKey: '请输入 API Key',
     // Local model
     localModelDesc: '无需 API Key，模型在您的设备上本地运行。完全离线可用，数据不出设备。适合日常任务，效果接近小型云端模型。',

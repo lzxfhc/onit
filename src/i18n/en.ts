@@ -17,6 +17,8 @@ export const en: Translations = {
     customBaseUrl: 'Custom Base URL (optional)',
     getStarted: 'Get Started',
     apiKeyFooter: 'Your API key is stored locally on your device',
+    customModel: 'Custom — enter model ID',
+    customModelPlaceholder: 'e.g. gpt-4o, claude-sonnet-4-5, qwen-max',
     enterApiKey: 'Please enter your API Key',
     // Local model
     localModelDesc: 'No API key needed. The model runs locally on your device. Fully offline, data stays on device. Suitable for everyday tasks.',

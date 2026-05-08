@@ -477,7 +477,7 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
                   {settings.apiConfig.billingMode !== 'local-model' && <ChevronDown className="w-3 h-3" />}
                 </button>
                 {showModelPicker && settings.apiConfig.billingMode !== 'local-model' && (
-                  <div className="absolute bottom-full right-0 mb-1 bg-surface border border-border-subtle rounded shadow-card-hover py-1 min-w-[180px] z-50 animate-fade-in">
+                  <div className="absolute bottom-full right-0 mb-1 bg-surface border border-border-subtle rounded shadow-card-hover py-1 min-w-[200px] z-50 animate-fade-in">
                     {AVAILABLE_MODELS
                       .filter(model => settings.apiConfig.billingMode === 'coding-plan' ? model.codingPlan : !model.codingPlan)
                       .map(model => (
@@ -496,6 +496,23 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
                           {model.name}
                         </button>
                       ))}
+                    {settings.apiConfig.billingMode === 'api-call' && (
+                      <div className="border-t border-border-subtle mt-1 pt-1 px-3 py-1.5">
+                        <input
+                          type="text"
+                          value={!AVAILABLE_MODELS.some(m => m.id === session.model) ? session.model : ''}
+                          onChange={(e) => session.setModel(session.id, e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              setShowModelPicker(false)
+                            }
+                          }}
+                          placeholder={t.login.customModelPlaceholder || 'Custom model ID...'}
+                          className="w-full text-xs bg-transparent outline-none placeholder:text-text-tertiary"
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
