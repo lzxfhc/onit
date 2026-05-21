@@ -11,6 +11,8 @@ import type {
   ContentBlock,
   StreamChunk,
 } from '../types'
+import { useSettingsStore } from './settingsStore'
+import { getDefaultSessionModel } from '../utils/modelOptions'
 
 declare global {
   interface Window {
@@ -56,25 +58,51 @@ interface SessionState {
   getRunningSessionIds: () => string[]
 }
 
-const createDefaultSession = (name?: string): Session => ({
-  id: uuidv4(),
-  name: name || `New Session`,
-  messages: [],
-  status: 'idle',
-  permissionMode: 'accept-edit',
-  workspacePath: null,
-  attachedFiles: [],
-  model: 'qianfan-code-latest',
-  tasks: [],
-  workspaceFiles: [],
-  sessionMemory: null,
-  activeRunId: null,
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-  isBackgroundRunning: false,
-  backgroundCompleted: false,
-  hasUnviewedResult: false,
-})
+const SESSION_SAVE_DEBOUNCE_MS = 250
+const sessionSaveTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function queueSessionSave(sessionId: string, delay = SESSION_SAVE_DEBOUNCE_MS): void {
+  const existing = sessionSaveTimers.get(sessionId)
+  if (existing) clearTimeout(existing)
+
+  const timer = setTimeout(() => {
+    sessionSaveTimers.delete(sessionId)
+    void useSessionStore.getState().saveSession(sessionId)
+  }, delay)
+  sessionSaveTimers.set(sessionId, timer)
+}
+
+function getCurrentSessionDefaults() {
+  const settings = useSettingsStore.getState().settings
+  return {
+    permissionMode: settings.defaultPermissionMode,
+    model: getDefaultSessionModel(settings.apiConfig),
+  }
+}
+
+const createDefaultSession = (name?: string): Session => {
+  const defaults = getCurrentSessionDefaults()
+
+  return {
+    id: uuidv4(),
+    name: name || `New Session`,
+    messages: [],
+    status: 'idle',
+    permissionMode: defaults.permissionMode,
+    workspacePath: null,
+    attachedFiles: [],
+    model: defaults.model,
+    tasks: [],
+    workspaceFiles: [],
+    sessionMemory: null,
+    activeRunId: null,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    isBackgroundRunning: false,
+    backgroundCompleted: false,
+    hasUnviewedResult: false,
+  }
+}
 
 function upsertToolCall(toolCalls: ToolCall[] | undefined, nextToolCall: ToolCall): ToolCall[] {
   const nextCalls = toolCalls ? [...toolCalls] : []
@@ -262,6 +290,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       sessions: [newSession, ...state.sessions],
       activeSessionId: newSession.id,
     }))
+    queueSessionSave(newSession.id)
     return newSession
   },
 
@@ -320,6 +349,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
   },
 
   setActiveSession: (id: string) => {
+    const previousActiveId = get().activeSessionId
     set(state => {
       const currentActive = state.activeSessionId
       if (currentActive === id) return { activeSessionId: id }
@@ -337,8 +367,10 @@ export const useSessionStore = create<SessionState>((set, get) => ({
       })
       return { sessions, activeSessionId: id }
     })
-    // Save the target session to persist the cleared flags
-    get().saveSession(id)
+    // Save both sides: the previous session may have been marked as background,
+    // and the target may have had unseen flags cleared.
+    if (previousActiveId && previousActiveId !== id) queueSessionSave(previousActiveId)
+    queueSessionSave(id)
   },
 
   updateSession: (id, updates) => {
@@ -374,6 +406,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         }
       }),
     }))
+    queueSessionSave(sessionId, 0)
   },
 
   updateLastMessage: (sessionId, updates) => {
@@ -421,14 +454,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
 
   setWorkspace: (sessionId, path) => {
     get().updateSession(sessionId, { workspacePath: path })
+    queueSessionSave(sessionId)
   },
 
   setPermissionMode: (sessionId, mode) => {
     get().updateSession(sessionId, { permissionMode: mode })
+    queueSessionSave(sessionId)
   },
 
   setModel: (sessionId, model) => {
     get().updateSession(sessionId, { model })
+    queueSessionSave(sessionId)
   },
 
   addAttachedFile: (sessionId, filePath) => {
@@ -439,6 +475,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           : s
       ),
     }))
+    queueSessionSave(sessionId)
   },
 
   removeAttachedFile: (sessionId, filePath) => {
@@ -449,14 +486,17 @@ export const useSessionStore = create<SessionState>((set, get) => ({
           : s
       ),
     }))
+    queueSessionSave(sessionId)
   },
 
   updateTasks: (sessionId, tasks) => {
     get().updateSession(sessionId, { tasks })
+    queueSessionSave(sessionId)
   },
 
   updateWorkspaceFiles: (sessionId, files) => {
     get().updateSession(sessionId, { workspaceFiles: files })
+    queueSessionSave(sessionId)
   },
 
   updateToolCall: (sessionId, toolCall) => {
@@ -478,6 +518,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return { ...s, messages }
       }),
     }))
+    queueSessionSave(sessionId, 1000)
   },
 
   applyStreamChunk: (sessionId, runId, chunk) => {
@@ -508,6 +549,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return { ...s, messages }
       }),
     }))
+    queueSessionSave(sessionId, 1000)
   },
 
   completeRun: (sessionId, runId, result) => {
@@ -578,6 +620,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return { ...s, messages }
       }),
     }))
+    queueSessionSave(sessionId, 1000)
   },
 
   addIterationEndMarker: (sessionId, iterationIndex) => {
@@ -594,6 +637,7 @@ export const useSessionStore = create<SessionState>((set, get) => ({
         return { ...s, messages }
       }),
     }))
+    queueSessionSave(sessionId, 1000)
   },
 
   saveSession: async (sessionId) => {

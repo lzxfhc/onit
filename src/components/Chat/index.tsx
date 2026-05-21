@@ -193,6 +193,18 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
     const latestSession = sessionStore.sessions.find(session => session.id === activeSessionId)
     if (!latestSession) return
 
+    const runningSessionIds = sessionStore.getRunningSessionIds()
+    if (!runningSessionIds.includes(latestSession.id) && runningSessionIds.length >= settingsStore.settings.maxParallelTasks) {
+      sessionStore.addMessage(latestSession.id, {
+        id: uuidv4(),
+        role: 'assistant',
+        content: t.chat.maxParallelTasksReached,
+        timestamp: Date.now(),
+      })
+      void sessionStore.saveSession(latestSession.id)
+      return
+    }
+
     const runId = uuidv4()
     const now = Date.now()
 
@@ -222,6 +234,7 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
       const name = trimmedContent.substring(0, 40) + (trimmedContent.length > 40 ? '...' : '')
       sessionStore.updateSession(latestSession.id, { name })
     }
+    void sessionStore.saveSession(latestSession.id)
 
     try {
       await window.electronAPI.startAgent({
@@ -245,7 +258,7 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
         runId,
       })
     }
-  }, [])
+  }, [t.chat.maxParallelTasksReached])
 
   const handleStopAgent = useCallback(async () => {
     const sessionStore = useSessionStore.getState()
@@ -264,6 +277,7 @@ export default function ChatView({ rightPanelOpen }: { rightPanelOpen: boolean }
     } finally {
       sessionStore.completeRun(session.id, runId, 'stopped')
       settingsStore.removePermissionRequestsForSession(session.id, runId)
+      void sessionStore.saveSession(session.id)
     }
   }, [])
 

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Play, Trash2, ToggleLeft, ToggleRight, Edit3 } from 'lucide-react'
+import { AlertCircle, Loader2, Plus, Play, Trash2, ToggleLeft, ToggleRight, Edit3 } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import ScheduledTaskDialog from '../Dialogs/ScheduledTaskDialog'
 import type { ScheduledTask } from '../../types'
@@ -7,7 +7,7 @@ import { useT } from '../../i18n'
 
 export default function ScheduledTasks() {
   const t = useT()
-  const { scheduledTasks, removeScheduledTask, toggleScheduledTask, runScheduledTaskNow } = useSettingsStore()
+  const { scheduledTasks, scheduledTaskRunStates, removeScheduledTask, toggleScheduledTask, runScheduledTaskNow } = useSettingsStore()
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [editingTask, setEditingTask] = useState<ScheduledTask | null>(null)
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -91,8 +91,12 @@ export default function ScheduledTasks() {
         </div>
       ) : (
         <div className="space-y-1">
-          {scheduledTasks.map(task => (
-            <div key={task.id} className="card-hover p-3 mx-1">
+          {scheduledTasks.map(task => {
+            const runState = scheduledTaskRunStates[task.id]
+            const isRunning = runState?.status === 'running'
+
+            return (
+              <div key={task.id} className="card-hover p-3 mx-1">
               <div className="flex items-start justify-between gap-2 mb-1.5">
                 <div className="flex-1 min-w-0">
                   <h4 className="text-sm font-medium text-charcoal truncate">
@@ -118,14 +122,21 @@ export default function ScheduledTasks() {
                 <span>{formatFrequency(task)}</span>
                 {task.lastRun && <span>{t.scheduled.last} {formatTime(task.lastRun)}</span>}
               </div>
+              {runState?.status === 'error' && (
+                <div className="flex items-center gap-1.5 mt-2 text-[10px] text-danger">
+                  <AlertCircle className="w-3 h-3 shrink-0" />
+                  <span>{t.scheduled.runFailed}</span>
+                </div>
+              )}
               <div className="flex items-center gap-1 mt-2">
                 <button
                   onClick={() => { void runScheduledTaskNow(task.id) }}
-                  className="btn-ghost btn-sm text-[10px]"
+                  disabled={isRunning}
+                  className={`btn-ghost btn-sm text-[10px] ${isRunning ? 'opacity-60 cursor-not-allowed' : ''}`}
                   title={t.scheduled.runNow}
                 >
-                  <Play className="w-3 h-3" />
-                  {t.scheduled.run}
+                  {isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+                  {isRunning ? t.scheduled.running : t.scheduled.run}
                 </button>
                 <button
                   onClick={() => setEditingTask(task)}
@@ -141,11 +152,12 @@ export default function ScheduledTasks() {
                   }`}
                 >
                   <Trash2 className="w-3 h-3" />
-                  {confirmDeleteId === task.id ? 'Confirm' : ''}
+                  {confirmDeleteId === task.id ? t.scheduled.confirm : ''}
                 </button>
               </div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
 

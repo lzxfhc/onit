@@ -1,9 +1,16 @@
 import { useState } from 'react'
 import { X, FolderOpen, ChevronDown } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { AVAILABLE_MODELS } from '../../types'
 import type { ScheduledTask, ScheduledFrequency } from '../../types'
 import { useT } from '../../i18n'
+import {
+  CUSTOM_API_MODEL_VALUE,
+  getApiCallSelectValue,
+  getDefaultSessionModel,
+  getModelChoices,
+  getModelDisplayName,
+  isApiCallCustomModel,
+} from '../../utils/modelOptions'
 
 interface Props {
   task?: ScheduledTask
@@ -18,7 +25,9 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
   const [name, setName] = useState(task?.name || '')
   const [description, setDescription] = useState(task?.description || '')
   const [taskPrompt, setTaskPrompt] = useState(task?.taskPrompt || '')
-  const [model, setModel] = useState(task?.model || 'qianfan-code-latest')
+  const initialModel = task?.model || getDefaultSessionModel(settings.apiConfig)
+  const [model, setModel] = useState(initialModel)
+  const [customModel, setCustomModel] = useState(isApiCallCustomModel(initialModel) ? initialModel : '')
   const [workspacePath, setWorkspacePath] = useState(task?.workspacePath || '')
   const [frequency, setFrequency] = useState<ScheduledFrequency>(task?.frequency || 'manual')
   const [scheduleTime, setScheduleTime] = useState(task?.scheduleTime || '09:00')
@@ -38,13 +47,19 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
     if (!taskPrompt.trim()) { setError('Task prompt is required'); return }
     if (frequency === 'once' && !scheduleDateTime) { setError('Please select a date and time'); return }
 
+    const resolvedModel = settings.apiConfig.billingMode === 'local-model'
+      ? getDefaultSessionModel(settings.apiConfig)
+      : model.trim()
+    if (!resolvedModel) { setError(t.login.enterModel); return }
+
     const data: any = {
       name: name.trim(),
       description: description.trim(),
       taskPrompt: taskPrompt.trim(),
-      model,
+      model: resolvedModel,
       workspacePath: workspacePath || null,
       frequency,
+      permissionMode: task?.permissionMode || settings.defaultPermissionMode,
     }
 
     // Add scheduling fields based on frequency
@@ -137,19 +152,50 @@ export default function ScheduledTaskDialog({ task, onClose }: Props) {
           {/* Model & Frequency row */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="label">Model</label>
+              <label className="label">{t.login.model}</label>
               <div className="relative">
-                <select
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  className="input appearance-none pr-8 text-xs"
-                >
-                  {AVAILABLE_MODELS.map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
+                {settings.apiConfig.billingMode === 'local-model' ? (
+                  <div className="input bg-gray-50 text-text-secondary text-xs cursor-default">
+                    {getModelDisplayName(getDefaultSessionModel(settings.apiConfig), 'local-model', settings.apiConfig)}
+                  </div>
+                ) : (
+                  <>
+                    <select
+                      value={settings.apiConfig.billingMode === 'api-call' ? getApiCallSelectValue(model) : model}
+                      onChange={(e) => {
+                        if (e.target.value === CUSTOM_API_MODEL_VALUE) {
+                          setModel(customModel)
+                        } else {
+                          setModel(e.target.value)
+                        }
+                        setError('')
+                      }}
+                      className="input appearance-none pr-8 text-xs"
+                    >
+                      {getModelChoices(settings.apiConfig).map(m => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                      {settings.apiConfig.billingMode === 'api-call' && (
+                        <option value={CUSTOM_API_MODEL_VALUE}>{t.login.customModelOption}</option>
+                      )}
+                    </select>
+                    <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
+                  </>
+                )}
               </div>
+              {settings.apiConfig.billingMode === 'api-call' && getApiCallSelectValue(model) === CUSTOM_API_MODEL_VALUE && (
+                <input
+                  type="text"
+                  value={customModel}
+                  onChange={(e) => {
+                    setCustomModel(e.target.value)
+                    setModel(e.target.value)
+                    setError('')
+                  }}
+                  placeholder={t.login.customModelPlaceholder}
+                  className="input text-xs mt-2"
+                />
+              )}
             </div>
 
             <div>

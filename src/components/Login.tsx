@@ -3,6 +3,13 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useT } from '../i18n'
 import type { ApiConfig, BillingMode, CodingPlanProvider, LocalModelState, Language } from '../types'
 import { AVAILABLE_MODELS, CODING_PLAN_PROVIDERS, AVAILABLE_LOCAL_MODELS } from '../types'
+import {
+  CUSTOM_API_MODEL_VALUE,
+  DEFAULT_API_CALL_MODEL,
+  getApiCallSelectValue,
+  isApiCallCustomModel,
+  isApiCallPresetModel,
+} from '../utils/modelOptions'
 import { Zap, Key, Globe, ChevronDown, ArrowRight, Download, CheckCircle2, Loader2, X, Cpu, HardDrive, Languages } from 'lucide-react'
 
 function formatFileSize(bytes: number): string {
@@ -20,10 +27,18 @@ export default function Login() {
   const { login, settings, setLanguage } = useSettingsStore()
   const t = useT()
   const saved = settings.apiConfig
+  const initialModel = saved.billingMode === 'api-call' && saved.model === 'qianfan-code-latest'
+    ? DEFAULT_API_CALL_MODEL
+    : saved.model || 'qianfan-code-latest'
   const [billingMode, setBillingMode] = useState<BillingMode>(saved.billingMode || 'coding-plan')
   const [provider, setProvider] = useState<CodingPlanProvider>(saved.codingPlanProvider || 'qianfan')
   const [apiKey, setApiKey] = useState(saved.apiKey || '')
-  const [model, setModel] = useState(saved.model || 'qianfan-code-latest')
+  const [model, setModel] = useState(initialModel)
+  const [customApiModel, setCustomApiModel] = useState(
+    isApiCallCustomModel(saved.model)
+      ? saved.model
+      : '',
+  )
   const [customBaseUrl, setCustomBaseUrl] = useState(saved.customBaseUrl || '')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [error, setError] = useState('')
@@ -114,10 +129,16 @@ export default function Login() {
       return
     }
 
+    const resolvedModel = billingMode === 'api-call' ? model.trim() : model
+    if (billingMode === 'api-call' && !resolvedModel) {
+      setError(t.login.enterModel)
+      return
+    }
+
     const config: ApiConfig = {
       billingMode,
       apiKey: apiKey.trim(),
-      model,
+      model: resolvedModel,
       customBaseUrl: customBaseUrl.trim() || undefined,
       codingPlanProvider: billingMode === 'coding-plan' ? provider : undefined,
     }
@@ -192,7 +213,11 @@ export default function Login() {
               <button
                 onClick={() => {
                   setBillingMode('api-call')
-                  setModel('ernie-4.5-8k')
+                  setModel(
+                    isApiCallPresetModel(model) || (customApiModel && model === customApiModel)
+                      ? model
+                      : customApiModel || DEFAULT_API_CALL_MODEL,
+                  )
                   setError('')
                 }}
                 className={`flex-1 py-2 px-3 text-xs font-medium rounded-sm border transition-all ${
@@ -382,16 +407,38 @@ export default function Login() {
                   <label className="label">{t.login.model}</label>
                   <div className="relative">
                     <select
-                      value={model}
-                      onChange={(e) => setModel(e.target.value)}
+                      value={getApiCallSelectValue(model)}
+                      onChange={(e) => {
+                        if (e.target.value === CUSTOM_API_MODEL_VALUE) {
+                          setModel(customApiModel)
+                        } else {
+                          setModel(e.target.value)
+                        }
+                        setError('')
+                      }}
                       className="input appearance-none pr-8"
                     >
                       {AVAILABLE_MODELS.filter(m => !m.codingPlan).map(m => (
                         <option key={m.id} value={m.id}>{m.name}</option>
                       ))}
+                      <option value={CUSTOM_API_MODEL_VALUE}>{t.login.customModelOption}</option>
                     </select>
                     <ChevronDown className="absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-text-tertiary pointer-events-none" />
                   </div>
+                  {getApiCallSelectValue(model) === CUSTOM_API_MODEL_VALUE && (
+                    <input
+                      type="text"
+                      value={customApiModel}
+                      onChange={(e) => {
+                        setCustomApiModel(e.target.value)
+                        setModel(e.target.value)
+                        setError('')
+                      }}
+                      onKeyDown={handleKeyDown}
+                      placeholder={t.login.customModelPlaceholder}
+                      className="input text-xs mt-2"
+                    />
+                  )}
                 </div>
               )}
 

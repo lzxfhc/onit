@@ -14,6 +14,7 @@ import QuestionDialog from './components/Dialogs/QuestionDialog'
 import PlanApprovalDialog from './components/Dialogs/PlanApprovalDialog'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import type { Message, ScheduledSessionCreatedEvent, Session, StreamChunk } from './types'
+import { getDefaultSessionModel } from './utils/modelOptions'
 
 interface PendingCopilotChunks {
   runId: string
@@ -82,6 +83,7 @@ export default function App() {
     // --- Scheduler session created listener (existing) ---
     const unsubScheduler = window.electronAPI.onSchedulerSessionCreated((data: ScheduledSessionCreatedEvent) => {
       const now = Date.now()
+      const settings = useSettingsStore.getState().settings
       const userMessage: Message = {
         id: uuidv4(),
         role: 'user',
@@ -104,10 +106,10 @@ export default function App() {
         messages: [userMessage, assistantMessage],
         status: 'running',
         activeRunId: data.runId,
-        permissionMode: data.permissionMode || 'accept-edit',
+        permissionMode: data.permissionMode || settings.defaultPermissionMode,
         workspacePath: data.workspacePath || null,
         attachedFiles: [],
-        model: data.model || 'qianfan-code-latest',
+        model: data.model || getDefaultSessionModel(settings.apiConfig),
         tasks: [],
         workspaceFiles: [],
         sessionMemory: null,

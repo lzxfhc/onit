@@ -18,6 +18,9 @@ let skillEvolutionManager: SkillEvolutionManager
 let localModelManager: LocalModelManager
 let copilotManager: CopilotManager
 
+app.setName('Onit')
+app.setPath('userData', path.join(app.getPath('appData'), 'Onit'))
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) {
   app.quit()

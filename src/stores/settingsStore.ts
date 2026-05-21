@@ -10,10 +10,16 @@ interface SkillNotification {
   timestamp: number
 }
 
+interface ScheduledTaskRunState {
+  status: 'running' | 'error'
+  error?: string
+}
+
 interface SettingsState {
   settings: AppSettings
   isLoggedIn: boolean
   scheduledTasks: ScheduledTask[]
+  scheduledTaskRunStates: Record<string, ScheduledTaskRunState>
   permissionRequests: any[]
   skills: Skill[]
   skillNotifications: SkillNotification[]
@@ -33,7 +39,7 @@ interface SettingsState {
   updateScheduledTask: (task: ScheduledTask) => Promise<void>
   removeScheduledTask: (id: string) => Promise<void>
   toggleScheduledTask: (id: string, enabled: boolean) => Promise<void>
-  runScheduledTaskNow: (id: string) => Promise<void>
+  runScheduledTaskNow: (id: string) => Promise<boolean>
 
   // Skills
   loadSkills: () => Promise<void>
@@ -59,23 +65,47 @@ interface SettingsState {
 }
 
 const SETTINGS_KEY = 'onit-settings'
+const AUTO_LOGIN_DISABLED_KEY = 'onit-auto-login-disabled'
+
+function hasUsableApiConfig(apiConfig: ApiConfig): boolean {
+  if (apiConfig.billingMode === 'local-model') return Boolean(apiConfig.localModelId)
+  return Boolean(apiConfig.apiKey)
+}
+
+function syncSchedulerApiConfig(apiConfig: ApiConfig): void {
+  try {
+    window.electronAPI.setSchedulerApiConfig({
+      billingMode: apiConfig.billingMode,
+      apiKey: apiConfig.apiKey,
+      model: apiConfig.model,
+      customBaseUrl: apiConfig.customBaseUrl,
+      codingPlanProvider: apiConfig.codingPlanProvider,
+      localModelId: apiConfig.localModelId,
+      maxInputTokens: apiConfig.maxInputTokens,
+      maxOutputTokens: apiConfig.maxOutputTokens,
+    })
+  } catch {}
+}
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   isLoggedIn: false,
   scheduledTasks: [],
+  scheduledTaskRunStates: {},
   permissionRequests: [],
   skills: [],
   skillNotifications: [],
 
   updateApiConfig: (config) => {
+    const mergedConfig: ApiConfig = { ...get().settings.apiConfig, ...config }
     set(state => ({
       settings: {
         ...state.settings,
-        apiConfig: { ...state.settings.apiConfig, ...config },
+        apiConfig: mergedConfig,
       },
     }))
     get().saveSettings()
+    syncSchedulerApiConfig(mergedConfig)
   },
 
   setDefaultPermissionMode: (mode) => {
@@ -103,22 +133,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       settings: { ...state.settings, apiConfig: mergedConfig },
     }))
     get().saveSettings()
-    // Sync API config to scheduler
-    try {
-      window.electronAPI.setSchedulerApiConfig({
-        billingMode: mergedConfig.billingMode,
-        apiKey: mergedConfig.apiKey,
-        model: mergedConfig.model,
-        customBaseUrl: mergedConfig.customBaseUrl,
-        codingPlanProvider: mergedConfig.codingPlanProvider,
-        localModelId: mergedConfig.localModelId,
-        maxInputTokens: mergedConfig.maxInputTokens,
-        maxOutputTokens: mergedConfig.maxOutputTokens,
-      })
-    } catch {}
+    try { localStorage.removeItem(AUTO_LOGIN_DISABLED_KEY) } catch {}
+    syncSchedulerApiConfig(mergedConfig)
   },
 
   logout: () => {
+    try { localStorage.setItem(AUTO_LOGIN_DISABLED_KEY, 'true') } catch {}
     set({ isLoggedIn: false })
   },
 
@@ -136,8 +156,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
             ...(parsed.apiConfig || {}),
           },
         }
-        // Load settings but don't auto-login — always show mode selection on startup
-        set({ settings, isLoggedIn: false })
+        const autoLoginDisabled = localStorage.getItem(AUTO_LOGIN_DISABLED_KEY) === 'true'
+        const shouldRestoreLogin = !autoLoginDisabled && hasUsableApiConfig(settings.apiConfig)
+        set({ settings, isLoggedIn: shouldRestoreLogin })
+        if (shouldRestoreLogin) syncSchedulerApiConfig(settings.apiConfig)
       }
     } catch {
       // Use defaults
@@ -180,6 +202,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     await window.electronAPI.deleteScheduledTask({ id })
     set(state => ({
       scheduledTasks: state.scheduledTasks.filter(t => t.id !== id),
+      scheduledTaskRunStates: Object.fromEntries(
+        Object.entries(state.scheduledTaskRunStates).filter(([taskId]) => taskId !== id),
+      ),
     }))
   },
 
@@ -193,9 +218,40 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   runScheduledTaskNow: async (id) => {
-    const started = await window.electronAPI.runScheduledTaskNow({ id })
-    if (started) {
-      await get().loadScheduledTasks()
+    set(state => ({
+      scheduledTaskRunStates: {
+        ...state.scheduledTaskRunStates,
+        [id]: { status: 'running' },
+      },
+    }))
+
+    try {
+      const started = await window.electronAPI.runScheduledTaskNow({ id })
+      if (started) {
+        set(state => {
+          const next = { ...state.scheduledTaskRunStates }
+          delete next[id]
+          return { scheduledTaskRunStates: next }
+        })
+        await get().loadScheduledTasks()
+        return true
+      }
+
+      set(state => ({
+        scheduledTaskRunStates: {
+          ...state.scheduledTaskRunStates,
+          [id]: { status: 'error', error: 'Task could not start. Check your model and API settings.' },
+        },
+      }))
+      return false
+    } catch (err: any) {
+      set(state => ({
+        scheduledTaskRunStates: {
+          ...state.scheduledTaskRunStates,
+          [id]: { status: 'error', error: err?.message || 'Task could not start.' },
+        },
+      }))
+      return false
     }
   },
 

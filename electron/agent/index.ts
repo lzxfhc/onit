@@ -372,6 +372,12 @@ export class AgentManager {
     // Add the new user message
     messages.push({ role: 'user', content: userMessage })
 
+    const sessionModel = sessionData.model || 'qianfan-code-latest'
+    const configuredModel = apiConfig.model || sessionModel
+    const effectiveModel = sessionModel === 'qianfan-code-latest'
+      ? configuredModel
+      : sessionModel
+
     agentSession = {
       sessionId,
       runId,
@@ -382,7 +388,7 @@ export class AgentManager {
       permissionMode: sessionData.permissionMode || 'accept-edit',
       returnPermissionMode: agentSession?.returnPermissionMode || null,
       workspacePath: sessionData.workspacePath,
-      model: sessionData.model || 'qianfan-code-latest',
+      model: effectiveModel,
       sessionMemory,
       effectiveMaxInputTokens: undefined,
       effectiveMaxOutputTokens: undefined,
@@ -395,7 +401,7 @@ export class AgentManager {
       apiConfig: {
         billingMode: apiConfig.billingMode || 'coding-plan',
         apiKey: apiConfig.apiKey || '',
-        model: apiConfig.model || sessionData.model,
+        model: configuredModel,
         customBaseUrl: apiConfig.customBaseUrl,
         codingPlanProvider: apiConfig.codingPlanProvider,
         localModelId: apiConfig.localModelId,

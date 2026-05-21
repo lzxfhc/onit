@@ -9,8 +9,14 @@ import {
 } from 'lucide-react'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { AVAILABLE_MODELS, AVAILABLE_LOCAL_MODELS } from '../../types'
 import type { PermissionMode, Skill } from '../../types'
+import {
+  getDefaultSessionModel,
+  getModelChoices,
+  getModelDisplayName,
+  isApiCallCustomModel,
+  LEGACY_CODING_PLAN_MODEL,
+} from '../../utils/modelOptions'
 
 interface Props {
   onSend: (content: string) => void | Promise<void>
@@ -99,6 +105,7 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [showPermissionPicker, setShowPermissionPicker] = useState(false)
   const [showSkillMention, setShowSkillMention] = useState(false)
+  const [customModelDraft, setCustomModelDraft] = useState('')
   const [mentionFilter, setMentionFilter] = useState('')
   const [mentionIndex, setMentionIndex] = useState(0)
   const isComposingRef = useRef(false)
@@ -349,13 +356,12 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
     }
   }
 
+  const currentModelId = session.model === LEGACY_CODING_PLAN_MODEL
+    ? getDefaultSessionModel(settings.apiConfig)
+    : session.model || getDefaultSessionModel(settings.apiConfig)
+
   const getModelName = () => {
-    if (settings.apiConfig.billingMode === 'local-model') {
-      const local = AVAILABLE_LOCAL_MODELS.find(m => m.id === settings.apiConfig.localModelId)
-      return local ? local.displayName : session.model
-    }
-    const selected = AVAILABLE_MODELS.find(item => item.id === session.model)
-    return selected ? selected.name : session.model
+    return getModelDisplayName(currentModelId, settings.apiConfig.billingMode, settings.apiConfig)
   }
 
   const permissionModes: { id: PermissionMode; label: string; desc: string; icon: React.ReactNode }[] = [
@@ -365,6 +371,25 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
   ]
 
   const currentPerm = permissionModes.find(item => item.id === session.permissionMode) || permissionModes[1]
+  const modelOptions = getModelChoices(settings.apiConfig)
+  const customApiModelOptions = settings.apiConfig.billingMode === 'api-call'
+    ? Array.from(new Set([settings.apiConfig.model, session.model]))
+        .filter((modelId): modelId is string => Boolean(modelId))
+        .filter(isApiCallCustomModel)
+        .filter(modelId => !modelOptions.some(model => model.id === modelId))
+    : []
+
+  useEffect(() => {
+    if (!showModelPicker) return
+    setCustomModelDraft(isApiCallCustomModel(currentModelId) ? currentModelId : '')
+  }, [currentModelId, showModelPicker])
+
+  const applyCustomModel = () => {
+    const value = customModelDraft.trim()
+    if (!value) return
+    session.setModel(session.id, value)
+    setShowModelPicker(false)
+  }
 
   return (
     <div className="border-t border-border-subtle bg-surface px-4 py-3">
@@ -477,25 +502,66 @@ function InputBox({ onSend, onStop, isRunning, sessionId }: Props) {
                   {settings.apiConfig.billingMode !== 'local-model' && <ChevronDown className="w-3 h-3" />}
                 </button>
                 {showModelPicker && settings.apiConfig.billingMode !== 'local-model' && (
-                  <div className="absolute bottom-full right-0 mb-1 bg-surface border border-border-subtle rounded shadow-card-hover py-1 min-w-[180px] z-50 animate-fade-in">
-                    {AVAILABLE_MODELS
-                      .filter(model => settings.apiConfig.billingMode === 'coding-plan' ? model.codingPlan : !model.codingPlan)
-                      .map(model => (
-                        <button
-                          key={model.id}
-                          onClick={() => {
-                            session.setModel(session.id, model.id)
-                            setShowModelPicker(false)
-                          }}
-                          className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
-                            session.model === model.id
-                              ? 'bg-accent-50 text-accent-700'
-                              : 'text-text-secondary hover:bg-gray-50'
-                          }`}
-                        >
-                          {model.name}
-                        </button>
-                      ))}
+                  <div className="absolute bottom-full right-0 mb-1 bg-surface border border-border-subtle rounded shadow-card-hover py-1 min-w-[240px] z-50 animate-fade-in">
+                    {customApiModelOptions.map(modelId => (
+                      <button
+                        key={modelId}
+                        onClick={() => {
+                          session.setModel(session.id, modelId)
+                          setShowModelPicker(false)
+                        }}
+                        className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                          currentModelId === modelId
+                            ? 'bg-accent-50 text-accent-700'
+                            : 'text-text-secondary hover:bg-gray-50'
+                        }`}
+                      >
+                        {modelId}
+                      </button>
+                    ))}
+                    {modelOptions.map(model => (
+                      <button
+                        key={model.id}
+                        onClick={() => {
+                          session.setModel(session.id, model.id)
+                          setShowModelPicker(false)
+                        }}
+                        className={`w-full text-left px-3 py-1.5 text-xs transition-colors ${
+                          currentModelId === model.id
+                            ? 'bg-accent-50 text-accent-700'
+                            : 'text-text-secondary hover:bg-gray-50'
+                        }`}
+                      >
+                        {model.name}
+                      </button>
+                    ))}
+                    {settings.apiConfig.billingMode === 'api-call' && (
+                      <div className="border-t border-border-light mt-1 pt-2 px-2 pb-1">
+                        <div className="flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={customModelDraft}
+                            onChange={(event) => setCustomModelDraft(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                applyCustomModel()
+                              }
+                            }}
+                            placeholder={t.login.customModelPlaceholder}
+                            className="input text-xs h-8 min-w-0"
+                          />
+                          <button
+                            onClick={applyCustomModel}
+                            disabled={!customModelDraft.trim()}
+                            className={`btn-icon w-8 h-8 shrink-0 ${customModelDraft.trim() ? 'text-accent' : 'text-text-tertiary opacity-50 cursor-not-allowed'}`}
+                            title={t.login.customModelOption}
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
